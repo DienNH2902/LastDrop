@@ -46,6 +46,7 @@ let keys = {},
   ammo = 30,
   startedAt = 0,
   audioCtx = null,
+  noiseBuffer = null,
   soundOn = true,
   lastMove = 0,
   paused = false,
@@ -93,6 +94,119 @@ function tone(freq = 440, duration = 0.06, type = "sine", volume = 0.03) {
   o.start();
   g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
   o.stop(audioCtx.currentTime + duration);
+}
+function spatialAudio(position, volume, duration) {
+  if (!soundOn || Number($("#sfx").value) <= 0) return null;
+  audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  const now = audioCtx.currentTime;
+  const listener = audioCtx.listener;
+  camera?.updateMatrixWorld(true);
+  const listenerPosition = camera
+    ? camera.getWorldPosition(new THREE.Vector3())
+    : new THREE.Vector3();
+  const forward = camera
+    ? camera.getWorldDirection(new THREE.Vector3())
+    : new THREE.Vector3(0, 0, -1);
+  const up = camera
+    ? camera.up.clone().applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion()))
+    : new THREE.Vector3(0, 1, 0);
+  const setParam = (param, value) => param?.setValueAtTime(value, now);
+  if (listener.positionX) {
+    setParam(listener.positionX, listenerPosition.x);
+    setParam(listener.positionY, listenerPosition.y);
+    setParam(listener.positionZ, listenerPosition.z);
+    setParam(listener.forwardX, forward.x);
+    setParam(listener.forwardY, forward.y);
+    setParam(listener.forwardZ, forward.z);
+    setParam(listener.upX, up.x);
+    setParam(listener.upY, up.y);
+    setParam(listener.upZ, up.z);
+  } else {
+    listener.setPosition(listenerPosition.x, listenerPosition.y, listenerPosition.z);
+    listener.setOrientation(forward.x, forward.y, forward.z, up.x, up.y, up.z);
+  }
+  const panner = audioCtx.createPanner();
+  panner.panningModel = "HRTF";
+  panner.distanceModel = "inverse";
+  panner.refDistance = 3;
+  panner.maxDistance = 100;
+  panner.rolloffFactor = 1.25;
+  if (panner.positionX) {
+    setParam(panner.positionX, position.x);
+    setParam(panner.positionY, position.y);
+    setParam(panner.positionZ, position.z);
+  } else {
+    panner.setPosition(position.x, position.y, position.z);
+  }
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(Math.max(0.0001, volume * (Number($("#sfx").value) / 100)), now);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+  panner.connect(gain);
+  gain.connect(audioCtx.destination);
+  if (!noiseBuffer) {
+    noiseBuffer = audioCtx.createBuffer(1, Math.ceil(audioCtx.sampleRate * 0.45), audioCtx.sampleRate);
+    const samples = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
+  }
+  return { now, panner, noiseBuffer };
+}
+function playSpatialGunshot(x, y, z, volume = 0.34) {
+  const audio = spatialAudio({ x, y, z }, volume, 0.24);
+  if (!audio) return;
+  const noise = audioCtx.createBufferSource();
+  const filter = audioCtx.createBiquadFilter();
+  const envelope = audioCtx.createGain();
+  noise.buffer = audio.noiseBuffer;
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(2600, audio.now);
+  envelope.gain.setValueAtTime(1, audio.now);
+  envelope.gain.exponentialRampToValueAtTime(0.0001, audio.now + 0.19);
+  noise.connect(filter);
+  filter.connect(envelope);
+  envelope.connect(audio.panner);
+  noise.start(audio.now);
+  noise.stop(audio.now + 0.2);
+  const thump = audioCtx.createOscillator();
+  const thumpGain = audioCtx.createGain();
+  thump.type = "sine";
+  thump.frequency.setValueAtTime(105, audio.now);
+  thump.frequency.exponentialRampToValueAtTime(48, audio.now + 0.13);
+  thumpGain.gain.setValueAtTime(0.75, audio.now);
+  thumpGain.gain.exponentialRampToValueAtTime(0.0001, audio.now + 0.14);
+  thump.connect(thumpGain);
+  thumpGain.connect(audio.panner);
+  thump.start(audio.now);
+  thump.stop(audio.now + 0.15);
+}
+function playSpatialFootstep(x, y, z, intensity) {
+  const duration = 0.095;
+  const audio = spatialAudio({ x, y, z }, 0.14 * intensity, duration);
+  if (!audio) return;
+  const noise = audioCtx.createBufferSource();
+  const filter = audioCtx.createBiquadFilter();
+  const envelope = audioCtx.createGain();
+  noise.buffer = audio.noiseBuffer;
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(700 + intensity * 500, audio.now);
+  envelope.gain.setValueAtTime(0.85, audio.now);
+  envelope.gain.exponentialRampToValueAtTime(0.0001, audio.now + duration);
+  noise.connect(filter);
+  filter.connect(envelope);
+  envelope.connect(audio.panner);
+  noise.start(audio.now);
+  noise.stop(audio.now + duration);
+  const impact = audioCtx.createOscillator();
+  const impactGain = audioCtx.createGain();
+  impact.type = "sine";
+  impact.frequency.setValueAtTime(105, audio.now);
+  impact.frequency.exponentialRampToValueAtTime(62, audio.now + 0.065);
+  impactGain.gain.setValueAtTime(0.28, audio.now);
+  impactGain.gain.exponentialRampToValueAtTime(0.0001, audio.now + 0.07);
+  impact.connect(impactGain);
+  impactGain.connect(audio.panner);
+  impact.start(audio.now);
+  impact.stop(audio.now + 0.075);
 }
 document
   .querySelectorAll("button")
@@ -745,7 +859,12 @@ function renderPlayers(state) {
       }
       reloadIndicator.position.set(0, 2.2, 0);
       mesh.add(reloadIndicator);
-      mesh.userData = { torso, head, legs, weapon, muzzleFlash, reloadIndicator, shotId: 0, flashUntil: 0 };
+      mesh.userData = {
+        torso, head, legs, weapon, muzzleFlash, reloadIndicator,
+        shotId: 0, flashUntil: 0,
+        lastMotionX: p.x, lastMotionZ: p.z, lastMotionAt: performance.now(),
+        wasMoving: false, nextFootstepAt: 0,
+      };
       scene.add(mesh);
       remoteMeshes.set(p.id, mesh);
     }
@@ -759,9 +878,32 @@ function renderPlayers(state) {
     mesh.userData.reloading = Boolean(p.reloading);
     mesh.userData.reloadIndicator.visible = Boolean(p.reloading);
     mesh.userData.reloadIndicator.position.y = p.prone ? 0.78 : p.crouching ? 1.55 : 2.2;
+    const now = performance.now();
+    const motionElapsed = Math.max(0.001, (now - mesh.userData.lastMotionAt) / 1000);
+    const motionDistance = Math.hypot(p.x - mesh.userData.lastMotionX, p.z - mesh.userData.lastMotionZ);
+    const speed = motionDistance / motionElapsed;
+    const isWalking = p.alive && !p.prone && !p.swimming && speed > 0.85 && speed < 12;
+    if (isWalking) {
+      const stepInterval = p.slowWalking ? 0.68 : p.crouching ? 0.54 : 0.4;
+      if (!mesh.userData.wasMoving) mesh.userData.nextFootstepAt = now + stepInterval * 500;
+      else if (now >= mesh.userData.nextFootstepAt) {
+        const pace = Math.max(0.22, Math.min(1, speed / 7));
+        const stealthScale = (p.slowWalking ? 0.58 : 1) * (p.crouching ? 0.68 : 1);
+        const soundY = p.swimming ? p.swimY || 0 : p.groundY || 0;
+        playSpatialFootstep(p.x, soundY + 0.08, p.z, pace * stealthScale);
+        mesh.userData.nextFootstepAt = now + stepInterval * 1000;
+      }
+    }
+    mesh.userData.wasMoving = isWalking;
+    mesh.userData.lastMotionX = p.x;
+    mesh.userData.lastMotionZ = p.z;
+    mesh.userData.lastMotionAt = now;
     if (p.shotId && p.shotId !== mesh.userData.shotId) {
       mesh.userData.shotId = p.shotId;
       mesh.userData.flashUntil = Date.now() + 95;
+      const soundBaseY = p.swimming ? (p.swimY || 0) : p.groundY || 0;
+      const muzzleY = soundBaseY + (p.prone ? 0.55 : p.crouching ? 0.9 : 1.3);
+      playSpatialGunshot(p.x, muzzleY, p.z, 0.38);
     }
     mesh.userData.muzzleFlash.visible = Date.now() < mesh.userData.flashUntil;
     mesh.userData.weapon.rotation.x = Date.now() < mesh.userData.flashUntil ? 0.12 : 0;
@@ -1002,7 +1144,7 @@ function shootOnce() {
   }
   ammo--;
   $("#ammo").innerHTML = `${ammo} <i>/ ${local.reserveAmmo ?? 90}</i>`;
-  tone(95, 0.11, "sawtooth", 0.05);
+  playSpatialGunshot(local.x, camera.position.y - 0.3, local.z, 0.65);
   const flash = new THREE.PointLight(0xffc66b, 2, 3);
   flash.position.set(0.28, -0.22, -1);
   camera.add(flash);
