@@ -75,7 +75,9 @@ const PICKUP_RADIUS = 2;
 const HEAL_DURATION_MS = 5000;
 const lootItems = new Map(); // id -> { id, type, x, z, amount, mesh, body }
 let backpackOpen = false,
-  lootToastTimer = null;
+  lootToastTimer = null,
+  gunBusy = 0, // 0 = cầm súng bình thường, 1 = súng gập ngang (đang hồi máu)
+  packLimits = { ammo: 210, medkits: 5 }; // sức chứa balo, server gửi lại khi bắt đầu trận
 
 // Movement
 const STAND_HEIGHT = 1.65;
@@ -487,7 +489,12 @@ function connect(message) {
         : "Đang chờ chủ phòng bắt đầu...";
       show("lobby");
     }
-    if (m.type === "loot") setLootItems(m.items || []);
+    if (m.type === "loot") {
+      if (m.limits) packLimits = m.limits;
+      setLootItems(m.items || []);
+    }
+    if (m.type === "lootUpdate" && lootItems.has(m.id))
+      lootItems.get(m.id).amount = m.amount;
     if (m.type === "lootRemoved") removeLootItem(m.id);
     if (m.type === "toast") showLootToast(m.text);
     if (m.type === "state") {
@@ -1328,6 +1335,24 @@ function renderPlayers(state) {
       }
       reloadIndicator.position.set(0, 2.2, 0);
       mesh.add(reloadIndicator);
+      // Chữ thập đỏ xoay trên đầu khi đối phương đang hồi máu (ba thanh vuông góc nên nhìn phía nào cũng thấy).
+      const healIndicator = new THREE.Group();
+      const healMaterial = new THREE.MeshBasicMaterial({
+        color: 0xff4d5e,
+        toneMapped: false,
+      });
+      for (const [w, h, d] of [
+        [0.52, 0.14, 0.14],
+        [0.14, 0.52, 0.14],
+        [0.14, 0.14, 0.52],
+      ]) {
+        healIndicator.add(
+          new THREE.Mesh(new THREE.BoxGeometry(w, h, d), healMaterial),
+        );
+      }
+      healIndicator.position.set(0, 2.2, 0);
+      healIndicator.visible = false;
+      mesh.add(healIndicator);
       mesh.userData = {
         torso,
         head,
@@ -1335,6 +1360,7 @@ function renderPlayers(state) {
         weapon,
         muzzleFlash,
         reloadIndicator,
+        healIndicator,
         shotId: Number(p.shotId) || 0,
         flashUntil: 0,
         lastGunshotAt: 0,
@@ -1365,6 +1391,13 @@ function renderPlayers(state) {
       startReloadSounds(p.id);
     mesh.userData.reloadIndicator.visible = Boolean(p.reloading);
     mesh.userData.reloadIndicator.position.y = p.prone
+      ? 0.78
+      : p.crouching
+        ? 1.55
+        : 2.2;
+    mesh.userData.healing = Boolean(p.healing);
+    mesh.userData.healIndicator.visible = Boolean(p.healing);
+    mesh.userData.healIndicator.position.y = p.prone
       ? 0.78
       : p.crouching
         ? 1.55
@@ -1537,6 +1570,12 @@ function addLootMesh(item) {
   item.mesh = root;
   item.body = body;
 }
+// Balo còn chỗ cho loại vật phẩm này không?
+function packHasRoom(type) {
+  return type === "ammo"
+    ? (local.reserveAmmo ?? 0) < packLimits.ammo
+    : (local.medkits || 0) < packLimits.medkits;
+}
 function nearestLoot() {
   let best = null;
   let bestDistance = PICKUP_RADIUS;
@@ -1559,6 +1598,7 @@ function onInteract() {
 }
 function useMedkit() {
   if (local.healing) return showLootToast("ĐANG HỒI MÁU · NHẤN F ĐỂ HỦY");
+  if (local.reloading) return showLootToast("ĐANG NẠP ĐẠN");
   if ((local.medkits || 0) <= 0) return showLootToast("KHÔNG CÒN BỊCH MÁU");
   if (local.hp >= 100) return showLootToast("MÁU ĐÃ ĐẦY");
   send({ type: "heal" });
@@ -1580,7 +1620,9 @@ function installLootUi() {
 #backpack .bp-row>b{font-size:22px;color:#d6ff45;width:24px;text-align:center}
 #backpack .bp-row strong{display:block;font-size:13px;letter-spacing:1px}
 #backpack .bp-row small{display:block;margin-top:5px;font-size:9px;letter-spacing:1px;color:#929688}
-#backpack .bp-count{margin-left:auto;font-size:26px;color:#d6ff45}
+#backpack .bp-count{margin-left:auto;font-size:26px;color:#d6ff45;white-space:nowrap}
+#backpack .bp-count small{display:inline;margin:0 0 0 3px;font-size:12px;color:#929688}
+#backpack .bp-count.full{color:#ff7a5c}
 #backpack .bp-usable{cursor:pointer}
 #backpack .bp-usable:hover{border-color:#d6ff45;background:#d6ff4514}
 #backpack .bp-usable.empty{opacity:.45;cursor:not-allowed}
@@ -1615,9 +1657,13 @@ function installLootUi() {
 }
 function renderBackpack() {
   if (!$("#backpack")) return;
-  $("#bpAmmoCount").textContent = local.reserveAmmo ?? 0;
+  $("#bpAmmoCount").innerHTML =
+    `${local.reserveAmmo ?? 0}<small>/${packLimits.ammo}</small>`;
   $("#bpMag").textContent = ammo;
-  $("#bpMedCount").textContent = local.medkits || 0;
+  $("#bpMedCount").innerHTML =
+    `${local.medkits || 0}<small>/${packLimits.medkits}</small>`;
+  $("#bpAmmoCount").classList.toggle("full", !packHasRoom("ammo"));
+  $("#bpMedCount").classList.toggle("full", !packHasRoom("medkit"));
   $("#bpMed").classList.toggle("empty", !(local.medkits > 0));
 }
 function openBackpack() {
@@ -1651,6 +1697,15 @@ function showLootToast(text) {
   clearTimeout(lootToastTimer);
   lootToastTimer = setTimeout(() => el.classList.add("hidden"), 1800);
 }
+// Súng góc nhìn thứ nhất hạ xuống và gập ngang khi đang hồi máu (đang bận thao tác).
+function updateGunPose(dt) {
+  if (!gun) return;
+  const target = local.healing ? 1 : 0;
+  gunBusy += (target - gunBusy) * Math.min(10 * dt, 1);
+  if (Math.abs(target - gunBusy) < 0.002) gunBusy = target;
+  gun.rotation.set(0.15 * gunBusy, 1.35 * gunBusy, -0.12 * gunBusy);
+  gun.position.set(0.3 * gunBusy, -0.14 * gunBusy, 0.05 * gunBusy);
+}
 // Gọi mỗi frame: xoay/nhấp nhô vật phẩm, gợi ý phím F, thanh hồi máu.
 function updateLootHud(dt) {
   const t = performance.now() / 1000;
@@ -1675,7 +1730,9 @@ function updateLootHud(dt) {
   heal.classList.add("hidden");
   const near = local.swimming ? null : nearestLoot();
   if (near) {
-    prompt.innerHTML = `<b>F</b>NHẶT ${lootLabel(near)}`;
+    prompt.innerHTML = packHasRoom(near.type)
+      ? `<b>F</b>NHẶT ${lootLabel(near)}`
+      : `<b>✕</b>BALO ĐẦY · KHÔNG NHẶT ĐƯỢC ${near.type === "ammo" ? "ĐẠN" : "BỊCH MÁU"}`;
     prompt.classList.remove("hidden");
   } else {
     prompt.classList.add("hidden");
@@ -1811,7 +1868,7 @@ function onKeyDown(e) {
     $("#game").classList.contains("active")
   ) {
     e.preventDefault();
-    send({ type: "reload" });
+    if (!local.healing) send({ type: "reload" });
     return;
   }
 
@@ -1915,6 +1972,7 @@ function onFire(e) {
     if (
       $("#game").classList.contains("active") &&
       !paused &&
+      !local.healing &&
       document.pointerLockElement === renderer?.domElement
     )
       setScope(!scoped);
@@ -1950,7 +2008,7 @@ function shootOnce() {
     stopFiring();
     return;
   }
-  if (local.reloading) return;
+  if (local.reloading || local.healing) return;
   if (ammo <= 0) {
     tone(120, 0.07, "square", 0.015);
     stopFiring();
@@ -2026,6 +2084,7 @@ function frame() {
         mesh.userData.weapon.rotation.x = 0;
     }
     mesh.userData.muzzleFlash.visible = Date.now() < mesh.userData.flashUntil;
+    if (mesh.userData.healing) mesh.userData.healIndicator.rotation.y += dt * 5;
   }
   for (let i = bloodParticles.length - 1; i >= 0; i--) {
     const particle = bloodParticles[i];
@@ -2041,6 +2100,7 @@ function frame() {
     }
   }
   updateLootHud(dt);
+  updateGunPose(dt);
   if (!paused) {
     const currentlyInWater = Boolean(waterAt(local.x, local.z));
     const isProne = !currentlyInWater && Boolean(local.prone);

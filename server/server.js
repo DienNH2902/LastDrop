@@ -211,6 +211,9 @@ const MEDKIT_COUNT = 14;
 const HEAL_AMOUNT = 20;
 const HEAL_DURATION_MS = 5000;
 const MAX_HP = 100;
+// Sức chứa balo (đạn dự trữ và bịch máu). Không tính đạn đang lắp trong súng.
+const MAX_RESERVE_AMMO = 210;
+const MAX_MEDKITS = 5;
 function createLoot(room) {
   const items = [];
   let nextId = 1;
@@ -424,7 +427,11 @@ wss.on("connection", (ws) => {
       room.phase = "playing";
       room.lastHit = null;
       room.loot = createLoot(room);
-      broadcastRaw(room, { type: "loot", items: room.loot });
+      broadcastRaw(room, {
+        type: "loot",
+        items: room.loot,
+        limits: { ammo: MAX_RESERVE_AMMO, medkits: MAX_MEDKITS },
+      });
       broadcast(room);
       return;
     }
@@ -521,23 +528,58 @@ wss.on("connection", (ws) => {
         }
       }
       if (!best) return;
-      room.loot = room.loot.filter((item) => item !== best);
-      if (best.type === "ammo") p.reserveAmmo += best.amount;
-      else p.medkits = (p.medkits || 0) + best.amount;
-      broadcastRaw(room, { type: "lootRemoved", id: best.id });
-      send(ws, {
-        type: "toast",
-        text:
-          best.type === "ammo"
-            ? `+${best.amount} ĐẠN 5.56`
-            : `+${best.amount} BỊCH MÁU`,
-      });
+      if (best.type === "ammo") {
+        const space = MAX_RESERVE_AMMO - p.reserveAmmo;
+        if (space <= 0)
+          return send(ws, {
+            type: "toast",
+            text: `BALO ĐẦY ĐẠN (${p.reserveAmmo}/${MAX_RESERVE_AMMO})`,
+          });
+        // Balo chỉ đủ chỗ một phần: lấy phần vừa, phần còn lại nằm lại trên đất.
+        const taken = Math.min(best.amount, space);
+        p.reserveAmmo += taken;
+        best.amount -= taken;
+        if (best.amount > 0)
+          broadcastRaw(room, {
+            type: "lootUpdate",
+            id: best.id,
+            amount: best.amount,
+          });
+        else {
+          room.loot = room.loot.filter((item) => item !== best);
+          broadcastRaw(room, { type: "lootRemoved", id: best.id });
+        }
+        send(ws, {
+          type: "toast",
+          text:
+            `+${taken} ĐẠN 5.56` +
+            (p.reserveAmmo >= MAX_RESERVE_AMMO ? " · BALO ĐẦY ĐẠN" : ""),
+        });
+      } else {
+        if ((p.medkits || 0) >= MAX_MEDKITS) {
+          return send(ws, {
+            type: "toast",
+            text: `BALO ĐẦY BỊCH MÁU (${p.medkits}/${MAX_MEDKITS})`,
+          });
+        }
+        p.medkits = (p.medkits || 0) + best.amount;
+        room.loot = room.loot.filter((item) => item !== best);
+        broadcastRaw(room, { type: "lootRemoved", id: best.id });
+        send(ws, {
+          type: "toast",
+          text:
+            `+${best.amount} BỊCH MÁU` +
+            (p.medkits >= MAX_MEDKITS ? " · BALO ĐẦY BỊCH MÁU" : ""),
+        });
+      }
       broadcast(room);
       return;
     }
     if (m.type === "heal" && room.phase === "playing" && p.alive) {
       const now = Date.now();
       if (p.healingUntil > now) return;
+      if (p.reloadingUntil > now)
+        return send(ws, { type: "toast", text: "ĐANG NẠP ĐẠN" });
       if ((p.medkits || 0) <= 0)
         return send(ws, { type: "toast", text: "KHÔNG CÒN BỊCH MÁU" });
       if (p.hp >= MAX_HP)
@@ -569,7 +611,12 @@ wss.on("connection", (ws) => {
     }
     if (m.type === "reload" && room.phase === "playing" && p.alive) {
       const now = Date.now();
-      if (p.reloadingUntil > now || p.ammo >= 30 || p.reserveAmmo <= 0) {
+      if (
+        p.healingUntil > now ||
+        p.reloadingUntil > now ||
+        p.ammo >= 30 ||
+        p.reserveAmmo <= 0
+      ) {
         broadcast(room);
         return;
       }
@@ -596,6 +643,7 @@ wss.on("connection", (ws) => {
       if (length < 0.99 || length > 1.01) return;
       const shotTime = Date.now();
       if (
+        p.healingUntil > shotTime ||
         p.reloadingUntil > shotTime ||
         p.ammo <= 0 ||
         shotTime - p.lastShotAt < 120
