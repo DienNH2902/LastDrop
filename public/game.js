@@ -43,6 +43,9 @@ let socket = null,
     swimming: false,
     swimY: null,
     swimDepth: 0,
+    state: "lobby", // lobby → plane → freefall → parachute → ground
+    y: 0, // độ cao (chân) khi ở trên không
+    seat: 0, // chỗ đứng trong máy bay
   };
 let keys = {},
   ammo = 30,
@@ -69,6 +72,43 @@ let keys = {},
   resultCountdown = null,
   resultEndsAt = 0;
 const FIRE_INTERVAL_MS = 120;
+
+const STATE_ORDER = { lobby: 0, plane: 1, freefall: 2, parachute: 3, ground: 4 };
+// Chỗ đứng trong khoang máy bay (x phải, z lùi về sau); khớp với server.js.
+const PLANE_SEATS = [
+  [-0.9, 2.2],
+  [0.9, 2.2],
+  [-0.9, 0.6],
+  [0.9, 0.6],
+  [-0.9, -1.0],
+];
+const MAP_HALF = 50; // zone của map: hình vuông ±50 m
+const AIR = {
+  freefallHoriz: 20, // m/s bay ngang khi rơi tự do
+  diveHoriz: 13, // m/s bay ngang khi lao xuống (giữ Shift)
+  chuteHoriz: 9, // m/s bay ngang khi đã bung dù
+  freefallFall: 32, // m/s rơi tự do
+  diveFall: 52, // m/s khi lao xuống
+  chuteFall: 5.5, // m/s khi đã bung dù (hạ từ từ)
+  gravity: 24, // m/s² tăng tốc khi rơi
+  autoDeployAlt: 35, // dưới độ cao này (m) mà chưa bung dù thì tự bung
+};
+let inMatch = false, // đã vào màn hình trận (phòng chờ trong map, máy bay, mặt đất)
+  plane = null, // đường bay server gửi: { sx, sz, dx, dz, speed, alt, tEnter, tExit, startedAt }
+  serverOffset = 0,
+  serverOffsetReady = false,
+  countdownEndsAt = 0,
+  matchPhase = "waiting",
+  lastCountdownNumber = null,
+  readySent = false,
+  jumpRequestedAt = 0,
+  planeObject = null,
+  envBlend = 0,
+  airState = { vx: 0, vz: 0, fall: 0, time: 0 };
+const audioLoops = { plane: null, wind: null };
+const loopBuffers = {};
+const tmpColorA = new THREE.Color();
+const tmpColorB = new THREE.Color();
 
 // Vật phẩm / balo / hồi máu (server quyết định kết quả, khớp với server.js)
 const PICKUP_RADIUS = 2;
@@ -458,6 +498,7 @@ $("#joinBtn").onclick = () => {
 };
 function connect(message) {
   if (socket) socket.close();
+  serverOffsetReady = false;
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${protocol}//${location.host}`);
   $("#status").textContent = "● CONNECTING";
@@ -497,22 +538,41 @@ function connect(message) {
       lootItems.get(m.id).amount = m.amount;
     if (m.type === "lootRemoved") removeLootItem(m.id);
     if (m.type === "toast") showLootToast(m.text);
+    // Server sửa lại chỗ tiếp đất (ví dụ trúng cây / đá).
+    if (m.type === "landed" && local.state === "ground") {
+      local.x = m.x;
+      local.z = m.z;
+    }
     if (m.type === "state") {
       gameState = m;
+      // Đồng bộ đồng hồ với server để máy bay / đếm ngược khớp giữa các máy.
+      const offset = m.now - Date.now();
+      serverOffset = serverOffsetReady
+        ? serverOffset + (offset - serverOffset) * 0.1
+        : offset;
+      serverOffsetReady = true;
+      plane = m.plane || null;
+      countdownEndsAt = m.countdownEndsAt || 0;
+      matchPhase = m.phase;
       if (m.mapId) {
         mapId = m.mapId;
         renderMapChoice(mapId);
       }
       renderLobby();
-      if (m.phase === "playing") {
-        if (!$("#game").classList.contains("active")) beginGame();
+      // staging: vào map chờ · countdown: đếm ngược · plane: trên máy bay · playing: đã nhảy hết
+      if (["staging", "countdown", "plane", "playing"].includes(m.phase)) {
+        if (!inMatch) beginGame();
         renderPlayers(m);
+        if (!readySent) {
+          readySent = true; // báo server: đã dựng xong map trong phòng chờ
+          send({ type: "ready" });
+        }
       }
       if (
         m.phase === "finished" &&
         !$("#result").classList.contains("active")
       ) {
-        if (!$("#game").classList.contains("active")) beginGame();
+        if (!inMatch) beginGame();
         renderPlayers(m);
         showResult();
       }
@@ -1098,7 +1158,12 @@ function isBlockedAt(x, z) {
     if (Math.hypot(x - closestX, z - closestZ) < obstacleRadius) return true;
   }
   for (const p of gameState?.players || []) {
-    if (p.id === playerId || !p.alive) continue;
+    if (
+      p.id === playerId ||
+      !p.alive ||
+      !(p.state === "ground" || p.state === "lobby")
+    )
+      continue;
     const otherRadius = p.prone ? 1.15 : PLAYER_RADIUS;
     if (Math.hypot(x - p.x, z - p.z) < selfRadius + otherRadius + 0.02)
       return true;
@@ -1125,6 +1190,8 @@ function initWorld() {
     1.65 + groundHeightAt(local.x, local.z),
     local.z,
   );
+  camera.rotation.order = "YXZ";
+  camera.rotation.y = local.yaw;
   renderer = new THREE.WebGLRenderer({
     antialias: false,
     powerPreference: "low-power",
@@ -1152,6 +1219,8 @@ function initWorld() {
 
   if (!mapObstacles.length) mapObstacles = gameState?.obstacles || [];
   createGroundMesh(forest);
+  addOutskirts(forest);
+  addZoneBorder();
   if (forest) addForestGrass(gameState?.mapSeed ?? 305419896);
   for (const obstacle of mapObstacles) drawMapObject(obstacle, forest);
   // First-person weapon silhouette attached to the camera.
@@ -1175,8 +1244,12 @@ function initWorld() {
   );
   stock.position.set(0.28, -0.25, -0.18);
   gun.add(stock);
+  gun.visible = false; // phòng chờ / máy bay / đang nhảy dù: tay không, chỉ cầm súng sau khi tiếp đất
   camera.add(gun);
   scene.add(camera);
+  planeObject = buildPlane();
+  planeObject.visible = false;
+  scene.add(planeObject);
   for (const item of lootItems.values()) {
     item.mesh = null;
     addLootMesh(item);
@@ -1220,6 +1293,40 @@ function showBloodScreenFlash() {
     setTimeout(() => (flash.style.background = ""), 220);
   }, 90);
 }
+// Đặt avatar người khác theo trạng thái. Trên máy bay thì updateRemoteMotion() đặt theo
+// chỗ ngồi mỗi khung hình; đang bay thì lướt mượt tới vị trí mới nhất.
+function placeRemote(mesh, p) {
+  const ud = mesh.userData;
+  const st = p.state || "lobby";
+  ud.seat = p.seat || 0;
+  if (st === "plane") {
+    ud.airTarget = null;
+    ud.inAir = false;
+    mesh.scale.set(1, 1, 1);
+    return;
+  }
+  if (st === "freefall" || st === "parachute") {
+    const target = { x: p.x, y: (p.y ?? 0) + (st === "freefall" ? 0.5 : 0), z: p.z };
+    if (!ud.inAir) mesh.position.set(target.x, target.y, target.z);
+    ud.inAir = true;
+    ud.airTarget = target;
+    // Rơi tự do: nằm sấp, đầu hướng về phía trước (như tư thế nhảy dù); dù bung: đứng thẳng.
+    mesh.rotation.set(st === "freefall" ? -1.35 : 0, p.yaw, 0);
+    mesh.scale.set(1, 1, 1);
+    return;
+  }
+  ud.airTarget = null;
+  ud.inAir = false;
+  // Negative X rotation lays local +Y toward local -Z, matching the server's
+  // prone hitbox centers (head forward, legs behind).
+  mesh.rotation.set(p.prone ? -Math.PI / 2 : 0, p.yaw, 0);
+  mesh.position.set(
+    p.x,
+    p.swimming ? p.swimY || 0 : (p.groundY || 0) + (p.prone ? 0.35 : p.jumpY || 0),
+    p.z,
+  );
+  mesh.scale.set(1, p.crouching && !p.prone ? 0.68 : 1, 1);
+}
 function renderPlayers(state) {
   $("#aliveCount").textContent = state.alive;
   $("#totalCount").textContent = state.total;
@@ -1245,6 +1352,7 @@ function renderPlayers(state) {
       const reloadHud = $("#reloadHud");
       if (reloadHud)
         reloadHud.style.display = local.reloading ? "flex" : "none";
+      syncLocalState(p);
       continue;
     }
     living.add(p.id);
@@ -1353,7 +1461,15 @@ function renderPlayers(state) {
       healIndicator.position.set(0, 2.2, 0);
       healIndicator.visible = false;
       mesh.add(healIndicator);
+      const chute = buildChute(); // mái dù, chỉ hiện khi người đó đang thả dù
+      chute.visible = false;
+      mesh.add(chute);
       mesh.userData = {
+        state: p.state || "lobby",
+        seat: p.seat || 0,
+        chute,
+        airTarget: null,
+        inAir: false,
         torso,
         head,
         legs,
@@ -1373,17 +1489,23 @@ function renderPlayers(state) {
       remoteMeshes.set(p.id, mesh);
     }
     mesh.rotation.order = "YXZ";
-    // Negative X rotation lays local +Y toward local -Z, matching the server's
-    // prone hitbox centers (head forward, legs behind).
-    mesh.rotation.set(p.prone ? -Math.PI / 2 : 0, p.yaw, 0);
-    mesh.position.set(
-      p.x,
-      p.swimming
-        ? p.swimY || 0
-        : (p.groundY || 0) + (p.prone ? 0.35 : p.jumpY || 0),
-      p.z,
-    );
-    mesh.scale.set(1, p.crouching && !p.prone ? 0.68 : 1, 1);
+    placeRemote(mesh, p);
+    const curState = p.state || "lobby";
+    if (mesh.userData.state !== curState) {
+      const prevState = mesh.userData.state;
+      mesh.userData.state = curState;
+      // Nghe thấy người khác bung dù / tiếp đất nếu ở đủ gần.
+      if (curState === "parachute")
+        playChuteOpen({ x: p.x, y: p.y ?? 0, z: p.z });
+      if (
+        curState === "ground" &&
+        (prevState === "freefall" || prevState === "parachute")
+      )
+        playLanding({ x: p.x, y: (p.groundY || 0) + 0.3, z: p.z });
+    }
+    // Chỉ cầm súng sau khi tiếp đất; ở phòng chờ / máy bay / trên không thì tay không.
+    mesh.userData.weapon.visible = curState === "ground";
+    mesh.userData.chute.visible = curState === "parachute";
     mesh.userData.slowWalking = Boolean(p.slowWalking);
     const wasReloading = Boolean(mesh.userData.reloading);
     mesh.userData.reloading = Boolean(p.reloading);
@@ -1406,7 +1528,11 @@ function renderPlayers(state) {
       p.x - mesh.userData.lastMotionX,
       p.z - mesh.userData.lastMotionZ,
     );
-    const canStep = p.alive && !p.prone && !p.swimming;
+    const canStep =
+      p.alive &&
+      !p.prone &&
+      !p.swimming &&
+      (curState === "ground" || curState === "lobby");
     if (canStep && motionDistance < 1.5) {
       // Accumulate replicated movement distance so unrelated state packets
       // (such as firing/reloading) cannot break footstep timing.
@@ -1589,6 +1715,7 @@ function nearestLoot() {
   return best;
 }
 function onInteract() {
+  if (local.state !== "ground") return; // chưa tiếp đất thì chưa nhặt được gì
   // F: đang hồi máu thì hủy hồi máu, ngược lại nhặt vật phẩm gần nhất.
   if (local.healing) {
     send({ type: "cancelHeal" });
@@ -1667,7 +1794,12 @@ function renderBackpack() {
   $("#bpMed").classList.toggle("empty", !(local.medkits > 0));
 }
 function openBackpack() {
-  if (backpackOpen || paused || !$("#game").classList.contains("active"))
+  if (
+    backpackOpen ||
+    paused ||
+    local.state !== "ground" ||
+    !$("#game").classList.contains("active")
+  )
     return;
   backpackOpen = true;
   stopFiring();
@@ -1739,6 +1871,14 @@ function updateLootHud(dt) {
   }
 }
 function beginGame() {
+  inMatch = true;
+  readySent = false;
+  jumpRequestedAt = 0;
+  envBlend = 0;
+  lastCountdownNumber = null;
+  airState = { vx: 0, vz: 0, fall: 0, time: 0 };
+  local.state = "lobby";
+  local.y = 0;
   lastHitEventId = 0;
   local.hp = 100;
   local.kills = 0;
@@ -1764,6 +1904,8 @@ function beginGame() {
   $("#ammo").innerHTML = `${ammo} <i>/ 90</i>`;
   show("game");
   initWorld();
+  if (!$("#chuteOverlay").innerHTML) $("#chuteOverlay").innerHTML = buildChuteOverlay();
+  setMode("lobby"); // vào map chờ: tay không, không vật phẩm
   $("#world").onclick = () => {
     if (!paused && !backpackOpen) renderer.domElement.requestPointerLock?.();
   };
@@ -1844,6 +1986,28 @@ function onKeyDown(e) {
     return;
   }
 
+  // Trên máy bay: Space / F nhảy dù. Đang rơi tự do: Space / F bung dù.
+  if (
+    (e.code === "Space" || e.code === "KeyF") &&
+    !paused &&
+    $("#game").classList.contains("active")
+  ) {
+    if (local.state === "plane") {
+      e.preventDefault();
+      if (!e.repeat) requestJump();
+      return;
+    }
+    if (local.state === "freefall") {
+      e.preventDefault();
+      if (!e.repeat) deployChute(false);
+      return;
+    }
+    if (local.state === "parachute") {
+      e.preventDefault();
+      return;
+    }
+  }
+
   if (e.code === "Tab" && !paused && $("#game").classList.contains("active")) {
     e.preventDefault(); // không cho Tab đổi focus của trình duyệt
     if (!e.repeat) toggleBackpack();
@@ -1865,6 +2029,7 @@ function onKeyDown(e) {
     e.code === "KeyR" &&
     !e.repeat &&
     !paused &&
+    local.state === "ground" &&
     $("#game").classList.contains("active")
   ) {
     e.preventDefault();
@@ -1876,6 +2041,7 @@ function onKeyDown(e) {
     e.code === "KeyZ" &&
     !e.repeat &&
     !paused &&
+    (local.state === "ground" || local.state === "lobby") &&
     grounded &&
     !waterAt(local.x, local.z) &&
     $("#game").classList.contains("active")
@@ -1891,6 +2057,7 @@ function onKeyDown(e) {
   if (
     e.code === "Space" &&
     !e.repeat &&
+    (local.state === "ground" || local.state === "lobby") &&
     grounded &&
     !paused &&
     !local.prone &&
@@ -1953,6 +2120,11 @@ function cleanupGame() {
   closeBackpack(false);
   for (const item of lootItems.values()) disposeLootMesh(item);
   lootItems.clear();
+  stopLoop("plane", 0.05);
+  stopLoop("wind", 0.05);
+  inMatch = false;
+  plane = null;
+  planeObject = null;
   renderer?.dispose();
   renderer = null;
   remoteMeshes.clear();
@@ -1970,6 +2142,7 @@ function onMouse(e) {
 function onFire(e) {
   if (e.button === 2) {
     if (
+      local.state === "ground" &&
       $("#game").classList.contains("active") &&
       !paused &&
       !local.healing &&
@@ -1981,6 +2154,7 @@ function onFire(e) {
   if (
     e.button !== 0 ||
     paused ||
+    local.state !== "ground" ||
     !$("#game").classList.contains("active") ||
     document.pointerLockElement !== renderer?.domElement
   )
@@ -2002,6 +2176,7 @@ function shootOnce() {
   if (
     !triggerHeld ||
     paused ||
+    local.state !== "ground" ||
     !$("#game").classList.contains("active") ||
     document.pointerLockElement !== renderer?.domElement
   ) {
@@ -2039,7 +2214,7 @@ function setScope(enabled) {
   scoped = enabled;
   camera.fov = scoped ? 30 : baseFov;
   camera.updateProjectionMatrix();
-  gun.visible = !scoped;
+  gun.visible = !scoped && local.state === "ground";
   $(".crosshair").classList.toggle("scope-hidden", scoped);
   $("#scopeOverlay").classList.toggle("hidden", !scoped);
 }
@@ -2067,6 +2242,799 @@ function makeTracer() {
     geometry.dispose();
     line.material.dispose();
   }, 110);
+}
+// ---------------------------------------------------------------------------
+// LUỒNG TRẬN (client): phòng chờ trong map → đếm ngược → máy bay → nhảy dù → tiếp đất
+// Server quyết định pha và thời điểm (staging / countdown / plane / playing).
+// Client mô phỏng chuyển động của chính mình và gửi lên server ("air", "chute", "land").
+// Trạng thái người chơi: lobby → plane → freefall → parachute → ground.
+// Chỉ ở trạng thái "ground" mới có súng, nhặt đồ, bắn, nạp đạn.
+// ---------------------------------------------------------------------------
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const planeYaw = () => (plane ? Math.atan2(-plane.dx, -plane.dz) : 0);
+const serverNow = () => Date.now() + serverOffset;
+const planeTime = () => (plane ? (serverNow() - plane.startedAt) / 1000 : 0);
+function planePosAt(t) {
+  return {
+    x: plane.sx + plane.dx * plane.speed * t,
+    z: plane.sz + plane.dz * plane.speed * t,
+  };
+}
+// Vị trí (thế giới) của một chỗ đứng trong khoang máy bay tại thời điểm t.
+function seatWorld(seat, t) {
+  const p = planePosAt(t);
+  const [lx, lz] = PLANE_SEATS[seat % PLANE_SEATS.length];
+  const yaw = planeYaw();
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  return { x: p.x + lx * c + lz * s, z: p.z - lx * s + lz * c };
+}
+function setMode(state) {
+  local.state = state;
+  $("#game").dataset.mode = state;
+  if (scoped) setScope(false);
+  if (gun) gun.visible = state === "ground" && !scoped;
+  $("#chuteOverlay").classList.toggle("hidden", state !== "parachute");
+  $("#flightHud").classList.toggle(
+    "hidden",
+    !(state === "plane" || state === "freefall" || state === "parachute"),
+  );
+  $("#swimHint")?.classList.add("hidden");
+  $("#underwaterTint")?.classList.remove("active");
+}
+// Server luôn là bên quyết định chuyển pha tiến lên (lobby → plane → freefall).
+// Các bước bung dù và tiếp đất do client báo lên trước, server chỉ xác nhận lại.
+function syncLocalState(p) {
+  const target = p.state || "lobby";
+  if ((STATE_ORDER[target] ?? 0) <= (STATE_ORDER[local.state] ?? 0)) return;
+  if (target === "plane") enterPlane(p);
+  else if (target === "freefall" || target === "parachute")
+    enterFreefall(p, target);
+}
+function enterPlane(p) {
+  if (!plane) return;
+  local.seat = p.seat || 0;
+  local.prone = false;
+  local.crouching = false;
+  local.jumping = false;
+  grounded = true;
+  verticalSpeed = 0;
+  jumpOffset = 0;
+  stopFiring();
+  closeBackpack(false);
+  setMode("plane");
+  local.yaw = planeYaw();
+  camera.rotation.order = "YXZ";
+  camera.rotation.y = local.yaw;
+  camera.rotation.x = -0.12;
+  camera.rotation.z = 0;
+  startedAt = Date.now();
+  jumpRequestedAt = 0;
+  startPlaneSound();
+  showLootToast("LÊN MÁY BAY · NHẢY KHI ĐÈN XANH");
+}
+function enterFreefall(p, state) {
+  local.x = p.x;
+  local.z = p.z;
+  local.y = p.y ?? (plane ? plane.alt : 200);
+  // Giữ đà bay của máy bay lúc mới nhảy, tắt dần khi người chơi tự điều khiển.
+  airState = {
+    vx: plane ? plane.dx * plane.speed : 0,
+    vz: plane ? plane.dz * plane.speed : 0,
+    fall: 0,
+    time: 0,
+  };
+  camera.rotation.x = -0.75; // nhìn xuống map
+  setMode(state === "parachute" ? "parachute" : "freefall");
+  stopLoop("plane", 3);
+  startWind();
+  playJumpWhoosh();
+}
+function requestJump() {
+  if (!plane || local.state !== "plane") return;
+  if (planeTime() < plane.tEnter) {
+    showLootToast("CHƯA TỚI VÙNG NHẢY");
+    return;
+  }
+  if (Date.now() - jumpRequestedAt < 500) return;
+  jumpRequestedAt = Date.now();
+  send({ type: "jump" });
+}
+function deployChute(auto) {
+  if (local.state !== "freefall") return;
+  if (!auto && airState.time < 0.8) return;
+  setMode("parachute");
+  send({ type: "chute" });
+  playChuteOpen(null);
+  showLootToast(auto ? "TỰ ĐỘNG BUNG DÙ" : "ĐÃ BUNG DÙ");
+}
+// Đẩy người chơi ra khỏi cây / đá / tường nếu tiếp đất trúng chúng.
+function findFreeSpotLocal(x, z) {
+  x = clamp(x, -48.5, 48.5);
+  z = clamp(z, -48.5, 48.5);
+  if (!isBlockedAt(x, z)) return { x, z };
+  for (let r = 0.5; r <= 12; r += 0.5) {
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2;
+      const nx = x + Math.cos(a) * r;
+      const nz = z + Math.sin(a) * r;
+      if (!isBlockedAt(nx, nz)) return { x: nx, z: nz };
+    }
+  }
+  return { x, z };
+}
+function landNow() {
+  const spot = findFreeSpotLocal(local.x, local.z);
+  local.x = spot.x;
+  local.z = spot.z;
+  stopLoop("wind", 0.6);
+  setMode("ground");
+  grounded = true;
+  verticalSpeed = 0;
+  jumpOffset = 0;
+  local.jumping = false;
+  camera.rotation.z = 0;
+  camera.rotation.x = clamp(camera.rotation.x, -0.25, 0.25);
+  camera.fov = baseFov;
+  camera.updateProjectionMatrix();
+  send({ type: "land", x: local.x, z: local.z });
+  playLanding(null);
+  showLootToast("ĐÃ TIẾP ĐẤT · CẦM SÚNG SẴN SÀNG");
+}
+// Đang ngồi trên máy bay: camera đứng đúng chỗ của mình trong khoang, tự do nhìn quanh.
+function updatePlane() {
+  if (!plane) return;
+  const pos = seatWorld(local.seat, planeTime());
+  local.x = pos.x;
+  local.z = pos.z;
+  local.y = plane.alt;
+  const now = performance.now();
+  const shake = Math.sin(now / 38) * 0.006 + Math.sin(now / 210) * 0.012;
+  camera.position.set(local.x, local.y + 1.62 + shake, local.z);
+  camera.rotation.z = 0;
+  setLoopGain(audioLoops.plane, 0.55 * sfxLevel(), 0.2);
+}
+// Rơi tự do và dù: WASD bay ngang theo hướng nhìn, Shift lao nhanh, Space bung dù.
+function updateAir(dt) {
+  const chute = local.state === "parachute";
+  airState.time += dt;
+  const input = !paused;
+  const f = input ? (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0) : 0;
+  const r = input ? (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0) : 0;
+  const dive = !chute && input && Boolean(keys.ShiftLeft || keys.ShiftRight);
+  const cap = chute ? AIR.chuteHoriz : dive ? AIR.diveHoriz : AIR.freefallHoriz;
+  const fx = -Math.sin(local.yaw),
+    fz = -Math.cos(local.yaw),
+    rx = Math.cos(local.yaw),
+    rz = -Math.sin(local.yaw);
+  const dx = fx * f + rx * r,
+    dz = fz * f + rz * r;
+  const len = Math.hypot(dx, dz);
+  const follow = Math.min(1, (chute ? 1.8 : 2.6) * dt);
+  airState.vx += ((len ? (dx / len) * cap : 0) - airState.vx) * follow;
+  airState.vz += ((len ? (dz / len) * cap : 0) - airState.vz) * follow;
+  // Vận tốc rơi: tăng dần tới tốc độ rơi tự do; bung dù thì giảm mượt xuống rất chậm.
+  const targetFall = chute
+    ? AIR.chuteFall
+    : dive
+      ? AIR.diveFall
+      : AIR.freefallFall;
+  if (chute) {
+    airState.fall += (targetFall - airState.fall) * Math.min(1, 2.4 * dt);
+  } else {
+    const diff = targetFall - airState.fall;
+    const accel = diff > 0 ? AIR.gravity : 30;
+    airState.fall += Math.sign(diff) * Math.min(Math.abs(diff), accel * dt);
+  }
+  local.x = clamp(local.x + airState.vx * dt, -49.5, 49.5);
+  local.z = clamp(local.z + airState.vz * dt, -49.5, 49.5);
+  local.y -= airState.fall * dt;
+  const ground = groundHeightAt(local.x, local.z);
+  if (!chute && local.y - ground <= AIR.autoDeployAlt && airState.time > 0.4)
+    deployChute(true);
+  if (local.y <= ground) {
+    local.y = ground;
+    camera.position.set(local.x, local.y + 1.6, local.z);
+    landNow();
+    return;
+  }
+  camera.position.set(local.x, local.y + 1.6, local.z);
+  camera.rotation.z = chute
+    ? Math.sin(performance.now() / 900) * 0.03 - r * 0.05
+    : -r * 0.08;
+  const targetFov = chute ? baseFov : baseFov + (dive ? 18 : 9);
+  camera.fov += (targetFov - camera.fov) * Math.min(1, 5 * dt);
+  camera.updateProjectionMatrix();
+  updateWind(chute);
+  if (Date.now() - lastMove > 50) {
+    send({ type: "air", x: local.x, y: local.y, z: local.z, yaw: local.yaw });
+    lastMove = Date.now();
+  }
+}
+// Máy bay bay thẳng theo đường server đã chốt; cánh quạt quay, đèn nhảy đổi xanh khi vào zone.
+function updatePlaneObject(dt) {
+  if (!planeObject) return;
+  if (!plane) {
+    planeObject.visible = false;
+    return;
+  }
+  const t = planeTime();
+  planeObject.visible = t < plane.tExit + 25;
+  if (!planeObject.visible) return;
+  const pos = planePosAt(t);
+  planeObject.position.set(pos.x, plane.alt, pos.z);
+  planeObject.rotation.y = planeYaw();
+  for (const prop of planeObject.userData.props) prop.rotation.z += dt * 40;
+  planeObject.userData.jumpLight.material.color.set(
+    t >= plane.tEnter && t < plane.tExit ? 0x39ff6a : 0xff3b30,
+  );
+}
+// Người chơi khác: đứng trong khoang theo chỗ ngồi, hoặc lướt mượt tới vị trí bay mới nhất.
+function updateRemoteMotion(dt) {
+  const t = plane ? planeTime() : 0;
+  const k = 1 - Math.exp(-14 * dt);
+  for (const mesh of remoteMeshes.values()) {
+    const ud = mesh.userData;
+    if (ud.state === "plane" && plane) {
+      const seat = seatWorld(ud.seat || 0, t);
+      mesh.position.set(seat.x, plane.alt, seat.z);
+      mesh.rotation.set(0, planeYaw(), 0);
+    } else if (ud.airTarget) {
+      mesh.position.x += (ud.airTarget.x - mesh.position.x) * k;
+      mesh.position.y += (ud.airTarget.y - mesh.position.y) * k;
+      mesh.position.z += (ud.airTarget.z - mesh.position.z) * k;
+    }
+    if (ud.chute?.visible)
+      ud.chute.rotation.z = Math.sin(performance.now() / 700 + mesh.id) * 0.06;
+  }
+}
+// Trời xanh + sương mù xa khi ở trên cao; về màu đất và sương mù gần khi sắp chạm đất.
+function updateEnvironment(dt) {
+  if (!scene || !camera) return;
+  let target = 0;
+  if (local.state === "plane") target = 1;
+  else if (local.state === "freefall" || local.state === "parachute")
+    target = clamp((local.y - groundHeightAt(local.x, local.z) - 12) / 70, 0, 1);
+  envBlend += (target - envBlend) * Math.min(1, 4 * dt);
+  tmpColorA.set(mapId === "forest" ? "#91b18a" : "#c5aa79");
+  tmpColorB.set("#9cc9ea");
+  scene.background.lerpColors(tmpColorA, tmpColorB, envBlend);
+  scene.fog.color.copy(scene.background);
+  scene.fog.near = 48 + (260 - 48) * envBlend;
+  scene.fog.far = 112 + (900 - 112) * envBlend;
+  const far = envBlend > 0.02 ? 1000 : 180;
+  if (camera.far !== far) {
+    camera.far = far;
+    camera.updateProjectionMatrix();
+  }
+}
+function updatePhaseOverlay() {
+  const box = $("#phaseOverlay");
+  if (!box) return;
+  const waiting =
+    (matchPhase === "staging" || matchPhase === "countdown") &&
+    local.state === "lobby";
+  box.classList.toggle("hidden", !waiting);
+  if (!waiting) {
+    lastCountdownNumber = null;
+    return;
+  }
+  if (matchPhase === "staging") {
+    const players = gameState?.players || [];
+    const ready = players.filter((p) => p.ready).length;
+    $("#phaseSmall").textContent = "PHÒNG CHỜ · ĐANG VÀO TRẬN";
+    $("#phaseBig").textContent = "…";
+    $("#phaseSub").textContent =
+      `ĐÃ VÀO ${ready}/${players.length} NGƯỜI CHƠI · WASD DI CHUYỂN · CLICK ĐỂ KHÓA CHUỘT`;
+    lastCountdownNumber = null;
+    return;
+  }
+  const n = Math.max(1, Math.ceil((countdownEndsAt - serverNow()) / 1000));
+  $("#phaseSmall").textContent = "TRẬN ĐẤU BẮT ĐẦU SAU";
+  $("#phaseBig").textContent = n;
+  $("#phaseSub").textContent = "CHUẨN BỊ LÊN MÁY BAY";
+  if (n !== lastCountdownNumber) {
+    lastCountdownNumber = n;
+    tone(n === 1 ? 900 : 620, 0.14, "sine", 0.06 * sfxLevel());
+  }
+}
+function updateMatchClock() {
+  const el = $("#matchClock");
+  if (!el) return;
+  if (local.state === "lobby") {
+    el.textContent = "PHÒNG CHỜ";
+    return;
+  }
+  const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+  el.textContent = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
+}
+function updateFlightHud() {
+  const hud = $("#flightHud");
+  if (!hud || hud.classList.contains("hidden")) return;
+  const st = local.state;
+  const alt = Math.max(
+    0,
+    st === "plane" ? plane?.alt || 0 : local.y - groundHeightAt(local.x, local.z),
+  );
+  $("#flightState").textContent =
+    st === "plane"
+      ? "TRÊN MÁY BAY"
+      : st === "freefall"
+        ? "ĐANG RƠI TỰ DO"
+        : "ĐANG DÙ";
+  $("#flightAlt").textContent =
+    st === "plane"
+      ? `ĐỘ CAO ${Math.round(alt)} M`
+      : `ĐỘ CAO ${Math.round(alt)} M · ${Math.round(airState.fall)} M/S`;
+  const hint = $("#flightHint");
+  let text = "";
+  let ok = false;
+  if (st === "plane" && plane) {
+    const t = planeTime();
+    if (t < plane.tEnter) text = `CHƯA TỚI VÙNG NHẢY · ${(plane.tEnter - t).toFixed(1)}S`;
+    else if (t < plane.tExit) {
+      ok = true;
+      text = `[SPACE] NHẢY DÙ · TỰ NHẢY SAU ${(plane.tExit - t).toFixed(1)}S`;
+    } else text = "ĐANG TỰ ĐỘNG NHẢY...";
+  } else if (st === "freefall")
+    text = "[SPACE] BUNG DÙ · [SHIFT] LAO NHANH · WASD BAY NGANG";
+  else text = "WASD ĐIỀU KHIỂN DÙ · TỰ HẠ CÁNH";
+  hint.textContent = text;
+  hint.classList.toggle("ok", ok);
+  drawFlightMap();
+}
+function drawFlightMap() {
+  const canvas = $("#flightMap");
+  const ctx = canvas?.getContext("2d");
+  if (!ctx) return;
+  const S = canvas.width;
+  const k = S / 170;
+  const X = (x) => S / 2 + x * k;
+  const Y = (z) => S / 2 + z * k;
+  ctx.clearRect(0, 0, S, S);
+  ctx.fillStyle = "rgba(12,16,10,.78)";
+  ctx.fillRect(0, 0, S, S);
+  ctx.fillStyle = "rgba(143,224,255,.10)";
+  ctx.fillRect(X(-MAP_HALF), Y(-MAP_HALF), MAP_HALF * 2 * k, MAP_HALF * 2 * k);
+  ctx.strokeStyle = "#8fe0ff";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(X(-MAP_HALF), Y(-MAP_HALF), MAP_HALF * 2 * k, MAP_HALF * 2 * k);
+  const dot = (x, z, radius, color) => {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(clamp(X(x), 5, S - 5), clamp(Y(z), 5, S - 5), radius, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  const line = (t0, t1, color, width, dash) => {
+    const a = planePosAt(t0);
+    const b = planePosAt(t1);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    ctx.moveTo(X(a.x), Y(a.z));
+    ctx.lineTo(X(b.x), Y(b.z));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  if (plane) {
+    line(0, plane.tExit + 8, "rgba(255,255,255,.35)", 1, [3, 3]);
+    line(plane.tEnter, plane.tExit, "#5dff8a", 2.5, []);
+    const pos = planePosAt(planeTime());
+    dot(pos.x, pos.z, 4, "#ffd24a");
+  }
+  for (const p of gameState?.players || [])
+    if (p.id !== playerId && (p.state === "freefall" || p.state === "parachute"))
+      dot(p.x, p.z, 3, "#ff7a5c");
+  const me =
+    local.state === "plane" && plane
+      ? planePosAt(planeTime())
+      : { x: local.x, z: local.z };
+  dot(me.x, me.z, 3.5, "#ffffff");
+}
+// Tay nắm dù đơn giản cho giao diện: mái dù đỏ/trắng ở đầu màn hình, dây dù tụ về giữa.
+function buildChuteOverlay() {
+  const cx = 200,
+    cy = 150,
+    rx = 190,
+    ry = 130,
+    n = 6;
+  const pt = (i) => {
+    const a = Math.PI - (i * Math.PI) / n;
+    return [cx + rx * Math.cos(a), cy - ry * Math.sin(a)];
+  };
+  let out = `<svg viewBox="0 0 400 210" xmlns="http://www.w3.org/2000/svg">`;
+  for (let i = 0; i < n; i++) {
+    const [x0, y0] = pt(i);
+    const [x1, y1] = pt(i + 1);
+    out += `<path d="M${cx},${cy - ry - 8} L${x0.toFixed(1)},${y0.toFixed(1)} A${rx},${ry} 0 0 1 ${x1.toFixed(1)},${y1.toFixed(1)} Z" fill="${i % 2 ? "#f1efe6" : "#e8622c"}" stroke="#2a2f24" stroke-width="2"/>`;
+  }
+  for (let i = 0; i <= n; i++) {
+    const [x, y] = pt(i);
+    out += `<line x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${cx}" y2="210" stroke="#e9ecdc" stroke-opacity=".7" stroke-width="1.5"/>`;
+  }
+  return out + "</svg>";
+}
+function buildChute() {
+  const g = new THREE.Group();
+  const canopy = new THREE.Mesh(
+    new THREE.SphereGeometry(1.9, 14, 7, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.MeshStandardMaterial({
+      color: "#e8622c",
+      roughness: 0.8,
+      side: THREE.DoubleSide,
+    }),
+  );
+  canopy.scale.y = 0.62;
+  canopy.position.y = 3.9;
+  g.add(canopy);
+  const points = [];
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    points.push(
+      new THREE.Vector3(Math.cos(a) * 1.9, 3.9, Math.sin(a) * 1.9),
+      new THREE.Vector3(0, 1.5, 0),
+    );
+  }
+  g.add(
+    new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints(points),
+      new THREE.LineBasicMaterial({ color: 0xf1f1e6 }),
+    ),
+  );
+  return g;
+}
+// Máy bay vận tải đơn giản: khoang hở hai bên (thấp) để nhìn ra map, cánh cao, hai cánh quạt.
+function buildPlane() {
+  const g = new THREE.Group();
+  const hull = makeMat("#c9cdc4"),
+    dark = makeMat("#3a3f36"),
+    wing = makeMat("#aeb3a8"),
+    accent = makeMat("#d9a441"),
+    metal = makeMat("#6a6f66");
+  const box = (w, h, d, x, y, z, mat) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z);
+    g.add(m);
+    return m;
+  };
+  box(3.4, 0.2, 10.4, 0, -0.1, 1.9, dark); // sàn khoang
+  box(3.4, 0.14, 10.4, 0, 2.6, 1.9, hull); // trần
+  for (const side of [-1, 1]) {
+    box(0.14, 0.95, 10.4, side * 1.7, 0.47, 1.9, hull); // thành thấp
+    box(0.16, 0.16, 10.4, side * 1.7, 0.95, 1.9, accent); // thanh vịn
+    for (const z of [-3.2, -0.2, 2.8, 5.8])
+      box(0.14, 2.6, 0.14, side * 1.7, 1.3, z, hull); // cột
+  }
+  box(3.4, 2.6, 0.14, 0, 1.3, 7.05, hull); // vách sau
+  box(3.4, 2.6, 0.14, 0, 1.3, -3.3, hull); // vách trước (buồng lái)
+  const glass = new THREE.Mesh(
+    new THREE.BoxGeometry(2.4, 0.9, 0.05),
+    new THREE.MeshBasicMaterial({
+      color: 0x9fd4ff,
+      transparent: true,
+      opacity: 0.55,
+    }),
+  );
+  glass.position.set(0, 1.55, -3.4);
+  g.add(glass);
+  const noseGeo = new THREE.CylinderGeometry(0.7, 2.4, 5, 4);
+  noseGeo.rotateY(Math.PI / 4);
+  noseGeo.scale(1, 1, 0.8);
+  const nose = new THREE.Mesh(noseGeo, hull);
+  nose.rotation.x = -Math.PI / 2;
+  nose.position.set(0, 1.25, -5.8);
+  g.add(nose);
+  const tailGeo = new THREE.CylinderGeometry(0.6, 1.7, 5, 4);
+  tailGeo.rotateY(Math.PI / 4);
+  tailGeo.scale(1, 1, 0.8);
+  const tail = new THREE.Mesh(tailGeo, hull);
+  tail.rotation.x = Math.PI / 2;
+  tail.position.set(0, 1.25, 9.6);
+  g.add(tail);
+  box(0.22, 3.2, 2.4, 0, 3.4, 11.2, hull); // vây đuôi đứng
+  box(7.2, 0.18, 1.6, 0, 2.6, 11.4, wing); // cánh đuôi ngang
+  box(17, 0.28, 3.6, 0, 3.05, 0.8, wing); // cánh chính (cao)
+  box(0.3, 0.45, 3, -0.9, 2.85, 0.8, metal);
+  box(0.3, 0.45, 3, 0.9, 2.85, 0.8, metal);
+  const props = [];
+  for (const side of [-1, 1]) {
+    const nacelle = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.5, 0.42, 2.2, 10),
+      metal,
+    );
+    nacelle.rotation.x = Math.PI / 2;
+    nacelle.position.set(side * 5.2, 3.0, -0.8);
+    g.add(nacelle);
+    const prop = new THREE.Group();
+    prop.position.set(side * 5.2, 3.0, -1.95);
+    prop.add(
+      new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.8, 0.06), dark),
+      new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.2, 0.06), dark),
+      new THREE.Mesh(
+        new THREE.CircleGeometry(1.4, 20),
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.12,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      ),
+    );
+    g.add(prop);
+    props.push(prop);
+  }
+  const jumpLight = new THREE.Mesh(
+    new THREE.BoxGeometry(0.32, 0.32, 0.1),
+    new THREE.MeshBasicMaterial({ color: 0xff3b30 }),
+  );
+  jumpLight.position.set(0, 2.3, -3.2);
+  g.add(jumpLight);
+  g.userData = { props, jumpLight };
+  return g;
+}
+// Đất quanh map (chỉ để nhìn từ trên cao) và bức tường zone mờ bao quanh khu chơi.
+function addOutskirts(forest) {
+  const mat = makeMat(forest ? "#2f5232" : "#8f7650");
+  const far = 800,
+    edge = 55;
+  const strip = (w, d, x, z) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat);
+    m.rotation.x = -Math.PI / 2;
+    m.position.set(x, -0.02, z);
+    scene.add(m);
+  };
+  const mid = edge + (far - edge) / 2;
+  strip(far * 2, far - edge, 0, -mid);
+  strip(far * 2, far - edge, 0, mid);
+  strip(far - edge, edge * 2, -mid, 0);
+  strip(far - edge, edge * 2, mid, 0);
+}
+function addZoneBorder() {
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x66ccff,
+    transparent: true,
+    opacity: 0.1,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const wall = (x, z, ry) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(MAP_HALF * 2, 40), mat);
+    m.position.set(x, 20, z);
+    m.rotation.y = ry;
+    scene.add(m);
+  };
+  wall(0, -MAP_HALF, 0);
+  wall(0, MAP_HALF, 0);
+  wall(-MAP_HALF, 0, Math.PI / 2);
+  wall(MAP_HALF, 0, Math.PI / 2);
+  const corners = [
+    [-MAP_HALF, -MAP_HALF],
+    [MAP_HALF, -MAP_HALF],
+    [MAP_HALF, MAP_HALF],
+    [-MAP_HALF, MAP_HALF],
+    [-MAP_HALF, -MAP_HALF],
+  ].map(([x, z]) => new THREE.Vector3(x, 0.15, z));
+  scene.add(
+    new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(corners),
+      new THREE.LineBasicMaterial({ color: 0x8fe0ff }),
+    ),
+  );
+}
+// ---------------------------------------------------------------------------
+// ÂM THANH TRÊN KHÔNG: tiếng máy bay, gió, bung dù, tiếp đất
+// ---------------------------------------------------------------------------
+// Tiếng máy bay và tiếng gió là âm lặp liên tục (loop) nên tạo bằng node riêng,
+// âm lượng bám theo thanh "Âm lượng hiệu ứng". Bung dù / tiếp đất dùng lại spatialAudio.
+function ensureAudio() {
+  audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+const sfxLevel = () => (soundOn ? (Number($("#sfx").value) || 0) / 100 : 0);
+function loopBuffer(kind) {
+  if (loopBuffers[kind]) return loopBuffers[kind];
+  const ctx = ensureAudio();
+  const length = Math.floor(ctx.sampleRate * 3);
+  const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < length; i++) {
+    const white = Math.random() * 2 - 1;
+    if (kind === "brown") {
+      last = (last + 0.02 * white) / 1.02;
+      data[i] = last * 3.5;
+    } else data[i] = white;
+  }
+  loopBuffers[kind] = buffer;
+  return buffer;
+}
+function setLoopGain(loop, value, timeConstant = 0.15) {
+  if (loop)
+    loop.master.gain.setTargetAtTime(
+      Math.max(0, value),
+      audioCtx.currentTime,
+      timeConstant,
+    );
+}
+function stopLoop(name, fade = 1) {
+  const loop = audioLoops[name];
+  if (!loop) return;
+  audioLoops[name] = null;
+  loop.master.gain.setTargetAtTime(
+    0,
+    audioCtx.currentTime,
+    Math.max(0.02, fade / 4),
+  );
+  setTimeout(
+    () => {
+      for (const node of loop.sources) {
+        try {
+          node.stop();
+        } catch {
+          /* đã dừng */
+        }
+      }
+      try {
+        loop.master.disconnect();
+      } catch {
+        /* đã ngắt */
+      }
+    },
+    fade * 1000 + 250,
+  );
+}
+// Tiếng máy bay: tiếng ù trầm (brown noise) + hai dao động lệch tần số bị "băm" nhịp cánh quạt.
+function startPlaneSound() {
+  if (audioLoops.plane) return;
+  const ctx = ensureAudio();
+  const master = ctx.createGain();
+  master.gain.value = 0;
+  master.connect(ctx.destination);
+  const sources = [];
+  const rumble = ctx.createBufferSource();
+  rumble.buffer = loopBuffer("brown");
+  rumble.loop = true;
+  const rumbleLow = ctx.createBiquadFilter();
+  rumbleLow.type = "lowpass";
+  rumbleLow.frequency.value = 260;
+  const rumbleGain = ctx.createGain();
+  rumbleGain.gain.value = 1.7;
+  rumble.connect(rumbleLow);
+  rumbleLow.connect(rumbleGain);
+  rumbleGain.connect(master);
+  sources.push(rumble);
+  const drone = ctx.createGain();
+  drone.gain.value = 0.2;
+  const droneLow = ctx.createBiquadFilter();
+  droneLow.type = "lowpass";
+  droneLow.frequency.value = 420;
+  for (const freq of [58, 61.3]) {
+    const osc = ctx.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.value = freq;
+    osc.connect(droneLow);
+    sources.push(osc);
+  }
+  droneLow.connect(drone);
+  drone.connect(master);
+  const chop = ctx.createOscillator();
+  chop.frequency.value = 17;
+  const chopDepth = ctx.createGain();
+  chopDepth.gain.value = 0.12;
+  chop.connect(chopDepth);
+  chopDepth.connect(drone.gain);
+  sources.push(chop);
+  const draft = ctx.createBufferSource();
+  draft.buffer = loopBuffer("white");
+  draft.loop = true;
+  const draftBand = ctx.createBiquadFilter();
+  draftBand.type = "bandpass";
+  draftBand.frequency.value = 900;
+  draftBand.Q.value = 0.6;
+  const draftGain = ctx.createGain();
+  draftGain.gain.value = 0.09;
+  draft.connect(draftBand);
+  draftBand.connect(draftGain);
+  draftGain.connect(master);
+  sources.push(draft);
+  for (const s of sources) s.start();
+  audioLoops.plane = { master, sources };
+  setLoopGain(audioLoops.plane, 0.55 * sfxLevel(), 0.4);
+}
+// Tiếng gió: nhiễu trắng qua bộ lọc dải, càng rơi nhanh càng to và chói; dù bung thì dịu lại.
+function startWind() {
+  if (audioLoops.wind) return;
+  const ctx = ensureAudio();
+  const master = ctx.createGain();
+  master.gain.value = 0;
+  master.connect(ctx.destination);
+  const src = ctx.createBufferSource();
+  src.buffer = loopBuffer("white");
+  src.loop = true;
+  const band = ctx.createBiquadFilter();
+  band.type = "bandpass";
+  band.frequency.value = 800;
+  band.Q.value = 0.55;
+  const low = ctx.createBiquadFilter();
+  low.type = "lowpass";
+  low.frequency.value = 5000;
+  const gust = ctx.createOscillator();
+  gust.frequency.value = 0.35;
+  const gustDepth = ctx.createGain();
+  gustDepth.gain.value = 180;
+  gust.connect(gustDepth);
+  gustDepth.connect(band.frequency);
+  src.connect(band);
+  band.connect(low);
+  low.connect(master);
+  src.start();
+  gust.start();
+  audioLoops.wind = { master, band, sources: [src, gust] };
+}
+function updateWind(chute) {
+  const loop = audioLoops.wind;
+  if (!loop) return;
+  const speed = clamp(airState.fall / 45, 0, 1);
+  const drift = clamp(Math.hypot(airState.vx, airState.vz) / 20, 0, 1);
+  const intensity = chute
+    ? 0.12 + speed * 0.25 + drift * 0.05
+    : 0.32 + speed * 0.68;
+  loop.band.frequency.setTargetAtTime(
+    450 + 1900 * intensity,
+    audioCtx.currentTime,
+    0.1,
+  );
+  setLoopGain(loop, (0.1 + 0.9 * intensity * intensity) * 1.2 * sfxLevel(), 0.12);
+}
+function playChuteOpen(position) {
+  const a = spatialAudio(position, { volume: 0.9, ref: 6, max: 80 });
+  if (!a) return;
+  noiseBurst(a, { duration: 0.05, filter: "highpass", freq: 2600, gain: 0.7 }); // tiếng "phựt" bật dù
+  noiseBurst(a, {
+    at: 0.03,
+    duration: 0.4,
+    filter: "bandpass",
+    freq: 700,
+    q: 0.8,
+    gain: 1,
+  }); // vải phồng lên
+  noiseBurst(a, {
+    at: 0.2,
+    duration: 0.25,
+    filter: "bandpass",
+    freq: 1400,
+    q: 1.2,
+    gain: 0.45,
+  }); // vải sột soạt
+  toneBurst(a, { at: 0.04, duration: 0.3, from: 140, to: 55, gain: 0.7 }); // cú giật nặng
+}
+function playLanding(position) {
+  const a = spatialAudio(position, { volume: 0.9, ref: 3, max: 45 });
+  if (!a) return;
+  toneBurst(a, { duration: 0.22, from: 110, to: 42, gain: 0.95 }); // tiếng chạm đất
+  noiseBurst(a, { duration: 0.2, filter: "lowpass", freq: 900, gain: 1 });
+  noiseBurst(a, {
+    at: 0.08,
+    duration: 0.3,
+    filter: "bandpass",
+    freq: 500,
+    q: 0.7,
+    gain: 0.35,
+  }); // dù xẹp xuống
+}
+function playJumpWhoosh() {
+  const a = spatialAudio(null, { volume: 0.6 });
+  if (!a) return;
+  noiseBurst(a, {
+    duration: 0.4,
+    filter: "bandpass",
+    freq: 1000,
+    q: 0.6,
+    gain: 1,
+  });
 }
 function frame() {
   if (!renderer || !$("#game").classList.contains("active")) return;
@@ -2101,7 +3069,17 @@ function frame() {
   }
   updateLootHud(dt);
   updateGunPose(dt);
-  if (!paused) {
+  updatePhaseOverlay();
+  updatePlaneObject(dt);
+  updateRemoteMotion(dt);
+  // Trên máy bay / đang nhảy dù thì mô phỏng riêng; chỉ ở phòng chờ hoặc mặt đất mới đi bộ.
+  if (local.state === "plane") updatePlane();
+  else if (local.state === "freefall" || local.state === "parachute")
+    updateAir(dt);
+  updateEnvironment(dt);
+  updateFlightHud();
+  updateMatchClock();
+  if (!paused && (local.state === "ground" || local.state === "lobby")) {
     const currentlyInWater = Boolean(waterAt(local.x, local.z));
     const isProne = !currentlyInWater && Boolean(local.prone);
     const isCrouching =
@@ -2213,9 +3191,6 @@ function frame() {
       });
       lastMove = Date.now();
     }
-    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-    $("#matchClock").textContent =
-      `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
   }
   renderer.render(scene, camera);
   requestAnimationFrame(frame);

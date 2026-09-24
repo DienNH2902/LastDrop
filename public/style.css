@@ -13,3 +13,17 @@
 
 .underwater-tint{position:absolute;inset:0;pointer-events:none;opacity:0;background:linear-gradient(180deg,#1b7f9b22,#063b5980);transition:opacity .18s}.underwater-tint.active{opacity:1}
 
+/* Phòng chờ trong map · máy bay · nhảy dù */
+.game:not([data-mode="ground"]) .crosshair,.game:not([data-mode="ground"]) .bottom-hud,.game:not([data-mode="ground"]) .feed{display:none}
+.phase-overlay{position:absolute;left:50%;top:18%;transform:translateX(-50%);text-align:center;text-shadow:0 2px 14px #000;pointer-events:none;width:min(720px,92%)}
+.phase-overlay small{font:11px 'DM Mono',monospace;letter-spacing:3px;color:var(--acid)}
+.phase-overlay #phaseBig{font:900 130px/1 'Barlow Condensed',Arial,sans-serif;color:#fff;margin:6px 0}
+.phase-overlay p{font:11px 'DM Mono',monospace;letter-spacing:1px;color:#eef2df;margin:0}
+.flight-hud{position:absolute;left:25px;top:84px;display:flex;gap:12px;align-items:flex-start;pointer-events:none}
+.flight-hud canvas{width:132px;height:132px;border:1px solid #6d7a58;background:#0009}
+.flight-info{font:10px 'DM Mono',monospace;letter-spacing:1px;text-shadow:0 1px 4px #000;max-width:330px}
+.flight-info b{display:block;color:var(--acid);font-size:13px;margin-bottom:6px}
+.flight-info .hint{margin-top:8px;padding:7px 10px;background:#111c;border-left:3px solid #ff6c56}
+.flight-info .hint.ok{border-color:#5dff8a;color:#c9ffd8}
+.chute-overlay{position:absolute;left:50%;top:-1%;transform:translateX(-50%);width:min(60vw,560px);pointer-events:none;opacity:.92;filter:drop-shadow(0 6px 10px #0006)}
+.chute-overlay svg{width:100%;height:auto;display:block}

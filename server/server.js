@@ -8,6 +8,43 @@ const { WebSocketServer } = require("ws");
 const ROOT = path.join(__dirname, "..", "public");
 const PORT = Number(process.env.PORT || 3000);
 const rooms = new Map();
+
+// ---- Luồng trận: waiting -> staging -> countdown -> plane -> playing -> finished ----
+//  waiting   : phòng chờ (chưa vào map), người chơi nhập mã và vào phòng.
+//  staging   : chủ phòng bấm bắt đầu; mọi người vào map, đứng chờ tay không.
+//              Khi TẤT CẢ người chơi báo "ready" (đã dựng xong map) mới sang countdown.
+//  countdown : đếm ngược COUNTDOWN_MS.
+//  plane     : tất cả lên chung một máy bay bay thẳng qua map; nhảy dù khi máy bay vào vùng map.
+//  playing   : mọi người đã nhảy; ai tiếp đất rồi mới được cầm súng / nhặt đồ / bắn.
+const MAP_HALF = 50; // vùng (zone) của map: hình vuông ±50 m
+const COUNTDOWN_MS = 5000;
+const STAGING_TIMEOUT_MS = 20000; // chờ tối đa bấy nhiêu ms cho máy chậm dựng map
+const PLANE_ALT = 200; // độ cao máy bay (m)
+const PLANE_SPEED = 12; // m/s
+const PLANE_LEAD = 65; // máy bay xuất phát cách góc xa nhất của zone ít nhất bấy nhiêu m
+// Chỗ đứng trong khoang máy bay (x phải, z lùi về sau), gần nhau, cùng hướng về phía trước.
+const PLANE_SEATS = [
+  [-0.9, 2.2],
+  [0.9, 2.2],
+  [-0.9, 0.6],
+  [0.9, 0.6],
+  [-0.9, -1.0],
+];
+// Giới hạn tốc độ để server chặn gian lận thô (client dùng các số nhỏ hơn một chút).
+const AIR = { freefallHoriz: 20, chuteHoriz: 9, maxFall: 55, maxLandingHeight: 40 };
+const isGrounded = (p) => p.state === "lobby" || p.state === "ground";
+// Đi lại: đứng chờ trong map (staging/countdown) hoặc đã tiếp đất.
+const canWalk = (room, p) =>
+  p.alive &&
+  ((p.state === "lobby" &&
+    (room.phase === "staging" || room.phase === "countdown")) ||
+    (p.state === "ground" &&
+      (room.phase === "plane" || room.phase === "playing")));
+// Súng / nhặt đồ / hồi máu chỉ sau khi tiếp đất.
+const canFight = (room, p) =>
+  p.alive &&
+  p.state === "ground" &&
+  (room.phase === "plane" || room.phase === "playing");
 const types = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -49,6 +86,9 @@ const send = (ws, data) => {
 const snapshot = (room) => ({
   type: "state",
   phase: room.phase,
+  now: Date.now(),
+  countdownEndsAt: room.countdownEndsAt || 0,
+  plane: room.plane || null,
   mapSeed: room.mapSeed,
   mapId: room.mapId,
   lastHit: room.lastHit || null,
@@ -58,6 +98,10 @@ const snapshot = (room) => ({
     x: p.x,
     z: p.z,
     groundY: p.groundY || 0,
+    state: p.state || "lobby",
+    seat: p.seat || 0,
+    y: p.state === "freefall" || p.state === "parachute" ? p.y : null,
+    ready: Boolean(p.ready),
     swimming: Boolean(p.swimming),
     swimY: p.swimming ? p.swimY : null,
     yaw: p.yaw,
@@ -335,11 +379,140 @@ function blockedPosition(room, x, z, ignoreId) {
     if (
       other.id !== ignoreId &&
       other.alive &&
+      isGrounded(other) &&
       Math.hypot(x - other.x, z - other.z) < moverRadius + otherRadius + 0.02
     )
       return true;
   }
   return false;
+}
+// ---------------------------------------------------------------------------
+// MÁY BAY / NHẢY DÙ
+// ---------------------------------------------------------------------------
+// Đường bay thẳng, xuất phát từ ngoài zone, đi xuyên qua map theo một hướng ngẫu nhiên.
+function createFlight() {
+  const angle = Math.random() * Math.PI * 2;
+  const dx = Math.cos(angle);
+  const dz = Math.sin(angle);
+  const offset = (Math.random() * 2 - 1) * 20; // lệch khỏi tâm map tối đa 20 m
+  const cx = -dz * offset;
+  const cz = dx * offset;
+  const lead = MAP_HALF * Math.SQRT2 + PLANE_LEAD;
+  const sx = cx - dx * lead;
+  const sz = cz - dz * lead;
+  // Giao đường bay với hình vuông ±MAP_HALF (slab method) -> lúc vào / ra zone.
+  let dEnter = -Infinity;
+  let dExit = Infinity;
+  for (const [origin, dir] of [
+    [sx, dx],
+    [sz, dz],
+  ]) {
+    if (Math.abs(dir) < 1e-9) continue;
+    let a = (-MAP_HALF - origin) / dir;
+    let b = (MAP_HALF - origin) / dir;
+    if (a > b) [a, b] = [b, a];
+    dEnter = Math.max(dEnter, a);
+    dExit = Math.min(dExit, b);
+  }
+  return {
+    sx,
+    sz,
+    dx,
+    dz,
+    speed: PLANE_SPEED,
+    alt: PLANE_ALT,
+    tEnter: dEnter / PLANE_SPEED,
+    tExit: dExit / PLANE_SPEED,
+  };
+}
+const planeYaw = (plane) => Math.atan2(-plane.dx, -plane.dz);
+function seatWorldPosition(plane, seat, t) {
+  const px = plane.sx + plane.dx * plane.speed * t;
+  const pz = plane.sz + plane.dz * plane.speed * t;
+  const [lx, lz] = PLANE_SEATS[seat % PLANE_SEATS.length];
+  const yaw = planeYaw(plane);
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  return { x: px + lx * c + lz * s, z: pz - lx * s + lz * c };
+}
+const clampToMap = (v) => Math.max(-49.5, Math.min(49.5, v));
+function startPlane(room) {
+  room.phase = "plane";
+  room.plane = { ...createFlight(), startedAt: Date.now() };
+  room.loot = createLoot(room);
+  let seat = 0;
+  for (const p of room.players.values()) {
+    p.state = "plane";
+    p.seat = seat++;
+    p.y = room.plane.alt;
+    p.healingUntil = 0;
+    p.reloadingUntil = 0;
+  }
+  broadcastRaw(room, {
+    type: "loot",
+    items: room.loot,
+    limits: { ammo: MAX_RESERVE_AMMO, medkits: MAX_MEDKITS },
+  });
+  broadcast(room);
+}
+function jumpPlayer(room, p) {
+  const t = (Date.now() - room.plane.startedAt) / 1000;
+  const pos = seatWorldPosition(room.plane, p.seat, t);
+  p.x = clampToMap(pos.x);
+  p.z = clampToMap(pos.z);
+  p.y = room.plane.alt;
+  p.state = "freefall";
+  p.lastAirAt = Date.now();
+}
+// Tìm chỗ trống gần nhất để không kẹt trong cây / đá / tường khi tiếp đất.
+function findFreeSpot(room, x, z, id) {
+  if (!blockedPosition(room, x, z, id)) return { x, z };
+  for (let r = 0.5; r <= 12; r += 0.5) {
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2;
+      const nx = x + Math.cos(a) * r;
+      const nz = z + Math.sin(a) * r;
+      if (!blockedPosition(room, nx, nz, id)) return { x: nx, z: nz };
+    }
+  }
+  return { x, z };
+}
+function tickRoom(room) {
+  const now = Date.now();
+  const players = [...room.players.values()];
+  if (room.phase === "staging") {
+    if (
+      players.every((p) => p.ready) ||
+      now - room.stagingStartedAt > STAGING_TIMEOUT_MS
+    ) {
+      room.phase = "countdown";
+      room.countdownEndsAt = now + COUNTDOWN_MS;
+      broadcast(room);
+    }
+    return;
+  }
+  if (room.phase === "countdown") {
+    if (now >= room.countdownEndsAt) startPlane(room);
+    return;
+  }
+  if (room.phase === "plane") {
+    const t = (now - room.plane.startedAt) / 1000;
+    let changed = false;
+    // Ai chưa nhảy khi máy bay ra khỏi zone thì bị đẩy ra khỏi máy bay.
+    if (t >= room.plane.tExit) {
+      for (const p of players) {
+        if (p.state === "plane") {
+          jumpPlayer(room, p);
+          changed = true;
+        }
+      }
+    }
+    if (players.every((p) => p.state !== "plane")) {
+      room.phase = "playing";
+      changed = true;
+    }
+    if (changed) broadcast(room);
+  }
 }
 wss.on("connection", (ws) => {
   let room;
@@ -382,6 +555,10 @@ wss.on("connection", (ws) => {
         x: ((room.players.size % 3) - 1) * 3,
         z: room.players.size > 2 ? -8 : 8,
         groundY: 0,
+        state: "lobby",
+        seat: 0,
+        y: null,
+        ready: false,
         swimming: false,
         swimY: null,
         yaw: 0,
@@ -424,18 +601,110 @@ wss.on("connection", (ws) => {
       [...room.players.values()][0] === p &&
       room.phase === "waiting"
     ) {
-      room.phase = "playing";
+      // Cả phòng vào map chờ (tay không, không có vật phẩm). Loot chỉ sinh ra khi lên máy bay.
+      room.phase = "staging";
       room.lastHit = null;
-      room.loot = createLoot(room);
-      broadcastRaw(room, {
-        type: "loot",
-        items: room.loot,
-        limits: { ammo: MAX_RESERVE_AMMO, medkits: MAX_MEDKITS },
-      });
+      room.loot = [];
+      room.stagingStartedAt = Date.now();
+      for (const q of room.players.values()) {
+        q.state = "lobby";
+        q.ready = false;
+      }
+      room.timer = setInterval(() => tickRoom(room), 100);
       broadcast(room);
       return;
     }
-    if (m.type === "move" && room.phase === "playing" && p.alive) {
+    // Client báo đã dựng xong map trong phòng chờ.
+    if (m.type === "ready" && room.phase === "staging") {
+      p.ready = true;
+      return;
+    }
+    // Nhảy khỏi máy bay (chỉ khi máy bay đã vào zone của map).
+    if (m.type === "jump" && room.phase === "plane" && p.state === "plane") {
+      const t = (Date.now() - room.plane.startedAt) / 1000;
+      if (t < room.plane.tEnter - 0.25)
+        return send(ws, { type: "toast", text: "CHƯA TỚI VÙNG NHẢY" });
+      jumpPlayer(room, p);
+      broadcast(room);
+      return;
+    }
+    // Bung dù.
+    if (
+      m.type === "chute" &&
+      (room.phase === "plane" || room.phase === "playing") &&
+      p.state === "freefall"
+    ) {
+      p.state = "parachute";
+      broadcast(room);
+      return;
+    }
+    // Vị trí khi đang bay trên không (client mô phỏng, server chặn tốc độ bất thường).
+    if (
+      m.type === "air" &&
+      (room.phase === "plane" || room.phase === "playing") &&
+      (p.state === "freefall" || p.state === "parachute")
+    ) {
+      const now = Date.now();
+      const elapsed = Math.max(0.01, Math.min(0.25, (now - (p.lastAirAt || now)) / 1000));
+      p.lastAirAt = now;
+      const cap = p.state === "parachute" ? AIR.chuteHoriz : AIR.freefallHoriz;
+      let dx = Number(m.x) - p.x;
+      let dz = Number(m.z) - p.z;
+      if (!Number.isFinite(dx)) dx = 0;
+      if (!Number.isFinite(dz)) dz = 0;
+      const maxStep = cap * 1.5 * elapsed + 0.5;
+      const dist = Math.hypot(dx, dz);
+      if (dist > maxStep) {
+        dx *= maxStep / dist;
+        dz *= maxStep / dist;
+      }
+      p.x = clampToMap(p.x + dx);
+      p.z = clampToMap(p.z + dz);
+      let ny = Number(m.y);
+      if (!Number.isFinite(ny)) ny = p.y;
+      // Chỉ rơi xuống, và không nhanh hơn giới hạn.
+      p.y = Math.max(p.y - AIR.maxFall * elapsed - 1, Math.min(p.y, ny));
+      p.yaw = Number(m.yaw) || 0;
+      broadcast(room);
+      return;
+    }
+    // Tiếp đất: từ giờ mới được cầm súng.
+    if (
+      m.type === "land" &&
+      (room.phase === "plane" || room.phase === "playing") &&
+      (p.state === "freefall" || p.state === "parachute")
+    ) {
+      if (p.y - groundHeightAt(room, p.x, p.z) > AIR.maxLandingHeight) return;
+      let lx = Number(m.x);
+      let lz = Number(m.z);
+      if (
+        !Number.isFinite(lx) ||
+        !Number.isFinite(lz) ||
+        Math.hypot(lx - p.x, lz - p.z) > 4
+      ) {
+        lx = p.x;
+        lz = p.z;
+      }
+      const spot = findFreeSpot(
+        room,
+        Math.max(-48.5, Math.min(48.5, lx)),
+        Math.max(-48.5, Math.min(48.5, lz)),
+        p.id,
+      );
+      p.x = spot.x;
+      p.z = spot.z;
+      p.groundY = groundHeightAt(room, p.x, p.z);
+      p.y = null;
+      p.state = "ground";
+      p.jumpY = 0;
+      p.swimming = false;
+      p.swimY = null;
+      p.lastMoveAt = Date.now();
+      send(ws, { type: "landed", x: p.x, z: p.z });
+      broadcast(room);
+      return;
+    }
+    if (m.type === "move" && canWalk(room, p)) {
       p.crouching = Boolean(m.crouching);
       p.prone = Boolean(m.prone);
       if (p.prone) p.crouching = false;
@@ -515,7 +784,7 @@ wss.on("connection", (ws) => {
       broadcast(room);
       return;
     }
-    if (m.type === "pickup" && room.phase === "playing" && p.alive) {
+    if (m.type === "pickup" && canFight(room, p)) {
       // F: nhặt vật phẩm gần nhất trong bán kính PICKUP_RADIUS (đang hồi máu thì F là hủy hồi máu).
       if (p.healingUntil > Date.now() || p.swimming) return;
       let best = null;
@@ -575,7 +844,7 @@ wss.on("connection", (ws) => {
       broadcast(room);
       return;
     }
-    if (m.type === "heal" && room.phase === "playing" && p.alive) {
+    if (m.type === "heal" && canFight(room, p)) {
       const now = Date.now();
       if (p.healingUntil > now) return;
       if (p.reloadingUntil > now)
@@ -601,7 +870,7 @@ wss.on("connection", (ws) => {
       }, HEAL_DURATION_MS);
       return;
     }
-    if (m.type === "cancelHeal" && room.phase === "playing" && p.alive) {
+    if (m.type === "cancelHeal" && canFight(room, p)) {
       if (p.healingUntil > Date.now()) {
         p.healingUntil = 0;
         send(ws, { type: "toast", text: "ĐÃ HỦY HỒI MÁU" });
@@ -609,7 +878,7 @@ wss.on("connection", (ws) => {
       }
       return;
     }
-    if (m.type === "reload" && room.phase === "playing" && p.alive) {
+    if (m.type === "reload" && canFight(room, p)) {
       const now = Date.now();
       if (
         p.healingUntil > now ||
@@ -634,7 +903,7 @@ wss.on("connection", (ws) => {
       }, 1800);
       return;
     }
-    if (m.type === "shoot" && room.phase === "playing" && p.alive) {
+    if (m.type === "shoot" && canFight(room, p)) {
       // Use the exact normalized camera ray sent by the client, then intersect
       // the same oriented boxes/sphere used to draw the visible avatar meshes.
       const aim = m.aim;
@@ -827,7 +1096,7 @@ wss.on("connection", (ws) => {
           nearest = wallDistance;
       }
       for (const q of room.players.values())
-        if (q !== p && q.alive) {
+        if (q !== p && q.alive && q.state === "ground") {
           const targetBaseY = q.swimming ? q.swimY || 0 : q.groundY || 0;
           // Bounds mirror game.js: torso .65×1×.38, legs .48×.65×.34, head radius .24.
           if (q.prone) {
@@ -944,7 +1213,10 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     if (room && ws.player) {
       room.players.delete(ws.player.id);
-      if (!room.players.size) rooms.delete(room.code);
+      if (!room.players.size) {
+        clearInterval(room.timer);
+        rooms.delete(room.code);
+      }
       else broadcast(room);
     }
   });
