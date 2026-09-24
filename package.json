@@ -1,0 +1,8 @@
+{
+  "name": "last-drop-arena",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Small browser-based FPS battle arena student project",
+  "scripts": { "start": "node server/server.js" },
+  "dependencies": { "ws": "^8.18.0" }
+}
