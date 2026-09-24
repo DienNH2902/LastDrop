@@ -73,7 +73,13 @@ let keys = {},
   resultEndsAt = 0;
 const FIRE_INTERVAL_MS = 120;
 
-const STATE_ORDER = { lobby: 0, plane: 1, freefall: 2, parachute: 3, ground: 4 };
+const STATE_ORDER = {
+  lobby: 0,
+  plane: 1,
+  freefall: 2,
+  parachute: 3,
+  ground: 4,
+};
 // Chỗ đứng trong khoang máy bay (x phải, z lùi về sau); khớp với server.js.
 const PLANE_SEATS = [
   [-0.9, 2.2],
@@ -129,18 +135,31 @@ const SLOW_SPEED = 3.2;
 const CROUCH_SPEED = 3.8;
 const CROUCH_SLOW_SPEED = 2.0;
 const saved = JSON.parse(localStorage.getItem("ld-settings") || "{}");
-$("#nameInput").value = saved.name || "Rookie";
+const savedPlayerName =
+  localStorage.getItem("ld-player-name") || saved.name || "Rookie";
+$("#nameInput").value = savedPlayerName;
+localStorage.setItem("ld-player-name", savedPlayerName);
 $("#sensitivity").value = saved.sensitivity || 50;
 $("#sfx").value = saved.sfx ?? 65;
 $("#music").value = saved.music ?? 25;
+$("#masterVolume").value = saved.masterVolume ?? 100;
+$("#quality").value = saved.quality || "Performance";
+delete saved.name; // nickname is kept separately from graphics/audio settings
+localStorage.setItem(
+  "ld-settings",
+  JSON.stringify({ ...saved, masterVolume: $("#masterVolume").value }),
+);
 function tone(freq = 440, duration = 0.06, type = "sine", volume = 0.03) {
   if (!soundOn) return;
+  const effectiveVolume =
+    volume * (Number($("#masterVolume")?.value ?? 100) / 100);
+  if (!(effectiveVolume > 0)) return;
   audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
   const o = audioCtx.createOscillator(),
     g = audioCtx.createGain();
   o.type = type;
   o.frequency.value = freq;
-  g.gain.value = volume;
+  g.gain.value = effectiveVolume;
   o.connect(g);
   g.connect(audioCtx.destination);
   o.start();
@@ -235,7 +254,9 @@ function spatialAudio(
   muffle.type = "lowpass";
   muffle.frequency.value = 1500 + 18500 * (1 - farness) * (1 - farness);
   const master = audioCtx.createGain();
-  master.gain.value = Math.max(0.0001, volume * sfx * attenuation);
+  const overall = Number($("#masterVolume").value) / 100;
+  if (!(overall > 0)) return null;
+  master.gain.value = Math.max(0.0001, volume * sfx * overall * attenuation);
   input.connect(muffle);
   let tail = muffle;
   if (position) {
@@ -424,6 +445,7 @@ document
 $("#soundToggle").onclick = () => {
   soundOn = !soundOn;
   $("#soundToggle").textContent = soundOn ? "♫" : "♪";
+  applyAudioSettings();
 };
 document
   .querySelectorAll("[data-screen]")
@@ -435,22 +457,92 @@ document.querySelectorAll(".back").forEach(
       show("menu");
     }),
 );
-$("#sensitivity").oninput = (e) => ($("#sensVal").textContent = e.target.value);
-$("#sfx").oninput = (e) => ($("#sfxVal").textContent = e.target.value + "%");
-$("#music").oninput = (e) =>
-  ($("#musicVal").textContent = e.target.value + "%");
+const settingsBindings = {
+  sensitivity: {
+    main: "sensitivity",
+    pause: "pauseSensitivity",
+    mainLabel: "sensVal",
+    pauseLabel: "pauseSensVal",
+    suffix: "",
+  },
+  masterVolume: {
+    main: "masterVolume",
+    pause: "pauseMasterVolume",
+    mainLabel: "masterVal",
+    pauseLabel: "pauseMasterVal",
+    suffix: "%",
+  },
+  sfx: {
+    main: "sfx",
+    pause: "pauseSfx",
+    mainLabel: "sfxVal",
+    pauseLabel: "pauseSfxVal",
+    suffix: "%",
+  },
+  music: {
+    main: "music",
+    pause: "pauseMusic",
+    mainLabel: "musicVal",
+    pauseLabel: "pauseMusicVal",
+    suffix: "%",
+  },
+  quality: { main: "quality", pause: "pauseQuality" },
+};
+function syncSettingControl(key, value) {
+  const binding = settingsBindings[key];
+  if (!binding) return;
+  for (const id of [binding.main, binding.pause]) {
+    const input = document.getElementById(id);
+    if (input) input.value = value;
+  }
+  if (binding.suffix !== undefined) {
+    for (const id of [binding.mainLabel, binding.pauseLabel]) {
+      const label = document.getElementById(id);
+      if (label) label.textContent = String(value) + binding.suffix;
+    }
+  }
+}
+function syncPauseSettings() {
+  for (const key of Object.keys(settingsBindings)) {
+    const input = document.getElementById(settingsBindings[key].main);
+    if (input) syncSettingControl(key, input.value);
+  }
+}
 function saveSettings() {
   localStorage.setItem(
     "ld-settings",
     JSON.stringify({
-      name: $("#nameInput").value,
       sensitivity: $("#sensitivity").value,
+      masterVolume: $("#masterVolume").value,
       sfx: $("#sfx").value,
       music: $("#music").value,
       quality: $("#quality").value,
     }),
   );
 }
+function onSettingInput(key, value) {
+  syncSettingControl(key, value);
+  saveSettings();
+  if (key === "quality") applyGraphicsSettings();
+  if (["masterVolume", "sfx", "music"].includes(key)) applyAudioSettings();
+}
+for (const [key, binding] of Object.entries(settingsBindings)) {
+  for (const id of [binding.main, binding.pause]) {
+    document
+      .getElementById(id)
+      ?.addEventListener("input", (event) =>
+        onSettingInput(key, event.currentTarget.value),
+      );
+    document
+      .getElementById(id)
+      ?.addEventListener("change", (event) =>
+        onSettingInput(key, event.currentTarget.value),
+      );
+  }
+}
+$("#nameInput").addEventListener("input", () => {
+  localStorage.setItem("ld-player-name", $("#nameInput").value.slice(0, 18));
+});
 function renderMapChoice(id) {
   selectedMap = id === "forest" ? "forest" : "desert";
   localStorage.setItem("ld-selected-map", selectedMap);
@@ -487,8 +579,23 @@ mapPicker.querySelectorAll("[data-map-choice]").forEach((button) => {
   );
 });
 renderMapChoice(selectedMap);
-$("#createBtn").onclick = () => connect({ type: "create", mapId: selectedMap });
+function requireHomePlayerName() {
+  const name = $("#nameInput").value.trim().slice(0, 18);
+  if (!name) {
+    alert("Nhập tên người chơi ngay trên màn Home trước khi vào phòng.");
+    $("#nameInput").focus();
+    return null;
+  }
+  $("#nameInput").value = name;
+  localStorage.setItem("ld-player-name", name);
+  return name;
+}
+$("#createBtn").onclick = () => {
+  if (!requireHomePlayerName()) return;
+  connect({ type: "create", mapId: selectedMap });
+};
 $("#joinBtn").onclick = () => {
+  if (!requireHomePlayerName()) return;
   const code = $("#codeInput").value.trim();
   if (!/^\d{6}$/.test(code)) {
     alert("Nhập mã phòng gồm 6 chữ số.");
@@ -1193,10 +1300,10 @@ function initWorld() {
   camera.rotation.order = "YXZ";
   camera.rotation.y = local.yaw;
   renderer = new THREE.WebGLRenderer({
-    antialias: false,
+    antialias: $("#quality").value === "High",
     powerPreference: "low-power",
   });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  renderer.setPixelRatio(graphicsPixelRatio());
   // Render to the actual game panel, not the full browser window. The HUD
   // crosshair is centered in this panel; using innerHeight shifts the shot ray.
   renderer.setSize(viewport.width, viewport.height);
@@ -1264,6 +1371,18 @@ function resizeWorld() {
   camera.updateProjectionMatrix();
   renderer.setSize(viewport.width, viewport.height);
 }
+function graphicsPixelRatio() {
+  const caps = { Performance: 0.85, Balanced: 1.25, High: 1.75 };
+  return Math.min(devicePixelRatio || 1, caps[$("#quality").value] || 1.25);
+}
+function applyGraphicsSettings() {
+  if (!renderer) return;
+  renderer.setPixelRatio(graphicsPixelRatio());
+  const viewport = $("#world").getBoundingClientRect();
+  renderer.setSize(viewport.width, viewport.height);
+  renderer.domElement.style.imageRendering =
+    $("#quality").value === "Performance" ? "pixelated" : "auto";
+}
 const remoteMeshes = new Map();
 function spawnBloodBurst(position) {
   if (!scene) return;
@@ -1306,7 +1425,11 @@ function placeRemote(mesh, p) {
     return;
   }
   if (st === "freefall" || st === "parachute") {
-    const target = { x: p.x, y: (p.y ?? 0) + (st === "freefall" ? 0.5 : 0), z: p.z };
+    const target = {
+      x: p.x,
+      y: (p.y ?? 0) + (st === "freefall" ? 0.5 : 0),
+      z: p.z,
+    };
     if (!ud.inAir) mesh.position.set(target.x, target.y, target.z);
     ud.inAir = true;
     ud.airTarget = target;
@@ -1322,7 +1445,9 @@ function placeRemote(mesh, p) {
   mesh.rotation.set(p.prone ? -Math.PI / 2 : 0, p.yaw, 0);
   mesh.position.set(
     p.x,
-    p.swimming ? p.swimY || 0 : (p.groundY || 0) + (p.prone ? 0.35 : p.jumpY || 0),
+    p.swimming
+      ? p.swimY || 0
+      : (p.groundY || 0) + (p.prone ? 0.35 : p.jumpY || 0),
     p.z,
   );
   mesh.scale.set(1, p.crouching && !p.prone ? 0.68 : 1, 1);
@@ -1904,7 +2029,8 @@ function beginGame() {
   $("#ammo").innerHTML = `${ammo} <i>/ 90</i>`;
   show("game");
   initWorld();
-  if (!$("#chuteOverlay").innerHTML) $("#chuteOverlay").innerHTML = buildChuteOverlay();
+  if (!$("#chuteOverlay").innerHTML)
+    $("#chuteOverlay").innerHTML = buildChuteOverlay();
   setMode("lobby"); // vào map chờ: tay không, không vật phẩm
   $("#world").onclick = () => {
     if (!paused && !backpackOpen) renderer.domElement.requestPointerLock?.();
@@ -1921,6 +2047,8 @@ function beginGame() {
   installReloadHud();
   installLootUi();
   $("#resumeBtn").onclick = resumeGame;
+  $("#openPauseSettings").onclick = openPauseSettings;
+  $("#closePauseSettings").onclick = closePauseSettings;
   $("#leaveMatchBtn").onclick = leaveMatch;
 }
 function installReloadHud() {
@@ -1980,7 +2108,9 @@ function onKeyDown(e) {
       closeBackpack();
       return;
     }
-    if (paused) resumeGame();
+    if (paused && !$("#pauseSettings").classList.contains("hidden"))
+      closePauseSettings();
+    else if (paused) resumeGame();
     else pauseGame();
 
     return;
@@ -2086,8 +2216,19 @@ function pauseGame() {
   keys = {};
   scoped = false;
   setScope(false);
+  $("#pauseMain").classList.remove("hidden");
+  $("#pauseSettings").classList.add("hidden");
   $("#gameMessage").classList.remove("hidden");
   if (document.pointerLockElement) document.exitPointerLock();
+}
+function openPauseSettings() {
+  syncPauseSettings();
+  $("#pauseMain").classList.add("hidden");
+  $("#pauseSettings").classList.remove("hidden");
+}
+function closePauseSettings() {
+  $("#pauseSettings").classList.add("hidden");
+  $("#pauseMain").classList.remove("hidden");
 }
 function resumeGame() {
   if (!paused) return;
@@ -2494,7 +2635,11 @@ function updateEnvironment(dt) {
   let target = 0;
   if (local.state === "plane") target = 1;
   else if (local.state === "freefall" || local.state === "parachute")
-    target = clamp((local.y - groundHeightAt(local.x, local.z) - 12) / 70, 0, 1);
+    target = clamp(
+      (local.y - groundHeightAt(local.x, local.z) - 12) / 70,
+      0,
+      1,
+    );
   envBlend += (target - envBlend) * Math.min(1, 4 * dt);
   tmpColorA.set(mapId === "forest" ? "#91b18a" : "#c5aa79");
   tmpColorB.set("#9cc9ea");
@@ -2535,7 +2680,12 @@ function updatePhaseOverlay() {
   $("#phaseSub").textContent = "CHUẨN BỊ LÊN MÁY BAY";
   if (n !== lastCountdownNumber) {
     lastCountdownNumber = n;
-    tone(n === 1 ? 900 : 620, 0.14, "sine", 0.06 * sfxLevel());
+    tone(
+      n === 1 ? 900 : 620,
+      0.14,
+      "sine",
+      0.06 * ((Number($("#sfx").value) || 0) / 100),
+    );
   }
 }
 function updateMatchClock() {
@@ -2554,7 +2704,9 @@ function updateFlightHud() {
   const st = local.state;
   const alt = Math.max(
     0,
-    st === "plane" ? plane?.alt || 0 : local.y - groundHeightAt(local.x, local.z),
+    st === "plane"
+      ? plane?.alt || 0
+      : local.y - groundHeightAt(local.x, local.z),
   );
   $("#flightState").textContent =
     st === "plane"
@@ -2571,7 +2723,8 @@ function updateFlightHud() {
   let ok = false;
   if (st === "plane" && plane) {
     const t = planeTime();
-    if (t < plane.tEnter) text = `CHƯA TỚI VÙNG NHẢY · ${(plane.tEnter - t).toFixed(1)}S`;
+    if (t < plane.tEnter)
+      text = `CHƯA TỚI VÙNG NHẢY · ${(plane.tEnter - t).toFixed(1)}S`;
     else if (t < plane.tExit) {
       ok = true;
       text = `[SPACE] NHẢY DÙ · TỰ NHẢY SAU ${(plane.tExit - t).toFixed(1)}S`;
@@ -2598,11 +2751,22 @@ function drawFlightMap() {
   ctx.fillRect(X(-MAP_HALF), Y(-MAP_HALF), MAP_HALF * 2 * k, MAP_HALF * 2 * k);
   ctx.strokeStyle = "#8fe0ff";
   ctx.lineWidth = 1.5;
-  ctx.strokeRect(X(-MAP_HALF), Y(-MAP_HALF), MAP_HALF * 2 * k, MAP_HALF * 2 * k);
+  ctx.strokeRect(
+    X(-MAP_HALF),
+    Y(-MAP_HALF),
+    MAP_HALF * 2 * k,
+    MAP_HALF * 2 * k,
+  );
   const dot = (x, z, radius, color) => {
     ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.arc(clamp(X(x), 5, S - 5), clamp(Y(z), 5, S - 5), radius, 0, Math.PI * 2);
+    ctx.arc(
+      clamp(X(x), 5, S - 5),
+      clamp(Y(z), 5, S - 5),
+      radius,
+      0,
+      Math.PI * 2,
+    );
     ctx.fill();
   };
   const line = (t0, t1, color, width, dash) => {
@@ -2624,7 +2788,10 @@ function drawFlightMap() {
     dot(pos.x, pos.z, 4, "#ffd24a");
   }
   for (const p of gameState?.players || [])
-    if (p.id !== playerId && (p.state === "freefall" || p.state === "parachute"))
+    if (
+      p.id !== playerId &&
+      (p.state === "freefall" || p.state === "parachute")
+    )
       dot(p.x, p.z, 3, "#ff7a5c");
   const me =
     local.state === "plane" && plane
@@ -2833,7 +3000,19 @@ function ensureAudio() {
   if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
   return audioCtx;
 }
-const sfxLevel = () => (soundOn ? (Number($("#sfx").value) || 0) / 100 : 0);
+const sfxLevel = () =>
+  soundOn
+    ? ((Number($("#sfx").value) || 0) / 100) *
+      ((Number($("#masterVolume").value) || 0) / 100)
+    : 0;
+function applyAudioSettings() {
+  setLoopGain(audioLoops.plane, 0.55 * sfxLevel(), 0.1);
+  if (audioLoops.wind) updateWind(local.state === "parachute");
+}
+syncPauseSettings();
+saveSettings();
+applyGraphicsSettings();
+applyAudioSettings();
 function loopBuffer(kind) {
   if (loopBuffers[kind]) return loopBuffers[kind];
   const ctx = ensureAudio();
@@ -2987,7 +3166,11 @@ function updateWind(chute) {
     audioCtx.currentTime,
     0.1,
   );
-  setLoopGain(loop, (0.1 + 0.9 * intensity * intensity) * 1.2 * sfxLevel(), 0.12);
+  setLoopGain(
+    loop,
+    (0.1 + 0.9 * intensity * intensity) * 1.2 * sfxLevel(),
+    0.12,
+  );
 }
 function playChuteOpen(position) {
   const a = spatialAudio(position, { volume: 0.9, ref: 6, max: 80 });
