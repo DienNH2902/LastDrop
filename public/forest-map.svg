@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 280" role="img" aria-label="Minh họa bản đồ rừng với đồi, sông, hồ, cây và nhà">
+  <defs>
+    <linearGradient id="ground" x2="0" y2="1"><stop stop-color="#7ca75a"/><stop offset="1" stop-color="#335c3b"/></linearGradient>
+    <linearGradient id="water" x2="0" y2="1"><stop stop-color="#74d2d3"/><stop offset="1" stop-color="#287e99"/></linearGradient>
+    <linearGradient id="hill" x2="0" y2="1"><stop stop-color="#a4bd68"/><stop offset="1" stop-color="#527748"/></linearGradient>
+    <pattern id="grass" width="18" height="16" patternUnits="userSpaceOnUse"><path d="M3 16l2-7m3 7 2-5m4 5 2-8" stroke="#b3ce70" stroke-width="1.5" opacity=".5"/></pattern>
+  </defs>
+  <rect width="640" height="280" fill="url(#ground)"/><rect width="640" height="280" fill="url(#grass)"/>
+  <path d="M0 65 60 18l55 45 75-52 77 57 67-48 72 53 62-47 78 53 63-38v91H0z" fill="#547b4e"/>
+  <path d="M0 88 73 44l54 41 74-47 70 48 70-42 75 46 74-43 82 53 68-31v76H0z" fill="url(#hill)" opacity=".95"/>
+  <path d="M-15 212c92-42 116-91 207-86s95 99 190 75 117-82 181-55 54 44 100 34v109H-15z" fill="#477443" opacity=".92"/>
+  <path d="M-20 187c87-25 120-65 198-56s89 82 165 67 118-82 182-55 82 41 140 19" fill="none" stroke="#b8d27c" stroke-width="22" opacity=".48"/>
+  <path d="M-20 187c87-25 120-65 198-56s89 82 165 67 118-82 182-55 82 41 140 19" fill="none" stroke="url(#water)" stroke-width="15"/>
+  <ellipse cx="469" cy="178" rx="49" ry="28" fill="#1d7489"/><ellipse cx="469" cy="174" rx="43" ry="21" fill="url(#water)"/>
+  <g fill="#254e32"><path d="M62 149l-20 37h40z"/><path d="M62 126l-25 43h50z"/><path d="M62 105l-28 45h56z"/><rect x="58" y="148" width="8" height="29" fill="#624a31"/>
+    <path d="M135 213l-19 35h38z"/><path d="M135 191l-25 43h50z"/><path d="M135 169l-29 48h58z"/><rect x="131" y="212" width="8" height="28" fill="#624a31"/>
+    <path d="M555 106l-21 38h42z"/><path d="M555 82l-27 45h54z"/><path d="M555 58l-31 51h62z"/><rect x="551" y="103" width="8" height="30" fill="#624a31"/>
+    <path d="M600 210l-19 35h38z"/><path d="M600 188l-25 43h50z"/><path d="M600 166l-29 48h58z"/><rect x="596" y="208" width="8" height="30" fill="#624a31"/></g>
+  <g transform="translate(282 157)"><rect x="0" y="13" width="62" height="39" rx="2" fill="#9b6943"/><path d="M-6 15 31-7l39 22z" fill="#493c30"/><rect x="25" y="29" width="13" height="23" fill="#543d2d"/><rect x="7" y="24" width="12" height="11" fill="#7dc0b5"/><rect x="44" y="24" width="12" height="11" fill="#7dc0b5"/></g>
+  <g fill="#777b68"><path d="m214 219 13-21 20 10-4 18z"/><path d="m380 220 12-17 18 6 2 15z"/><path d="m511 230 15-24 18 12-4 17z"/></g>
+  <g transform="translate(84 64)"><path d="m0 30 25-27 31 27-7 8H8z" fill="#675642"/><path d="m10 28 15-17 17 17z" fill="#a6ae83"/></g>
+  <g transform="translate(432 56)"><path d="m0 34 28-31 34 31-7 9H8z" fill="#625643"/><path d="m11 31 17-20 18 20z" fill="#bac19a"/></g>
+</svg>

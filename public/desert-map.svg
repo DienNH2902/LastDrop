@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 280" role="img" aria-label="Minh họa bản đồ sa mạc với núi đá, cát, xương rồng và nhà">
+  <defs>
+    <linearGradient id="sand" x2="0" y2="1"><stop stop-color="#d9bd7d"/><stop offset="1" stop-color="#9a7447"/></linearGradient>
+    <linearGradient id="mesa" x2="0" y2="1"><stop stop-color="#b99b69"/><stop offset="1" stop-color="#70583f"/></linearGradient>
+    <pattern id="tracks" width="42" height="26" patternUnits="userSpaceOnUse"><path d="M-5 22q18-12 38 0" fill="none" stroke="#f0d99b" stroke-width="2" opacity=".35"/></pattern>
+  </defs>
+  <rect width="640" height="280" fill="url(#sand)"/><rect width="640" height="280" fill="url(#tracks)"/>
+  <path d="M0 95 54 47l35 18 36-47 48 69 49-39 40 44 49-60 47 64 41-47 60 52 55-45 55 49v93H0z" fill="#80694a"/>
+  <path d="m0 112 54-49 37 16 32-44 46 68 53-33 43 45 49-50 48 57 45-36 58 50 54-39 61 47v66H0z" fill="url(#mesa)"/>
+  <path d="M0 198q92-68 178-18t157-2 163-20 142 12v110H0z" fill="#c5a366"/>
+  <path d="M0 228q89-54 178-7t170-16 154-8 138 11v72H0z" fill="#9f7a4b" opacity=".8"/>
+  <g fill="#74634b"><path d="m83 177 17-30 30 11 8 24-20 14-31-4z"/><path d="m182 225 15-25 24 5 11 21-21 13-28-4z"/><path d="m425 203 20-31 31 9 9 23-20 16-34-4z"/><path d="m544 148 14-23 27 7 7 22-19 12-26-5z"/><path d="m350 257 17-18 27 4 6 18-19 13-27-6z"/></g>
+  <g stroke="#426341" stroke-width="9" stroke-linecap="round" fill="none"><path d="M270 197v-46m0 20-15-10m15 22 15-12"/><path d="M494 224v-54m0 24-16-10m16 26 17-13"/><path d="M132 237v-43m0 18-13-9m13 19 13-10"/></g>
+  <g fill="#426341"><circle cx="255" cy="161" r="4"/><circle cx="285" cy="175" r="4"/><circle cx="478" cy="175" r="4"/><circle cx="510" cy="196" r="4"/><circle cx="119" cy="198" r="4"/><circle cx="145" cy="212" r="4"/></g>
+  <g transform="translate(304 190)"><rect x="0" y="13" width="67" height="42" fill="#b18a58"/><path d="m-7 16 40-28 41 28z" fill="#554538"/><rect x="27" y="31" width="14" height="24" fill="#58402e"/><rect x="7" y="25" width="13" height="12" fill="#88aaa0"/><rect x="48" y="25" width="13" height="12" fill="#88aaa0"/></g>
+  <g transform="translate(392 199)"><rect x="0" y="12" width="48" height="32" fill="#8d6947"/><path d="m-5 14 29-21 29 21z" fill="#604936"/><rect x="19" y="25" width="11" height="19" fill="#48372b"/></g>
+  <path d="M28 250q45-18 78-3m381-5q61-19 113 0" fill="none" stroke="#ead29a" stroke-width="3" opacity=".7"/>
+</svg>
