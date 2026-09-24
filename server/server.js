@@ -70,6 +70,9 @@ const snapshot = (room) => ({
     jumpY: p.jumpY,
     ammo: p.ammo,
     reserveAmmo: p.reserveAmmo,
+    medkits: p.medkits || 0,
+    healing: p.alive && p.healingUntil > Date.now(),
+    healLeftMs: p.alive ? Math.max(0, (p.healingUntil || 0) - Date.now()) : 0,
     reloadingUntil: p.reloadingUntil,
     reloading: p.reloadingUntil > Date.now(),
     shotId: p.shotId || 0,
@@ -80,6 +83,11 @@ const snapshot = (room) => ({
 });
 function broadcast(room) {
   const data = JSON.stringify(snapshot(room));
+  for (const p of room.players.values())
+    if (p.ws.readyState === 1) p.ws.send(data);
+}
+function broadcastRaw(room, payload) {
+  const data = JSON.stringify(payload);
   for (const p of room.players.values())
     if (p.ws.readyState === 1) p.ws.send(data);
 }
@@ -100,7 +108,13 @@ function createObstacles(seed, mapId) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
   const forest = mapId === "forest";
-  const spawns = [[-3, 8], [0, 8], [3, 8], [-3, -8], [0, -8]];
+  const spawns = [
+    [-3, 8],
+    [0, 8],
+    [3, 8],
+    [-3, -8],
+    [0, -8],
+  ];
   const obstacles = [];
   const riverZ = (x) => -7 + Math.sin((x + 12) / 13) * 13;
   if (forest) {
@@ -109,14 +123,35 @@ function createObstacles(seed, mapId) {
       const x = -45 + i * 10;
       const z = riverZ(x);
       const yaw = Math.atan2(2, riverZ(x + 1) - riverZ(x - 1));
-      obstacles.push({ type: "river", x, z, w: 5.2, length: 12, h: 0.08, depth: 4.5, yaw, solid: false });
+      obstacles.push({
+        type: "river",
+        x,
+        z,
+        w: 5.2,
+        length: 12,
+        h: 0.08,
+        depth: 4.5,
+        yaw,
+        solid: false,
+      });
     }
-    obstacles.push({ type: "lake", x: 22, z: -3, w: 12, length: 17, h: 0.08, depth: 5.5, solid: false });
+    obstacles.push({
+      type: "lake",
+      x: 22,
+      z: -3,
+      w: 12,
+      length: 17,
+      h: 0.08,
+      depth: 5.5,
+      solid: false,
+    });
   }
-  const overlapsWater = (x, z, radius) => forest && (
-    Math.hypot(x - 22, z + 3) < radius + 11 ||
-    Array.from({ length: 10 }, (_, i) => -45 + i * 10).some((rx) => Math.hypot(x - rx, z - riverZ(rx)) < radius + 3)
-  );
+  const overlapsWater = (x, z, radius) =>
+    forest &&
+    (Math.hypot(x - 22, z + 3) < radius + 11 ||
+      Array.from({ length: 10 }, (_, i) => -45 + i * 10).some(
+        (rx) => Math.hypot(x - rx, z - riverZ(rx)) < radius + 3,
+      ));
   function add(type, count, minW, maxW, minH, maxH, gap = 1.2) {
     let made = 0;
     for (let attempt = 0; attempt < count * 30 && made < count; attempt++) {
@@ -125,10 +160,28 @@ function createObstacles(seed, mapId) {
       const w = minW + random() * (maxW - minW);
       const h = minH + random() * (maxH - minH);
       const spawnClearance = type === "hill" ? w / 2 + 8 : w / 2 + 5;
-      if (spawns.some(([sx, sz]) => Math.hypot(x - sx, z - sz) < spawnClearance)) continue;
+      if (
+        spawns.some(([sx, sz]) => Math.hypot(x - sx, z - sz) < spawnClearance)
+      )
+        continue;
       if (overlapsWater(x, z, w / 2)) continue;
-      if (obstacles.some((o) => (o.solid !== false || o.type === "hill") && Math.hypot(x - o.x, z - o.z) < (w + o.w) / 2 + gap)) continue;
-      obstacles.push({ type, x, z, w, h, solid: type !== "hill", yaw: type === "house" || type === "hut" ? 0 : random() * Math.PI * 2 });
+      if (
+        obstacles.some(
+          (o) =>
+            (o.solid !== false || o.type === "hill") &&
+            Math.hypot(x - o.x, z - o.z) < (w + o.w) / 2 + gap,
+        )
+      )
+        continue;
+      obstacles.push({
+        type,
+        x,
+        z,
+        w,
+        h,
+        solid: type !== "hill",
+        yaw: type === "house" || type === "hut" ? 0 : random() * Math.PI * 2,
+      });
       made++;
     }
   }
@@ -150,12 +203,57 @@ function createObstacles(seed, mapId) {
   }
   return obstacles;
 }
+// ---- Vật phẩm rơi trên map: đạn và bịch máu ----
+const PICKUP_RADIUS = 2.5; // mét; client hiện gợi ý F ở 2 m, server dư 0.5 m để bù độ trễ vị trí
+const AMMO_PER_BOX = 30;
+const AMMO_BOX_COUNT = 26;
+const MEDKIT_COUNT = 14;
+const HEAL_AMOUNT = 20;
+const HEAL_DURATION_MS = 5000;
+const MAX_HP = 100;
+function createLoot(room) {
+  const items = [];
+  let nextId = 1;
+  const place = (type, count, amount) => {
+    let made = 0;
+    for (let attempt = 0; attempt < count * 80 && made < count; attempt++) {
+      const x = (Math.random() - 0.5) * 92;
+      const z = (Math.random() - 0.5) * 92;
+      if (blockedPosition(room, x, z, null)) continue; // cây, đá, tường nhà...
+      // Không đặt trong nước (kể cả sát mép sông/hồ).
+      if (
+        [
+          [0, 0],
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ].some(([ox, oz]) => waterAt(room, x + ox, z + oz))
+      )
+        continue;
+      // Rải đều, tránh các vật phẩm chồng lên nhau.
+      if (items.some((i) => Math.hypot(i.x - x, i.z - z) < 5)) continue;
+      items.push({
+        id: nextId++,
+        type,
+        x: Math.round(x * 100) / 100,
+        z: Math.round(z * 100) / 100,
+        amount,
+      });
+      made++;
+    }
+  };
+  place("ammo", AMMO_BOX_COUNT, AMMO_PER_BOX);
+  place("medkit", MEDKIT_COUNT, 1);
+  return items;
+}
 function groundHeightAt(room, x, z) {
   let height = 0;
   for (const hill of room.obstacles) {
     if (hill.type !== "hill") continue;
     const radius = hill.w / 2;
-    const distanceSquared = ((x - hill.x) / radius) ** 2 + ((z - hill.z) / radius) ** 2;
+    const distanceSquared =
+      ((x - hill.x) / radius) ** 2 + ((z - hill.z) / radius) ** 2;
     if (distanceSquared >= 1) continue;
     height = Math.max(height, hill.h * Math.pow(1 - distanceSquared, 1.4));
   }
@@ -170,9 +268,11 @@ function waterAt(room, x, z) {
     const s = Math.sin(water.yaw || 0);
     const localX = c * dx - s * dz;
     const localZ = s * dx + c * dz;
-    const inside = water.type === "lake"
-      ? (localX / water.w) ** 2 + (localZ / water.length) ** 2 <= 1
-      : Math.abs(localX) <= water.w / 2 && Math.abs(localZ) <= water.length / 2;
+    const inside =
+      water.type === "lake"
+        ? (localX / water.w) ** 2 + (localZ / water.length) ** 2 <= 1
+        : Math.abs(localX) <= water.w / 2 &&
+          Math.abs(localZ) <= water.length / 2;
     if (inside) return { surfaceY: 0.08, depth: water.depth || 4 };
   }
   return null;
@@ -185,9 +285,16 @@ function blockedByBuilding(o, x, z, radius) {
   const lx = c * dx - s * dz;
   const lz = s * dx + c * dz;
   const half = o.w / 2;
-  const sideWall = Math.abs(lx) >= half - 0.16 - radius && Math.abs(lx) <= half + radius && Math.abs(lz) < half + radius;
-  const endWall = Math.abs(lz) >= half - 0.16 - radius && Math.abs(lz) <= half + radius && Math.abs(lx) < half + radius;
-  const frontDoor = lz < 0 && Math.abs(lx) < 1.05 && Math.abs(lz) >= half - 0.16 - radius;
+  const sideWall =
+    Math.abs(lx) >= half - 0.16 - radius &&
+    Math.abs(lx) <= half + radius &&
+    Math.abs(lz) < half + radius;
+  const endWall =
+    Math.abs(lz) >= half - 0.16 - radius &&
+    Math.abs(lz) <= half + radius &&
+    Math.abs(lx) < half + radius;
+  const frontDoor =
+    lz < 0 && Math.abs(lx) < 1.05 && Math.abs(lz) >= half - 0.16 - radius;
   return (sideWall || endWall) && !frontDoor;
 }
 const PLAYER_RADIUS = 0.38;
@@ -212,7 +319,8 @@ function blockedPosition(room, x, z, ignoreId) {
     }
     const footprint = obstacleFootprintRadius(o);
     if (footprint !== null) {
-      if (Math.hypot(x - o.x, z - o.z) < footprint + obstacleRadius) return true;
+      if (Math.hypot(x - o.x, z - o.z) < footprint + obstacleRadius)
+        return true;
       continue;
     }
     const nearestX = Math.max(o.x - o.w / 2, Math.min(x, o.x + o.w / 2));
@@ -221,7 +329,12 @@ function blockedPosition(room, x, z, ignoreId) {
   }
   for (const other of room.players.values()) {
     const otherRadius = other.prone ? 1.15 : PLAYER_RADIUS;
-    if (other.id !== ignoreId && other.alive && Math.hypot(x - other.x, z - other.z) < moverRadius + otherRadius + 0.02) return true;
+    if (
+      other.id !== ignoreId &&
+      other.alive &&
+      Math.hypot(x - other.x, z - other.z) < moverRadius + otherRadius + 0.02
+    )
+      return true;
   }
   return false;
 }
@@ -243,7 +356,14 @@ wss.on("connection", (ws) => {
       if (!room) {
         const mapId = m.mapId === "forest" ? "forest" : "desert";
         const mapSeed = Math.floor(Math.random() * 0xffffffff);
-        room = { code, phase: "waiting", players: new Map(), mapSeed, mapId, obstacles: createObstacles(mapSeed, mapId) };
+        room = {
+          code,
+          phase: "waiting",
+          players: new Map(),
+          mapSeed,
+          mapId,
+          obstacles: createObstacles(mapSeed, mapId),
+        };
         rooms.set(code, room);
       }
       if (room.phase !== "waiting" || room.players.size >= 5)
@@ -272,6 +392,8 @@ wss.on("connection", (ws) => {
         lastMoveAt: Date.now(),
         ammo: 30,
         reserveAmmo: 90,
+        medkits: 0,
+        healingUntil: 0,
         reloadingUntil: 0,
         lastShotAt: 0,
         shotId: 0,
@@ -301,6 +423,8 @@ wss.on("connection", (ws) => {
     ) {
       room.phase = "playing";
       room.lastHit = null;
+      room.loot = createLoot(room);
+      broadcastRaw(room, { type: "loot", items: room.loot });
       broadcast(room);
       return;
     }
@@ -316,11 +440,25 @@ wss.on("connection", (ws) => {
       const elapsed = Math.max(0, Math.min(0.2, (now - p.lastMoveAt) / 1000));
       p.lastMoveAt = now;
       const inWaterBeforeMove = Boolean(waterAt(room, p.x, p.z));
-      const waterBeforeMove = inWaterBeforeMove ? waterAt(room, p.x, p.z) : null;
+      const waterBeforeMove = inWaterBeforeMove
+        ? waterAt(room, p.x, p.z)
+        : null;
       const stayInWaterWhileSubmerged = Boolean(
-        waterBeforeMove && p.swimming && p.swimY < waterBeforeMove.surfaceY - 1.73,
+        waterBeforeMove &&
+        p.swimming &&
+        p.swimY < waterBeforeMove.surfaceY - 1.73,
       );
-      const moveSpeed = inWaterBeforeMove ? 3.6 : p.prone ? 1.3 : p.crouching && p.slowWalking ? 2 : p.crouching ? 3.8 : p.slowWalking ? 3.2 : 7;
+      const moveSpeed = inWaterBeforeMove
+        ? 3.6
+        : p.prone
+          ? 1.3
+          : p.crouching && p.slowWalking
+            ? 2
+            : p.crouching
+              ? 3.8
+              : p.slowWalking
+                ? 3.2
+                : 7;
       let dx = Number(m.x) - p.x;
       let dz = Number(m.z) - p.z;
       if (!Number.isFinite(dx)) dx = 0;
@@ -332,12 +470,21 @@ wss.on("connection", (ws) => {
         dz *= maxDistance / distance;
       }
       const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.1));
-      const stepX = dx / steps, stepZ = dz / steps;
+      const stepX = dx / steps,
+        stepZ = dz / steps;
       for (let i = 0; i < steps; i++) {
         const nextX = p.x + stepX;
-        if (!blockedPosition(room, nextX, p.z, p.id) && (!stayInWaterWhileSubmerged || waterAt(room, nextX, p.z))) p.x = nextX;
+        if (
+          !blockedPosition(room, nextX, p.z, p.id) &&
+          (!stayInWaterWhileSubmerged || waterAt(room, nextX, p.z))
+        )
+          p.x = nextX;
         const nextZ = p.z + stepZ;
-        if (!blockedPosition(room, p.x, nextZ, p.id) && (!stayInWaterWhileSubmerged || waterAt(room, p.x, nextZ))) p.z = nextZ;
+        if (
+          !blockedPosition(room, p.x, nextZ, p.id) &&
+          (!stayInWaterWhileSubmerged || waterAt(room, p.x, nextZ))
+        )
+          p.z = nextZ;
       }
       p.groundY = groundHeightAt(room, p.x, p.z);
       const water = waterAt(room, p.x, p.z);
@@ -361,6 +508,65 @@ wss.on("connection", (ws) => {
       broadcast(room);
       return;
     }
+    if (m.type === "pickup" && room.phase === "playing" && p.alive) {
+      // F: nhặt vật phẩm gần nhất trong bán kính PICKUP_RADIUS (đang hồi máu thì F là hủy hồi máu).
+      if (p.healingUntil > Date.now() || p.swimming) return;
+      let best = null;
+      let bestDistance = PICKUP_RADIUS;
+      for (const item of room.loot || []) {
+        const d = Math.hypot(item.x - p.x, item.z - p.z);
+        if (d < bestDistance) {
+          best = item;
+          bestDistance = d;
+        }
+      }
+      if (!best) return;
+      room.loot = room.loot.filter((item) => item !== best);
+      if (best.type === "ammo") p.reserveAmmo += best.amount;
+      else p.medkits = (p.medkits || 0) + best.amount;
+      broadcastRaw(room, { type: "lootRemoved", id: best.id });
+      send(ws, {
+        type: "toast",
+        text:
+          best.type === "ammo"
+            ? `+${best.amount} ĐẠN 5.56`
+            : `+${best.amount} BỊCH MÁU`,
+      });
+      broadcast(room);
+      return;
+    }
+    if (m.type === "heal" && room.phase === "playing" && p.alive) {
+      const now = Date.now();
+      if (p.healingUntil > now) return;
+      if ((p.medkits || 0) <= 0)
+        return send(ws, { type: "toast", text: "KHÔNG CÒN BỊCH MÁU" });
+      if (p.hp >= MAX_HP)
+        return send(ws, { type: "toast", text: "MÁU ĐÃ ĐẦY" });
+      p.healingUntil = now + HEAL_DURATION_MS;
+      const healFinishesAt = p.healingUntil;
+      broadcast(room);
+      setTimeout(() => {
+        // Bị hủy (F), chết hoặc thoát phòng thì không hồi và không mất bịch máu.
+        if (!room.players.has(p.id) || p.healingUntil !== healFinishesAt)
+          return;
+        p.healingUntil = 0;
+        if (p.alive && p.medkits > 0) {
+          p.medkits--;
+          p.hp = Math.min(MAX_HP, p.hp + HEAL_AMOUNT);
+          send(ws, { type: "toast", text: `ĐÃ HỒI +${HEAL_AMOUNT} MÁU` });
+        }
+        broadcast(room);
+      }, HEAL_DURATION_MS);
+      return;
+    }
+    if (m.type === "cancelHeal" && room.phase === "playing" && p.alive) {
+      if (p.healingUntil > Date.now()) {
+        p.healingUntil = 0;
+        send(ws, { type: "toast", text: "ĐÃ HỦY HỒI MÁU" });
+        broadcast(room);
+      }
+      return;
+    }
     if (m.type === "reload" && room.phase === "playing" && p.alive) {
       const now = Date.now();
       if (p.reloadingUntil > now || p.ammo >= 30 || p.reserveAmmo <= 0) {
@@ -371,7 +577,8 @@ wss.on("connection", (ws) => {
       const reloadFinishesAt = p.reloadingUntil;
       broadcast(room);
       setTimeout(() => {
-        if (!room.players.has(p.id) || p.reloadingUntil !== reloadFinishesAt) return;
+        if (!room.players.has(p.id) || p.reloadingUntil !== reloadFinishesAt)
+          return;
         const amount = Math.min(30 - p.ammo, p.reserveAmmo);
         p.ammo += amount;
         p.reserveAmmo -= amount;
@@ -388,7 +595,11 @@ wss.on("connection", (ws) => {
       const length = Math.hypot(aim.x, aim.y, aim.z);
       if (length < 0.99 || length > 1.01) return;
       const shotTime = Date.now();
-      if (p.reloadingUntil > shotTime || p.ammo <= 0 || shotTime - p.lastShotAt < 120) {
+      if (
+        p.reloadingUntil > shotTime ||
+        p.ammo <= 0 ||
+        shotTime - p.lastShotAt < 120
+      ) {
         broadcast(room);
         return;
       }
@@ -408,13 +619,12 @@ wss.on("connection", (ws) => {
       const origin = {
         x: freshPosition ? sx : p.x,
         y:
-            Number.isFinite(eyeY) && eyeY >= (p.swimming ? (p.swimY || 0) + 0.35 : 0.35) && eyeY <= 20
+          Number.isFinite(eyeY) &&
+          eyeY >= (p.swimming ? (p.swimY || 0) + 0.35 : 0.35) &&
+          eyeY <= 20
             ? eyeY
-            : (p.swimming ? (p.swimY || 0) : (p.groundY || 0)) + (p.prone
-              ? 0.48
-              : p.crouching
-              ? 1.05
-              : 1.65),
+            : (p.swimming ? p.swimY || 0 : p.groundY || 0) +
+              (p.prone ? 0.48 : p.crouching ? 1.05 : 1.65),
         z: freshPosition ? sz : p.z,
       };
       // Ray tests cover the full playable map (the previous 32-unit cap made
@@ -478,16 +688,39 @@ wss.on("connection", (ws) => {
           z: o.z - Math.sin(o.yaw || 0) * lx + Math.cos(o.yaw || 0) * lz,
         });
         const distances = [
-          rayBox(centerAt(-half + thickness / 2, 0, wallHeight / 2), o.yaw || 0,
-            { x: thickness / 2, y: wallHeight / 2, z: half }),
-          rayBox(centerAt(half - thickness / 2, 0, wallHeight / 2), o.yaw || 0,
-            { x: thickness / 2, y: wallHeight / 2, z: half }),
-          rayBox(centerAt(0, half - thickness / 2, wallHeight / 2), o.yaw || 0,
-            { x: half, y: wallHeight / 2, z: thickness / 2 }),
-          rayBox(centerAt(-(half + doorHalf) / 2, -half + thickness / 2, wallHeight / 2), o.yaw || 0,
-            { x: (half - doorHalf) / 2, y: wallHeight / 2, z: thickness / 2 }),
-          rayBox(centerAt((half + doorHalf) / 2, -half + thickness / 2, wallHeight / 2), o.yaw || 0,
-            { x: (half - doorHalf) / 2, y: wallHeight / 2, z: thickness / 2 }),
+          rayBox(
+            centerAt(-half + thickness / 2, 0, wallHeight / 2),
+            o.yaw || 0,
+            { x: thickness / 2, y: wallHeight / 2, z: half },
+          ),
+          rayBox(
+            centerAt(half - thickness / 2, 0, wallHeight / 2),
+            o.yaw || 0,
+            { x: thickness / 2, y: wallHeight / 2, z: half },
+          ),
+          rayBox(
+            centerAt(0, half - thickness / 2, wallHeight / 2),
+            o.yaw || 0,
+            { x: half, y: wallHeight / 2, z: thickness / 2 },
+          ),
+          rayBox(
+            centerAt(
+              -(half + doorHalf) / 2,
+              -half + thickness / 2,
+              wallHeight / 2,
+            ),
+            o.yaw || 0,
+            { x: (half - doorHalf) / 2, y: wallHeight / 2, z: thickness / 2 },
+          ),
+          rayBox(
+            centerAt(
+              (half + doorHalf) / 2,
+              -half + thickness / 2,
+              wallHeight / 2,
+            ),
+            o.yaw || 0,
+            { x: (half - doorHalf) / 2, y: wallHeight / 2, z: thickness / 2 },
+          ),
         ].filter((distance) => distance !== null);
         return distances.length ? Math.min(...distances) : null;
       };
@@ -512,23 +745,23 @@ wss.on("connection", (ws) => {
           wallDistance = rayBuilding(o);
         } else if (o.type === "tree") {
           // Only the visible trunk blocks shots; foliage is not a solid wall.
-          wallDistance = rayBox(
-            { x: o.x, y: baseY + o.h * 0.31, z: o.z },
-            0,
-            { x: o.w * 0.25, y: o.h * 0.31, z: o.w * 0.25 },
-          );
+          wallDistance = rayBox({ x: o.x, y: baseY + o.h * 0.31, z: o.z }, 0, {
+            x: o.w * 0.25,
+            y: o.h * 0.31,
+            z: o.w * 0.25,
+          });
         } else if (o.type === "deadTree") {
-          wallDistance = rayBox(
-            { x: o.x, y: baseY + o.h / 2, z: o.z },
-            0,
-            { x: o.w * 0.28, y: o.h / 2, z: o.w * 0.28 },
-          );
+          wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, 0, {
+            x: o.w * 0.28,
+            y: o.h / 2,
+            z: o.w * 0.28,
+          });
         } else if (o.type === "cactus") {
-          wallDistance = rayBox(
-            { x: o.x, y: baseY + o.h / 2, z: o.z },
-            0,
-            { x: o.w * 0.48, y: o.h / 2, z: o.w * 0.27 },
-          );
+          wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, 0, {
+            x: o.w * 0.48,
+            y: o.h / 2,
+            z: o.w * 0.27,
+          });
         } else if (o.type === "rock") {
           wallDistance = rayBox(
             { x: o.x, y: baseY + o.h * 0.42, z: o.z },
@@ -536,17 +769,18 @@ wss.on("connection", (ws) => {
             { x: o.w * 0.5, y: o.h * 0.5, z: o.w * 0.41 },
           );
         } else {
-          wallDistance = rayBox(
-            { x: o.x, y: baseY + o.h / 2, z: o.z },
-            0,
-            { x: o.w / 2, y: o.h / 2, z: o.w / 2 },
-          );
+          wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, 0, {
+            x: o.w / 2,
+            y: o.h / 2,
+            z: o.w / 2,
+          });
         }
-        if (wallDistance !== null && wallDistance < nearest) nearest = wallDistance;
+        if (wallDistance !== null && wallDistance < nearest)
+          nearest = wallDistance;
       }
       for (const q of room.players.values())
         if (q !== p && q.alive) {
-          const targetBaseY = q.swimming ? (q.swimY || 0) : (q.groundY || 0);
+          const targetBaseY = q.swimming ? q.swimY || 0 : q.groundY || 0;
           // Bounds mirror game.js: torso .65×1×.38, legs .48×.65×.34, head radius .24.
           if (q.prone) {
             const front = (length) => ({
@@ -558,14 +792,24 @@ wss.on("connection", (ws) => {
               rayBox(front(1.05), q.yaw, { x: 0.325, y: 0.19, z: 0.5 }),
               rayBox(front(0.4), q.yaw, { x: 0.24, y: 0.17, z: 0.325 }),
             ].filter((t) => t !== null);
-            const bodyDistance = bodyDistances.length ? Math.min(...bodyDistances) : null;
+            const bodyDistance = bodyDistances.length
+              ? Math.min(...bodyDistances)
+              : null;
             const headDistance = raySphere(front(1.72), 0.24);
-            const distance = headDistance === null ? bodyDistance : bodyDistance === null ? headDistance : Math.min(headDistance, bodyDistance);
+            const distance =
+              headDistance === null
+                ? bodyDistance
+                : bodyDistance === null
+                  ? headDistance
+                  : Math.min(headDistance, bodyDistance);
             if (distance !== null) {
               if (distance < nearest) {
                 nearest = distance;
                 target = q;
-                targetPart = headDistance !== null && headDistance <= distance ? "head" : "body";
+                targetPart =
+                  headDistance !== null && headDistance <= distance
+                    ? "head"
+                    : "body";
               }
             }
             continue;
@@ -574,29 +818,47 @@ wss.on("connection", (ws) => {
           const jumpY = q.jumpY || 0;
 
           const bodyDistances = [
-            rayBox({ x: q.x, y: targetBaseY + 1.05 * crouchScale + jumpY, z: q.z }, q.yaw, {
-              x: 0.325,
-              y: 0.5 * crouchScale,
-              z: 0.19,
-            }),
-            rayBox({ x: q.x, y: targetBaseY + 0.4 * crouchScale + jumpY, z: q.z }, q.yaw, {
-              x: 0.24,
-              y: 0.325 * crouchScale,
-              z: 0.17,
-            }),
+            rayBox(
+              { x: q.x, y: targetBaseY + 1.05 * crouchScale + jumpY, z: q.z },
+              q.yaw,
+              {
+                x: 0.325,
+                y: 0.5 * crouchScale,
+                z: 0.19,
+              },
+            ),
+            rayBox(
+              { x: q.x, y: targetBaseY + 0.4 * crouchScale + jumpY, z: q.z },
+              q.yaw,
+              {
+                x: 0.24,
+                y: 0.325 * crouchScale,
+                z: 0.17,
+              },
+            ),
           ].filter((t) => t !== null);
-          const bodyDistance = bodyDistances.length ? Math.min(...bodyDistances) : null;
+          const bodyDistance = bodyDistances.length
+            ? Math.min(...bodyDistances)
+            : null;
           const headDistance = raySphere(
             { x: q.x, y: targetBaseY + 1.72 * crouchScale + jumpY, z: q.z },
             0.24,
             crouchScale,
           );
-          const distance = headDistance === null ? bodyDistance : bodyDistance === null ? headDistance : Math.min(headDistance, bodyDistance);
+          const distance =
+            headDistance === null
+              ? bodyDistance
+              : bodyDistance === null
+                ? headDistance
+                : Math.min(headDistance, bodyDistance);
           if (distance !== null) {
             if (distance < nearest) {
               nearest = distance;
               target = q;
-              targetPart = headDistance !== null && headDistance <= distance ? "head" : "body";
+              targetPart =
+                headDistance !== null && headDistance <= distance
+                  ? "head"
+                  : "body";
             }
           }
         }
@@ -620,7 +882,11 @@ wss.on("connection", (ws) => {
       }
       // End the round as soon as only one survivor remains, so the winner
       // receives the same finished state as the eliminated players.
-      if (target && !target.alive && [...room.players.values()].filter((player) => player.alive).length <= 1) {
+      if (
+        target &&
+        !target.alive &&
+        [...room.players.values()].filter((player) => player.alive).length <= 1
+      ) {
         room.phase = "finished";
       }
       broadcast(room);

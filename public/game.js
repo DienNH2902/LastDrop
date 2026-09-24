@@ -70,6 +70,13 @@ let keys = {},
   resultEndsAt = 0;
 const FIRE_INTERVAL_MS = 120;
 
+// Vật phẩm / balo / hồi máu (server quyết định kết quả, khớp với server.js)
+const PICKUP_RADIUS = 2;
+const HEAL_DURATION_MS = 5000;
+const lootItems = new Map(); // id -> { id, type, x, z, amount, mesh, body }
+let backpackOpen = false,
+  lootToastTimer = null;
+
 // Movement
 const STAND_HEIGHT = 1.65;
 const CROUCH_HEIGHT = 1.05;
@@ -480,6 +487,9 @@ function connect(message) {
         : "Đang chờ chủ phòng bắt đầu...";
       show("lobby");
     }
+    if (m.type === "loot") setLootItems(m.items || []);
+    if (m.type === "lootRemoved") removeLootItem(m.id);
+    if (m.type === "toast") showLootToast(m.text);
     if (m.type === "state") {
       gameState = m;
       if (m.mapId) {
@@ -1160,6 +1170,10 @@ function initWorld() {
   gun.add(stock);
   camera.add(gun);
   scene.add(camera);
+  for (const item of lootItems.values()) {
+    item.mesh = null;
+    addLootMesh(item);
+  }
   addEventListener("resize", resizeWorld);
   requestAnimationFrame(frame);
 }
@@ -1210,6 +1224,12 @@ function renderPlayers(state) {
       local.kills = p.kills;
       ammo = p.ammo;
       local.reserveAmmo = p.reserveAmmo;
+      local.medkits = p.medkits || 0;
+      local.healing = Boolean(p.healing);
+      local.healEndsAt = local.healing
+        ? performance.now() + (p.healLeftMs || 0)
+        : 0;
+      if (backpackOpen) renderBackpack();
       const wasLocalReloading = local.reloading;
       local.reloading = Boolean(p.reloading);
       if (local.reloading && !wasLocalReloading) startReloadSounds(null);
@@ -1405,6 +1425,262 @@ function renderPlayers(state) {
     if (state.lastHit.targetId === playerId) showBloodScreenFlash();
   }
 }
+// ---------------------------------------------------------------------------
+// VẬT PHẨM RƠI TRÊN MAP (đạn, bịch máu) · BALO (Tab) · HỒI MÁU
+// ---------------------------------------------------------------------------
+// Server sinh vật phẩm ngẫu nhiên khi bắt đầu trận và quyết định ai nhặt được.
+// Client chỉ vẽ vật phẩm, hiện gợi ý "F" và gửi yêu cầu lên server.
+function lootLabel(item) {
+  return item.type === "ammo" ? `ĐẠN 5.56 (+${item.amount})` : "BỊCH MÁU";
+}
+function setLootItems(items) {
+  for (const item of lootItems.values()) disposeLootMesh(item);
+  lootItems.clear();
+  for (const item of items)
+    lootItems.set(item.id, { ...item, mesh: null, body: null });
+  if (scene && renderer)
+    for (const item of lootItems.values()) addLootMesh(item);
+}
+function removeLootItem(id) {
+  const item = lootItems.get(id);
+  if (!item) return;
+  disposeLootMesh(item);
+  lootItems.delete(id);
+}
+function disposeLootMesh(item) {
+  if (!item.mesh) return;
+  scene?.remove(item.mesh);
+  item.mesh.traverse((o) => {
+    o.geometry?.dispose();
+    o.material?.dispose();
+  });
+  item.mesh = null;
+  item.body = null;
+}
+function addLootMesh(item) {
+  if (!scene || item.mesh) return;
+  const isMed = item.type === "medkit";
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  if (isMed) {
+    body.add(
+      new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 0.34, 0.34),
+        makeMat("#f2f2ec"),
+      ),
+    );
+    const crossMat = new THREE.MeshBasicMaterial({ color: 0xd8202f });
+    const bar = (w, h, d, x, y, z) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), crossMat);
+      m.position.set(x, y, z);
+      body.add(m);
+    };
+    bar(0.28, 0.02, 0.08, 0, 0.175, 0); // chữ thập trên nắp
+    bar(0.08, 0.02, 0.28, 0, 0.175, 0);
+    for (const side of [1, -1]) {
+      bar(0.28, 0.08, 0.02, 0, 0, 0.171 * side); // hai mặt trước/sau
+      bar(0.08, 0.28, 0.02, 0, 0, 0.171 * side);
+    }
+  } else {
+    body.add(
+      new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 0.28, 0.32),
+        makeMat("#54602f"),
+      ),
+    );
+    const stripe = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.02, 0.08),
+      makeMat("#d5a83a"),
+    );
+    stripe.position.y = 0.15;
+    body.add(stripe);
+    const brass = makeMat("#d9b64a");
+    for (let i = 0; i < 4; i++) {
+      const bullet = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.035, 0.035, 0.2, 8),
+        brass,
+      );
+      bullet.rotation.z = Math.PI / 2;
+      bullet.position.set(0, 0.2, -0.105 + i * 0.07);
+      body.add(bullet);
+    }
+  }
+  root.add(body);
+  const color = isMed ? 0xff4d5e : 0xffd24a;
+  // Vòng sáng dưới đất + cột sáng mảnh để dễ thấy từ xa.
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.55, 0.7, 24),
+    new THREE.MeshBasicMaterial({
+      color,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.75,
+    }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.06;
+  root.add(ring);
+  const beam = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.04, 0.04, 3.2, 6),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+    }),
+  );
+  beam.position.y = 1.6;
+  root.add(beam);
+  body.position.y = 0.4;
+  root.position.set(item.x, groundHeightAt(item.x, item.z), item.z);
+  scene.add(root);
+  item.mesh = root;
+  item.body = body;
+}
+function nearestLoot() {
+  let best = null;
+  let bestDistance = PICKUP_RADIUS;
+  for (const item of lootItems.values()) {
+    const d = Math.hypot(item.x - local.x, item.z - local.z);
+    if (d < bestDistance) {
+      best = item;
+      bestDistance = d;
+    }
+  }
+  return best;
+}
+function onInteract() {
+  // F: đang hồi máu thì hủy hồi máu, ngược lại nhặt vật phẩm gần nhất.
+  if (local.healing) {
+    send({ type: "cancelHeal" });
+    return;
+  }
+  if (!local.swimming && nearestLoot()) send({ type: "pickup" });
+}
+function useMedkit() {
+  if (local.healing) return showLootToast("ĐANG HỒI MÁU · NHẤN F ĐỂ HỦY");
+  if ((local.medkits || 0) <= 0) return showLootToast("KHÔNG CÒN BỊCH MÁU");
+  if (local.hp >= 100) return showLootToast("MÁU ĐÃ ĐẦY");
+  send({ type: "heal" });
+  closeBackpack(); // đóng balo để tiếp tục chơi trong lúc hồi máu
+}
+function installLootUi() {
+  document.querySelector("#backpack")?.remove();
+  document.querySelector("#lootHud")?.remove();
+  if (!document.querySelector("#lootStyles")) {
+    const style = document.createElement("style");
+    style.id = "lootStyles";
+    style.textContent = `
+#backpack{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(430px,92vw);pointer-events:auto;background:#171a14ed;border:1px solid #555b48;box-shadow:0 15px 60px #0009;padding:22px;color:#f3f3ed;font-family:'DM Mono',monospace;z-index:5}
+#backpack .bp-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px}
+#backpack .bp-head span{font:900 26px 'Barlow Condensed',Arial,sans-serif;letter-spacing:3px;color:#d6ff45}
+#backpack .bp-head small,#backpack .bp-foot{font-size:9px;letter-spacing:1px;color:#85897d}
+#backpack .bp-foot{margin-top:14px}
+#backpack .bp-row{display:flex;align-items:center;gap:14px;border:1px solid #373b31;padding:13px 15px;margin:9px 0;user-select:none}
+#backpack .bp-row>b{font-size:22px;color:#d6ff45;width:24px;text-align:center}
+#backpack .bp-row strong{display:block;font-size:13px;letter-spacing:1px}
+#backpack .bp-row small{display:block;margin-top:5px;font-size:9px;letter-spacing:1px;color:#929688}
+#backpack .bp-count{margin-left:auto;font-size:26px;color:#d6ff45}
+#backpack .bp-usable{cursor:pointer}
+#backpack .bp-usable:hover{border-color:#d6ff45;background:#d6ff4514}
+#backpack .bp-usable.empty{opacity:.45;cursor:not-allowed}
+#backpack .bp-usable.empty:hover{border-color:#373b31;background:none}
+#lootHud{position:absolute;left:50%;bottom:118px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;font-family:'DM Mono',monospace;text-shadow:0 1px 4px #000;z-index:4}
+#lootHud .lh-prompt{background:#111c;border:1px solid #d6ff4599;padding:8px 14px;font-size:12px;letter-spacing:1px;color:#fff}
+#lootHud .lh-prompt b{color:#d6ff45;margin-right:8px}
+#lootHud .lh-heal{width:260px;text-align:center;font-size:11px;letter-spacing:1px;color:#fff}
+#lootHud .lh-heal div{height:7px;margin-top:6px;background:#111a;border:1px solid #ffffff33}
+#lootHud .lh-heal i{display:block;height:100%;width:0;background:#d6ff45}
+#lootHud .lh-toast{background:#111d;padding:7px 14px;font-size:11px;letter-spacing:1px;color:#d6ff45;transition:opacity .25s}`;
+    document.head.append(style);
+  }
+  const panel = document.createElement("div");
+  panel.id = "backpack";
+  panel.className = "hidden";
+  panel.innerHTML = `
+    <div class="bp-head"><span>BALO</span><small>TAB / ESC · ĐÓNG</small></div>
+    <div class="bp-row"><b>▮</b><div><strong>ĐẠN 5.56 MM</strong><small>ĐANG LẮP TRONG SÚNG: <span id="bpMag">30</span> / 30</small></div><span class="bp-count" id="bpAmmoCount">0</span></div>
+    <div class="bp-row bp-usable" id="bpMed"><b>✚</b><div><strong>BỊCH MÁU</strong><small>CHUỘT PHẢI ĐỂ DÙNG · +20 MÁU · 5 GIÂY</small></div><span class="bp-count" id="bpMedCount">0</span></div>
+    <div class="bp-foot">F · NHẶT VẬT PHẨM GẦN BẠN · F KHI ĐANG HỒI MÁU = HỦY</div>`;
+  $(".hud").append(panel);
+  $("#bpMed").addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    useMedkit();
+  });
+  const hud = document.createElement("div");
+  hud.id = "lootHud";
+  hud.innerHTML = `<div class="lh-toast hidden"></div><div class="lh-prompt hidden"></div><div class="lh-heal hidden"><span></span><div><i></i></div></div>`;
+  $(".hud").append(hud);
+}
+function renderBackpack() {
+  if (!$("#backpack")) return;
+  $("#bpAmmoCount").textContent = local.reserveAmmo ?? 0;
+  $("#bpMag").textContent = ammo;
+  $("#bpMedCount").textContent = local.medkits || 0;
+  $("#bpMed").classList.toggle("empty", !(local.medkits > 0));
+}
+function openBackpack() {
+  if (backpackOpen || paused || !$("#game").classList.contains("active"))
+    return;
+  backpackOpen = true;
+  stopFiring();
+  if (scoped) setScope(false);
+  renderBackpack();
+  $("#backpack").classList.remove("hidden");
+  // Thả chuột để bấm được vào balo; trận vẫn tiếp tục chạy (không tạm dừng).
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+function closeBackpack(relock = true) {
+  if (!backpackOpen) return;
+  backpackOpen = false;
+  $("#backpack")?.classList.add("hidden");
+  if (relock && !paused && $("#game").classList.contains("active")) {
+    renderer?.domElement.requestPointerLock?.();
+  }
+}
+function toggleBackpack() {
+  if (backpackOpen) closeBackpack();
+  else openBackpack();
+}
+function showLootToast(text) {
+  const el = $("#lootHud .lh-toast");
+  if (!el) return;
+  el.textContent = text;
+  el.classList.remove("hidden");
+  clearTimeout(lootToastTimer);
+  lootToastTimer = setTimeout(() => el.classList.add("hidden"), 1800);
+}
+// Gọi mỗi frame: xoay/nhấp nhô vật phẩm, gợi ý phím F, thanh hồi máu.
+function updateLootHud(dt) {
+  const t = performance.now() / 1000;
+  for (const item of lootItems.values()) {
+    if (!item.body) continue;
+    item.body.rotation.y += dt * 1.4;
+    item.body.position.y = 0.4 + Math.sin(t * 2 + item.id) * 0.06;
+  }
+  const prompt = $("#lootHud .lh-prompt");
+  const heal = $("#lootHud .lh-heal");
+  if (!prompt || !heal) return;
+  if (local.healing) {
+    const left = Math.max(0, local.healEndsAt - performance.now());
+    heal.querySelector("span").textContent =
+      `ĐANG HỒI MÁU ${(left / 1000).toFixed(1)}S · F ĐỂ HỦY`;
+    heal.querySelector("i").style.width =
+      `${Math.min(100, (1 - left / HEAL_DURATION_MS) * 100)}%`;
+    heal.classList.remove("hidden");
+    prompt.classList.add("hidden");
+    return;
+  }
+  heal.classList.add("hidden");
+  const near = local.swimming ? null : nearestLoot();
+  if (near) {
+    prompt.innerHTML = `<b>F</b>NHẶT ${lootLabel(near)}`;
+    prompt.classList.remove("hidden");
+  } else {
+    prompt.classList.add("hidden");
+  }
+}
 function beginGame() {
   lastHitEventId = 0;
   local.hp = 100;
@@ -1420,6 +1696,10 @@ function beginGame() {
   local.swimDepth = 0;
   local.reloading = false;
   local.reserveAmmo = 90;
+  local.medkits = 0;
+  local.healing = false;
+  local.healEndsAt = 0;
+  backpackOpen = false;
   paused = false;
   scoped = false;
   ammo = 30;
@@ -1428,7 +1708,7 @@ function beginGame() {
   show("game");
   initWorld();
   $("#world").onclick = () => {
-    if (!paused) renderer.domElement.requestPointerLock?.();
+    if (!paused && !backpackOpen) renderer.domElement.requestPointerLock?.();
   };
   $("#world").oncontextmenu = (e) => e.preventDefault();
   document.addEventListener("pointerlockchange", onPointerLockChange);
@@ -1440,6 +1720,7 @@ function beginGame() {
   document.addEventListener("keydown", onKeyDown);
   document.addEventListener("keyup", onKeyUp);
   installReloadHud();
+  installLootUi();
   $("#resumeBtn").onclick = resumeGame;
   $("#leaveMatchBtn").onclick = leaveMatch;
 }
@@ -1484,6 +1765,7 @@ function blockContextMenu(e) {
 }
 function onPointerLockChange() {
   if (document.pointerLockElement !== renderer?.domElement) stopFiring();
+  if (backpackOpen) return; // đang mở balo: thả chuột là chủ ý, không tạm dừng
   if (
     document.pointerLockElement !== renderer?.domElement &&
     $("#game").classList.contains("active") &&
@@ -1495,9 +1777,30 @@ function onKeyDown(e) {
   if (e.code === "Escape") {
     e.preventDefault();
 
+    if (backpackOpen) {
+      closeBackpack();
+      return;
+    }
     if (paused) resumeGame();
     else pauseGame();
 
+    return;
+  }
+
+  if (e.code === "Tab" && !paused && $("#game").classList.contains("active")) {
+    e.preventDefault(); // không cho Tab đổi focus của trình duyệt
+    if (!e.repeat) toggleBackpack();
+    return;
+  }
+
+  if (
+    e.code === "KeyF" &&
+    !e.repeat &&
+    !paused &&
+    $("#game").classList.contains("active")
+  ) {
+    e.preventDefault();
+    onInteract();
     return;
   }
 
@@ -1553,6 +1856,7 @@ function onKeyUp(e) {
 }
 function pauseGame() {
   if (paused || !$("#game").classList.contains("active")) return;
+  closeBackpack(false);
   paused = true;
   stopFiring();
   keys = {};
@@ -1589,6 +1893,9 @@ function cleanupGame() {
   document.removeEventListener("contextmenu", blockContextMenu);
   document.removeEventListener("keydown", onKeyDown);
   document.removeEventListener("keyup", onKeyUp);
+  closeBackpack(false);
+  for (const item of lootItems.values()) disposeLootMesh(item);
+  lootItems.clear();
   renderer?.dispose();
   renderer = null;
   remoteMeshes.clear();
@@ -1733,6 +2040,7 @@ function frame() {
       bloodParticles.splice(i, 1);
     }
   }
+  updateLootHud(dt);
   if (!paused) {
     const currentlyInWater = Boolean(waterAt(local.x, local.z));
     const isProne = !currentlyInWater && Boolean(local.prone);
@@ -1855,6 +2163,7 @@ function frame() {
 function showResult() {
   if (!$("#game").classList.contains("active")) return;
   if ($("#result").classList.contains("active")) return;
+  closeBackpack(false);
   document.exitPointerLock?.();
   $("#killsResult").textContent = local.kills;
   $("#placeResult").textContent = local.hp > 0 ? "TOP 1" : "TOP —";
