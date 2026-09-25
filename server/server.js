@@ -16,7 +16,8 @@ const rooms = new Map();
 //  countdown : đếm ngược COUNTDOWN_MS.
 //  plane     : tất cả lên chung một máy bay bay thẳng qua map; nhảy dù khi máy bay vào vùng map.
 //  playing   : mọi người đã nhảy; ai tiếp đất rồi mới được cầm súng / nhặt đồ / bắn.
-const MAP_HALF = 50; // vùng (zone) của map: hình vuông ±50 m
+const MAP_HALF = 100; // map 200 × 200 m: gấp 4 lần diện tích bản đồ cũ
+const MAP_SCALE = MAP_HALF / 50;
 const COUNTDOWN_MS = 5000;
 const STAGING_TIMEOUT_MS = 20000; // chờ tối đa bấy nhiêu ms cho máy chậm dựng map
 const PLANE_ALT = 200; // độ cao máy bay (m)
@@ -160,19 +161,20 @@ function createObstacles(seed, mapId) {
     [0, -8],
   ];
   const obstacles = [];
-  const riverZ = (x) => -7 + Math.sin((x + 12) / 13) * 13;
+  const riverZ = (x) =>
+    (-7 + Math.sin((x + 12 * MAP_SCALE) / (13 * MAP_SCALE)) * 13) * MAP_SCALE;
   if (forest) {
     // Deep water volumes follow the winding stream and can be traversed by swimmers.
     for (let i = 0; i < 10; i++) {
-      const x = -45 + i * 10;
+      const x = (-45 + i * 10) * MAP_SCALE;
       const z = riverZ(x);
       const yaw = Math.atan2(2, riverZ(x + 1) - riverZ(x - 1));
       obstacles.push({
         type: "river",
         x,
         z,
-        w: 5.2,
-        length: 12,
+        w: 5.2 * MAP_SCALE,
+        length: 12 * MAP_SCALE,
         h: 0.08,
         depth: 4.5,
         yaw,
@@ -181,10 +183,10 @@ function createObstacles(seed, mapId) {
     }
     obstacles.push({
       type: "lake",
-      x: 22,
-      z: -3,
-      w: 12,
-      length: 17,
+      x: 22 * MAP_SCALE,
+      z: -3 * MAP_SCALE,
+      w: 12 * MAP_SCALE,
+      length: 17 * MAP_SCALE,
       h: 0.08,
       depth: 5.5,
       solid: false,
@@ -192,15 +194,15 @@ function createObstacles(seed, mapId) {
   }
   const overlapsWater = (x, z, radius) =>
     forest &&
-    (Math.hypot(x - 22, z + 3) < radius + 11 ||
-      Array.from({ length: 10 }, (_, i) => -45 + i * 10).some(
+    (Math.hypot(x - 22 * MAP_SCALE, z + 3 * MAP_SCALE) < radius + 11 * MAP_SCALE ||
+      Array.from({ length: 10 }, (_, i) => (-45 + i * 10) * MAP_SCALE).some(
         (rx) => Math.hypot(x - rx, z - riverZ(rx)) < radius + 3,
       ));
   function add(type, count, minW, maxW, minH, maxH, gap = 1.2) {
     let made = 0;
     for (let attempt = 0; attempt < count * 30 && made < count; attempt++) {
-      const x = (random() - 0.5) * 88;
-      const z = (random() - 0.5) * 88;
+      const x = (random() - 0.5) * 88 * MAP_SCALE;
+      const z = (random() - 0.5) * 88 * MAP_SCALE;
       const w = minW + random() * (maxW - minW);
       const h = minH + random() * (maxH - minH);
       const spawnClearance = type === "hill" ? w / 2 + 8 : w / 2 + 5;
@@ -230,28 +232,28 @@ function createObstacles(seed, mapId) {
     }
   }
   if (forest) {
-    add("hill", 4, 18, 25, 6, 11, 5);
+    add("hill", 16, 18, 25, 6, 11, 5);
   } else {
-    add("hill", 3, 20, 28, 7, 13, 5);
+    add("hill", 12, 20, 28, 7, 13, 5);
   }
   // Shelters are larger now and remain on flatter ground around the hills.
-  add("house", 11, 6.5, 8.5, 4.2, 5.4, 3);
-  add("hut", 8, 4.5, 6, 3, 3.8, 2.2);
+  add("house", 44, 6.5, 8.5, 4.2, 5.4, 3);
+  add("hut", 32, 4.5, 6, 3, 3.8, 2.2);
   if (forest) {
-    add("rock", 30, 1.3, 3.2, 1, 3.2, 0.8);
-    add("tree", 48, 0.65, 1.15, 3.8, 7.2, 0.6);
+    add("rock", 120, 1.3, 3.2, 1, 3.2, 0.8);
+    add("tree", 192, 0.65, 1.15, 3.8, 7.2, 0.6);
   } else {
-    add("rock", 38, 1.4, 3.8, 1, 3.5, 0.8);
-    add("cactus", 24, 0.55, 1.1, 2, 4.2, 0.7);
-    add("deadTree", 15, 0.6, 1.1, 3, 5.5, 0.8);
+    add("rock", 152, 1.4, 3.8, 1, 3.5, 0.8);
+    add("cactus", 96, 0.55, 1.1, 2, 4.2, 0.7);
+    add("deadTree", 60, 0.6, 1.1, 3, 5.5, 0.8);
   }
   return obstacles;
 }
 // ---- Vật phẩm rơi trên map: đạn và bịch máu ----
 const PICKUP_RADIUS = 2.5; // mét; client hiện gợi ý F ở 2 m, server dư 0.5 m để bù độ trễ vị trí
 const AMMO_PER_BOX = 30;
-const AMMO_BOX_COUNT = 26;
-const MEDKIT_COUNT = 14;
+const AMMO_BOX_COUNT = 104;
+const MEDKIT_COUNT = 56;
 const HEAL_AMOUNT = 20;
 const HEAL_DURATION_MS = 5000;
 const MAX_HP = 100;
@@ -264,8 +266,8 @@ function createLoot(room) {
   const place = (type, count, amount) => {
     let made = 0;
     for (let attempt = 0; attempt < count * 80 && made < count; attempt++) {
-      const x = (Math.random() - 0.5) * 92;
-      const z = (Math.random() - 0.5) * 92;
+      const x = (Math.random() - 0.5) * 192;
+      const z = (Math.random() - 0.5) * 192;
       if (blockedPosition(room, x, z, null)) continue; // cây, đá, tường nhà...
       // Không đặt trong nước (kể cả sát mép sông/hồ).
       if (
@@ -354,7 +356,10 @@ function obstacleFootprintRadius(o) {
   return null;
 }
 function blockedPosition(room, x, z, ignoreId) {
-  if (x < -49 || x > 49 || z < -49 || z > 49) return true;
+  if (
+    x < -MAP_HALF + 1 || x > MAP_HALF - 1 ||
+    z < -MAP_HALF + 1 || z > MAP_HALF - 1
+  ) return true;
   const mover = room.players.get(ignoreId);
   const moverRadius = mover?.prone ? 1.15 : PLAYER_RADIUS;
   const obstacleRadius = mover?.prone ? 0.55 : PLAYER_RADIUS;
@@ -394,7 +399,7 @@ function createFlight() {
   const angle = Math.random() * Math.PI * 2;
   const dx = Math.cos(angle);
   const dz = Math.sin(angle);
-  const offset = (Math.random() * 2 - 1) * 20; // lệch khỏi tâm map tối đa 20 m
+  const offset = (Math.random() * 2 - 1) * 20 * MAP_SCALE; // lệch khỏi tâm map tối đa 40 m
   const cx = -dz * offset;
   const cz = dx * offset;
   const lead = MAP_HALF * Math.SQRT2 + PLANE_LEAD;
@@ -435,7 +440,7 @@ function seatWorldPosition(plane, seat, t) {
   const s = Math.sin(yaw);
   return { x: px + lx * c + lz * s, z: pz - lx * s + lz * c };
 }
-const clampToMap = (v) => Math.max(-49.5, Math.min(49.5, v));
+const clampToMap = (v) => Math.max(-MAP_HALF + 0.5, Math.min(MAP_HALF - 0.5, v));
 function startPlane(room) {
   room.phase = "plane";
   room.plane = { ...createFlight(), startedAt: Date.now() };
@@ -687,8 +692,8 @@ wss.on("connection", (ws) => {
       }
       const spot = findFreeSpot(
         room,
-        Math.max(-48.5, Math.min(48.5, lx)),
-        Math.max(-48.5, Math.min(48.5, lz)),
+        Math.max(-MAP_HALF + 1.5, Math.min(MAP_HALF - 1.5, lx)),
+        Math.max(-MAP_HALF + 1.5, Math.min(MAP_HALF - 1.5, lz)),
         p.id,
       );
       p.x = spot.x;

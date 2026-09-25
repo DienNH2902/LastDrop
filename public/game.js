@@ -89,7 +89,8 @@ const PLANE_SEATS = [
   [0.9, 0.6],
   [-0.9, -1.0],
 ];
-const MAP_HALF = 50; // zone của map: hình vuông ±50 m
+const MAP_HALF = 100; // zone của map: 200 × 200 m, diện tích gấp 4 lần map cũ
+const MAP_SCALE = MAP_HALF / 50;
 const AIR = {
   freefallHoriz: 20, // m/s bay ngang khi rơi tự do
   diveHoriz: 13, // m/s bay ngang khi lao xuống (giữ Shift)
@@ -588,7 +589,7 @@ mapCard.querySelector(".map-title").innerHTML =
 $(".map-art").id = "mapArt";
 $(".map-label").id = "mapName";
 mapCard.querySelector(".map-info").innerHTML =
-  '<span>HỆ SINH THÁI <b id="mapDescription"></b></span><span>QUY MÔ <b>100 × 100 M</b></span>';
+  '<span>HỆ SINH THÁI <b id="mapDescription"></b></span><span>QUY MÔ <b>200 × 200 M</b></span>';
 const mapPicker = document.createElement("div");
 mapPicker.className = "map-select";
 mapPicker.innerHTML =
@@ -786,8 +787,8 @@ function waterAt(x, z) {
   return null;
 }
 function createGroundMesh(forest) {
-  const size = 110;
-  const segments = forest ? 220 : 1;
+  const size = 220;
+  const segments = forest ? 320 : 1;
   const step = size / segments;
   const positions = [];
   const indices = [];
@@ -1223,17 +1224,17 @@ function addForestGrass(seed) {
   const grass = new THREE.InstancedMesh(
     blade,
     new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 1 }),
-    2400,
+    9600,
   );
   const dummy = new THREE.Object3D();
   const tint = new THREE.Color();
   let count = 0;
-  for (let i = 0; i < 2400; i++) {
-    const x = (rand() - 0.5) * 98;
-    const z = (rand() - 0.5) * 98;
+  for (let i = 0; i < 9600; i++) {
+    const x = (rand() - 0.5) * 196;
+    const z = (rand() - 0.5) * 196;
     if (Math.hypot(x, z - 8) < 10 || Math.hypot(x, z + 8) < 9) continue;
-    const streamZ = -7 + Math.sin((x + 12) / 13) * 13;
-    if (Math.abs(z - streamZ) < 3.1 || Math.hypot(x - 22, z + 3) < 12) continue;
+    const streamZ = (-7 + Math.sin((x + 12 * MAP_SCALE) / (13 * MAP_SCALE)) * 13) * MAP_SCALE;
+    if (Math.abs(z - streamZ) < 3.1 * MAP_SCALE || Math.hypot(x - 22 * MAP_SCALE, z + 3 * MAP_SCALE) < 12 * MAP_SCALE) continue;
     dummy.position.set(x, groundHeightAt(x, z) + 0.29, z);
     dummy.rotation.set(
       (rand() - 0.5) * 0.22,
@@ -1266,7 +1267,7 @@ function obstacleFootprintRadius(o) {
   return null;
 }
 function isBlockedAt(x, z) {
-  if (x < -49 || x > 49 || z < -49 || z > 49) return true;
+  if (x < -MAP_HALF + 1 || x > MAP_HALF - 1 || z < -MAP_HALF + 1 || z > MAP_HALF - 1) return true;
   const selfRadius = local.prone ? 1.15 : PLAYER_RADIUS;
   const obstacleRadius = local.prone ? 0.55 : PLAYER_RADIUS;
   for (const o of mapObstacles) {
@@ -1304,14 +1305,14 @@ function initWorld() {
   const forest = mapId === "forest";
   scene = new THREE.Scene();
   scene.background = new THREE.Color(forest ? "#91b18a" : "#c5aa79");
-  scene.fog = new THREE.Fog(forest ? "#91b18a" : "#c5aa79", 48, 112);
+  scene.fog = new THREE.Fog(forest ? "#91b18a" : "#c5aa79", 96, 224);
   baseFov = 76;
   const viewport = host.getBoundingClientRect();
   camera = new THREE.PerspectiveCamera(
     baseFov,
     viewport.width / viewport.height,
     0.1,
-    180,
+    360,
   );
   camera.position.set(
     local.x,
@@ -2545,8 +2546,8 @@ function deployChute(auto) {
 }
 // Đẩy người chơi ra khỏi cây / đá / tường nếu tiếp đất trúng chúng.
 function findFreeSpotLocal(x, z) {
-  x = clamp(x, -48.5, 48.5);
-  z = clamp(z, -48.5, 48.5);
+  x = clamp(x, -MAP_HALF + 1.5, MAP_HALF - 1.5);
+  z = clamp(z, -MAP_HALF + 1.5, MAP_HALF - 1.5);
   if (!isBlockedAt(x, z)) return { x, z };
   for (let r = 0.5; r <= 12; r += 0.5) {
     for (let k = 0; k < 16; k++) {
@@ -2621,8 +2622,8 @@ function updateAir(dt) {
     const accel = diff > 0 ? AIR.gravity : 30;
     airState.fall += Math.sign(diff) * Math.min(Math.abs(diff), accel * dt);
   }
-  local.x = clamp(local.x + airState.vx * dt, -49.5, 49.5);
-  local.z = clamp(local.z + airState.vz * dt, -49.5, 49.5);
+  local.x = clamp(local.x + airState.vx * dt, -MAP_HALF + 0.5, MAP_HALF - 0.5);
+  local.z = clamp(local.z + airState.vz * dt, -MAP_HALF + 0.5, MAP_HALF - 0.5);
   local.y -= airState.fall * dt;
   const ground = groundHeightAt(local.x, local.z);
   if (!chute && local.y - ground <= AIR.autoDeployAlt && airState.time > 0.4)
@@ -2699,9 +2700,9 @@ function updateEnvironment(dt) {
   tmpColorB.set("#9cc9ea");
   scene.background.lerpColors(tmpColorA, tmpColorB, envBlend);
   scene.fog.color.copy(scene.background);
-  scene.fog.near = 48 + (260 - 48) * envBlend;
-  scene.fog.far = 112 + (900 - 112) * envBlend;
-  const far = envBlend > 0.02 ? 1000 : 180;
+  scene.fog.near = 96 + (400 - 96) * envBlend;
+  scene.fog.far = 224 + (1200 - 224) * envBlend;
+  const far = envBlend > 0.02 ? 1300 : 400;
   if (camera.far !== far) {
     camera.far = far;
     camera.updateProjectionMatrix();
@@ -2795,7 +2796,7 @@ function drawFlightMap() {
   const ctx = canvas?.getContext("2d");
   if (!ctx) return;
   const S = canvas.width;
-  const k = S / 170;
+  const k = S / (MAP_HALF * 2.6);
   const X = (x) => S / 2 + x * k;
   const Y = (z) => S / 2 + z * k;
   ctx.clearRect(0, 0, S, S);
@@ -3025,8 +3026,8 @@ function buildPlane() {
 // Đất quanh map (chỉ để nhìn từ trên cao) và bức tường zone mờ bao quanh khu chơi.
 function addOutskirts(forest) {
   const mat = makeMat(forest ? "#2f5232" : "#8f7650");
-  const far = 800,
-    edge = 55;
+  const far = 1600,
+    edge = MAP_HALF + 5;
   const strip = (w, d, x, z) => {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat);
     m.rotation.x = -Math.PI / 2;
