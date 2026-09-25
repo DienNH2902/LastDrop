@@ -2533,7 +2533,7 @@ function updatePlane() {
   const shake = Math.sin(now / 38) * 0.006 + Math.sin(now / 210) * 0.012;
   camera.position.set(local.x, local.y + 1.62 + shake, local.z);
   camera.rotation.z = 0;
-  setLoopGain(audioLoops.plane, 0.55 * sfxLevel(), 0.2);
+  setLoopGain(audioLoops.plane, 0.75 * sfxLevel(), 0.2);
 }
 // Rơi tự do và dù: WASD bay ngang theo hướng nhìn, Shift lao nhanh, Space bung dù.
 function updateAir(dt) {
@@ -2684,7 +2684,7 @@ function updatePhaseOverlay() {
       n === 1 ? 900 : 620,
       0.14,
       "sine",
-      0.06 * ((Number($("#sfx").value) || 0) / 100),
+      0.2 * ((Number($("#sfx").value) || 0) / 100),
     );
   }
 }
@@ -3160,7 +3160,7 @@ function updateWind(chute) {
   const drift = clamp(Math.hypot(airState.vx, airState.vz) / 20, 0, 1);
   const intensity = chute
     ? 0.12 + speed * 0.25 + drift * 0.05
-    : 0.32 + speed * 0.68;
+    : 0.1 + speed * 0.48;
   loop.band.frequency.setTargetAtTime(
     450 + 1900 * intensity,
     audioCtx.currentTime,
@@ -3315,7 +3315,7 @@ function frame() {
       local.jumping = false;
       const maxDive = Math.max(0, water.depth - 1.8);
       if (keys.Space) local.swimDepth -= 2.5 * dt;
-      if (keys.ControlLeft || keys.ControlRight) local.swimDepth += 2.2 * dt;
+      if (keys.ShiftLeft || keys.ShiftRight) local.swimDepth += 2.2 * dt;
       local.swimDepth = Math.max(0, Math.min(maxDive, local.swimDepth || 0));
       local.swimY = water.surfaceY - 1.58 - local.swimDepth;
       jumpOffset = 0;
