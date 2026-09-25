@@ -14,7 +14,7 @@ const companySplash = $("#companySplash"),
 const loadingDurationMs =
   Number.parseFloat(
     getComputedStyle(loading).getPropertyValue("--loading-duration"),
-  ) || 0;
+  ) || 5000;
 setTimeout(() => {
   companySplash.classList.add("hidden");
   loading.classList.remove("hidden");
@@ -22,7 +22,7 @@ setTimeout(() => {
     loading.classList.add("hidden");
     app.classList.remove("hidden");
   }, loadingDurationMs);
-}, 0);
+}, 6000);
 let socket = null,
   roomCode = "",
   playerId = "",
@@ -36,6 +36,7 @@ let socket = null,
   local = {
     x: 0,
     z: 8,
+    groundY: 0,
     yaw: 0,
     hp: 100,
     kills: 0,
@@ -63,6 +64,7 @@ let keys = {},
   jumpOffset = 0,
   baseFov = 76,
   mapObstacles = [],
+  mapHills = [],
   mapId = "forest",
   selectedMap =
     localStorage.getItem("ld-selected-map") === "desert" ? "desert" : "forest",
@@ -658,6 +660,7 @@ function connect(message) {
       isHost = m.isHost;
       mapId = m.mapId === "desert" ? "desert" : "forest";
       mapObstacles = m.obstacles || [];
+      mapHills = mapObstacles.filter((obstacle) => obstacle.type === "hill");
       renderMapChoice(mapId);
       local.x = m.spawn.x;
       local.z = m.spawn.z;
@@ -683,6 +686,7 @@ function connect(message) {
     if (m.type === "landed" && local.state === "ground") {
       local.x = m.x;
       local.z = m.z;
+      local.groundY = Number(m.groundY) || 0;
     }
     if (m.type === "state") {
       gameState = m;
@@ -795,11 +799,59 @@ function terrainHeightForHill(hill, x, z) {
 }
 function groundHeightAt(x, z) {
   let height = 0;
-  for (const hill of mapObstacles) {
-    if (hill.type === "hill")
-      height = Math.max(height, terrainHeightForHill(hill, x, z));
-  }
+  for (const hill of mapHills)
+    height = Math.max(height, terrainHeightForHill(hill, x, z));
   return height;
+}
+// Return the walkable top of a roof or large rock, if the point is on it.
+function raisedSurfaceAt(x, z) {
+  let best = null;
+  for (const o of mapObstacles) {
+    const base = groundHeightAt(o.x, o.z);
+    if (o.type === "house" || o.type === "hut") {
+      const dx = x - o.x,
+        dz = z - o.z;
+      const c = Math.cos(o.yaw || 0),
+        s = Math.sin(o.yaw || 0);
+      const lx = c * dx - s * dz,
+        lz = s * dx + c * dz;
+      if (Math.abs(lx) > o.w * 0.53 || Math.abs(lz) > o.w / 2 + 0.27) continue;
+      const wallH = o.h * 0.72;
+      const height =
+        base +
+        wallH +
+        o.w * 0.16 +
+        0.12 * Math.cos(0.48) +
+        (o.w * 0.245 - Math.abs(lx)) * Math.sin(0.48);
+      if (!best || height > best.height)
+        best = { height, base, type: "roof", obstacle: o };
+    } else if (o.type === "rock") {
+      const nx = (x - o.x) / (o.w * 0.48);
+      const nz = (z - o.z) / (o.w * 0.4);
+      const r2 = nx * nx + nz * nz;
+      if (r2 > 0.64) continue;
+      const height = base + o.h * (0.42 + 0.5 * Math.sqrt(1 - r2));
+      if (!best || height > best.height)
+        best = { height, base, type: "rock", obstacle: o };
+    }
+  }
+  return best;
+}
+// During descent, only land on raised geometry if the player came down onto it.
+function landingHeightAt(x, z, previousY) {
+  const terrain = groundHeightAt(x, z);
+  const raised = raisedSurfaceAt(x, z);
+  return raised && previousY >= raised.height - 0.25
+    ? Math.max(terrain, raised.height)
+    : terrain;
+}
+// Preserve an elevated support while the player walks across its top surface.
+function standingHeightAt(x, z, previousGroundY) {
+  const terrain = groundHeightAt(x, z);
+  const raised = raisedSurfaceAt(x, z);
+  return raised && previousGroundY > raised.base + 0.55
+    ? Math.max(terrain, raised.height)
+    : terrain;
 }
 function waterAt(x, z) {
   for (const water of mapObstacles) {
@@ -1314,14 +1366,25 @@ function isBlockedAt(x, z) {
     return true;
   const selfRadius = local.prone ? 1.15 : PLAYER_RADIUS;
   const obstacleRadius = local.prone ? 0.55 : PLAYER_RADIUS;
+  const support = local.groundY > 0.45 ? raisedSurfaceAt(x, z) : null;
   for (const o of mapObstacles) {
     if (o.solid === false) continue;
     if (o.type === "house" || o.type === "hut") {
+      const isAboveThisRoof =
+        local.groundY > groundHeightAt(o.x, o.z) + o.h * 0.72 + 0.1 &&
+        support?.type === "roof" &&
+        support.obstacle === o;
+      if (isAboveThisRoof) continue;
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
       continue;
     }
     const footprint = obstacleFootprintRadius(o);
     if (footprint !== null) {
+      const rockTop =
+        support?.type === "rock" &&
+        support.obstacle === o &&
+        local.groundY > support.base + o.h * 0.62;
+      if (rockTop) continue;
       if (Math.hypot(x - o.x, z - o.z) < footprint + obstacleRadius)
         return true;
       continue;
@@ -1390,7 +1453,10 @@ function initWorld() {
   sun.position.set(-15, 30, 12);
   scene.add(sun);
 
-  if (!mapObstacles.length) mapObstacles = gameState?.obstacles || [];
+  if (!mapObstacles.length) {
+    mapObstacles = gameState?.obstacles || [];
+    mapHills = mapObstacles.filter((obstacle) => obstacle.type === "hill");
+  }
   createGroundMesh(forest);
   addOutskirts(forest);
   addZoneBorder();
@@ -1558,20 +1624,27 @@ function renderPlayers(state) {
     lastEliminationId = event.id;
     const row = document.createElement("div");
     row.className = "kill-feed-row";
-    row.textContent = `${event.killerName} đã hạ ${event.victimName}`;
+    row.textContent = `${event.killerName} đã chịch ${event.victimName} đến chết`;
     $("#killFeed")?.prepend(row);
-    const timer = setTimeout(() => row.remove(), 5000);
+    const timer = setTimeout(() => row.remove(), 12000);
     killFeedTimers.push(timer);
     if (event.victimId === playerId) {
-      localEliminationMessage = `Bạn đã bị hạ bởi ${event.killerName}.`;
+      localEliminationMessage = `Bạn đã bị chịch đến chết bởi ${event.killerName}.`;
       $("#resultDetail").textContent = localEliminationMessage;
     }
     if (event.killerId === playerId) {
       const notice = $("#killNotice");
       if (notice) {
-        notice.textContent = `Bạn đã hạ ${event.victimName}.`;
+        notice.replaceChildren(document.createTextNode("Bạn "));
+        const action = document.createElement("span");
+        action.className = "kill-notice-action";
+        action.textContent = "đã chịch";
+        notice.append(
+          action,
+          document.createTextNode(` ${event.victimName} đến chết.`),
+        );
         notice.classList.remove("hidden");
-        setTimeout(() => notice.classList.add("hidden"), 3500);
+        setTimeout(() => notice.classList.add("hidden"), 7000);
       }
     }
   }
@@ -1582,6 +1655,7 @@ function renderPlayers(state) {
       local.hp = p.hp;
       local.kills = p.kills;
       local.placement = p.placement || 0;
+      local.groundY = Number(p.groundY) || 0;
       ammo = p.ammo;
       local.reserveAmmo = p.reserveAmmo;
       local.medkits = p.medkits || 0;
@@ -2911,9 +2985,11 @@ function deployChute(auto) {
   showLootToast(auto ? "TỰ ĐỘNG BUNG DÙ" : "ĐÃ BUNG DÙ");
 }
 // Đẩy người chơi ra khỏi cây / đá / tường nếu tiếp đất trúng chúng.
-function findFreeSpotLocal(x, z) {
+function findFreeSpotLocal(x, z, landingY = local.groundY) {
   x = clamp(x, -MAP_HALF + 1.5, MAP_HALF - 1.5);
   z = clamp(z, -MAP_HALF + 1.5, MAP_HALF - 1.5);
+  const raised = raisedSurfaceAt(x, z);
+  if (raised && landingY >= raised.height - 0.35) return { x, z };
   if (!isBlockedAt(x, z)) return { x, z };
   for (let r = 0.5; r <= 12; r += 0.5) {
     for (let k = 0; k < 16; k++) {
@@ -2926,9 +3002,10 @@ function findFreeSpotLocal(x, z) {
   return { x, z };
 }
 function landNow() {
-  const spot = findFreeSpotLocal(local.x, local.z);
+  const spot = findFreeSpotLocal(local.x, local.z, local.groundY);
   local.x = spot.x;
   local.z = spot.z;
+  local.groundY = standingHeightAt(local.x, local.z, local.groundY);
   stopLoop("wind", 0.6);
   setMode("ground");
   grounded = true;
@@ -2939,7 +3016,7 @@ function landNow() {
   camera.rotation.x = clamp(camera.rotation.x, -0.25, 0.25);
   camera.fov = baseFov;
   camera.updateProjectionMatrix();
-  send({ type: "land", x: local.x, z: local.z });
+  send({ type: "land", x: local.x, y: local.groundY, z: local.z });
   playLanding(null);
   showLootToast("ĐÃ TIẾP ĐẤT · CẦM SÚNG SẴN SÀNG");
 }
@@ -2990,12 +3067,19 @@ function updateAir(dt) {
   }
   local.x = clamp(local.x + airState.vx * dt, -MAP_HALF + 0.5, MAP_HALF - 0.5);
   local.z = clamp(local.z + airState.vz * dt, -MAP_HALF + 0.5, MAP_HALF - 0.5);
-  local.y -= airState.fall * dt;
-  const ground = groundHeightAt(local.x, local.z);
-  if (!chute && local.y - ground <= AIR.autoDeployAlt && airState.time > 0.4)
+  const previousY = local.y;
+  const approachGround = landingHeightAt(local.x, local.z, previousY);
+  if (
+    !chute &&
+    local.y - approachGround <= AIR.autoDeployAlt &&
+    airState.time > 0.4
+  )
     deployChute(true);
+  local.y -= airState.fall * dt;
+  const ground = landingHeightAt(local.x, local.z, previousY);
   if (local.y <= ground) {
     local.y = ground;
+    local.groundY = ground;
     camera.position.set(local.x, local.y + 1.6, local.z);
     landNow();
     return;
@@ -3193,17 +3277,34 @@ function drawFlightMap() {
     const y = random() * S;
     const r = 3 + random() * 15;
     ctx.fillStyle = forest
-      ? i % 2 ? "rgba(144,181,91,.18)" : "rgba(29,77,43,.17)"
-      : i % 2 ? "rgba(238,207,133,.2)" : "rgba(106,78,46,.12)";
+      ? i % 2
+        ? "rgba(144,181,91,.18)"
+        : "rgba(29,77,43,.17)"
+      : i % 2
+        ? "rgba(238,207,133,.2)"
+        : "rgba(106,78,46,.12)";
     ctx.beginPath();
-    ctx.ellipse(x, y, r, r * (0.42 + random() * 0.38), random() * Math.PI, 0, Math.PI * 2);
+    ctx.ellipse(
+      x,
+      y,
+      r,
+      r * (0.42 + random() * 0.38),
+      random() * Math.PI,
+      0,
+      Math.PI * 2,
+    );
     ctx.fill();
   }
   if (forest) {
     // Draw the same winding river and lake used by the forest level generator.
-    const riverZ = (x) => (-7 + Math.sin((x + 12 * MAP_SCALE) / (13 * MAP_SCALE)) * 13) * MAP_SCALE;
+    const riverZ = (x) =>
+      (-7 + Math.sin((x + 12 * MAP_SCALE) / (13 * MAP_SCALE)) * 13) * MAP_SCALE;
     ctx.lineCap = "round";
-    for (const [color, width] of [["#8a9b61", 15], ["#31899a", 9], ["#54b7b8", 3]]) {
+    for (const [color, width] of [
+      ["#8a9b61", 15],
+      ["#31899a", 9],
+      ["#54b7b8", 3],
+    ]) {
       ctx.strokeStyle = color;
       ctx.lineWidth = width;
       ctx.beginPath();
@@ -3221,7 +3322,8 @@ function drawFlightMap() {
   } else {
     // Curving contour bands represent the desert dunes from overhead.
     for (let band = 0; band < 7; band++) {
-      ctx.strokeStyle = band % 2 ? "rgba(245,219,156,.28)" : "rgba(110,81,48,.18)";
+      ctx.strokeStyle =
+        band % 2 ? "rgba(245,219,156,.28)" : "rgba(110,81,48,.18)";
       ctx.lineWidth = 1.4;
       ctx.beginPath();
       for (let i = 0; i <= 60; i++) {
@@ -3235,45 +3337,92 @@ function drawFlightMap() {
   }
   const terrain = mapObstacles || [];
   // Elevation contours are underneath buildings, trees and rocks.
-  for (const o of terrain) if (o.type === "hill") {
-    const cx = X(o.x), cy = Y(o.z), rx = Math.max(4, o.w * k * 0.52), ry = rx * 0.7;
-    ctx.fillStyle = forest ? "rgba(172,194,104,.42)" : "rgba(129,99,61,.42)";
-    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, o.yaw || 0, 0, Math.PI * 2); ctx.fill();
-    for (let ring = 0; ring < 3; ring++) {
-      ctx.strokeStyle = forest ? "rgba(218,226,153,.35)" : "rgba(230,199,139,.38)";
-      ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.ellipse(cx, cy, rx * (0.78 - ring * 0.18), ry * (0.78 - ring * 0.18), o.yaw || 0, 0, Math.PI * 2); ctx.stroke();
+  for (const o of terrain)
+    if (o.type === "hill") {
+      const cx = X(o.x),
+        cy = Y(o.z),
+        rx = Math.max(4, o.w * k * 0.52),
+        ry = rx * 0.7;
+      ctx.fillStyle = forest ? "rgba(172,194,104,.42)" : "rgba(129,99,61,.42)";
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx, ry, o.yaw || 0, 0, Math.PI * 2);
+      ctx.fill();
+      for (let ring = 0; ring < 3; ring++) {
+        ctx.strokeStyle = forest
+          ? "rgba(218,226,153,.35)"
+          : "rgba(230,199,139,.38)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.ellipse(
+          cx,
+          cy,
+          rx * (0.78 - ring * 0.18),
+          ry * (0.78 - ring * 0.18),
+          o.yaw || 0,
+          0,
+          Math.PI * 2,
+        );
+        ctx.stroke();
+      }
     }
-  }
   for (const o of terrain) {
-    const x = X(o.x), y = Y(o.z), size = Math.max(1.5, (o.w || 1) * k);
-    ctx.save(); ctx.translate(x, y); ctx.rotate(o.yaw || 0);
+    const x = X(o.x),
+      y = Y(o.z),
+      size = Math.max(1.5, (o.w || 1) * k);
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(o.yaw || 0);
     if (o.type === "house" || o.type === "hut") {
       ctx.fillStyle = o.type === "house" ? "#675443" : "#8b704b";
       ctx.fillRect(-size * 0.48, -size * 0.38, size * 0.96, size * 0.76);
-      ctx.strokeStyle = "#e4c895"; ctx.lineWidth = 0.8;
+      ctx.strokeStyle = "#e4c895";
+      ctx.lineWidth = 0.8;
       ctx.strokeRect(-size * 0.48, -size * 0.38, size * 0.96, size * 0.76);
-      ctx.fillStyle = "#302e28"; ctx.fillRect(-size * 0.08, size * 0.12, size * 0.16, size * 0.26);
+      ctx.fillStyle = "#302e28";
+      ctx.fillRect(-size * 0.08, size * 0.12, size * 0.16, size * 0.26);
     } else if (o.type === "tree") {
-      ctx.fillStyle = "#234d31"; ctx.beginPath(); ctx.arc(0, 0, size * 0.68, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "#528746"; ctx.beginPath(); ctx.arc(-size * 0.18, -size * 0.2, size * 0.37, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#234d31";
+      ctx.beginPath();
+      ctx.arc(0, 0, size * 0.68, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#528746";
+      ctx.beginPath();
+      ctx.arc(-size * 0.18, -size * 0.2, size * 0.37, 0, Math.PI * 2);
+      ctx.fill();
     } else if (o.type === "cactus" || o.type === "deadTree") {
-      ctx.strokeStyle = o.type === "cactus" ? "#41663d" : "#514b3d"; ctx.lineWidth = 1.3;
-      ctx.beginPath(); ctx.moveTo(0, size * 0.45); ctx.lineTo(0, -size * 0.5);
-      ctx.moveTo(0, 0); ctx.lineTo(-size * 0.35, -size * 0.18);
-      ctx.moveTo(0, size * 0.12); ctx.lineTo(size * 0.34, -size * 0.1); ctx.stroke();
+      ctx.strokeStyle = o.type === "cactus" ? "#41663d" : "#514b3d";
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.moveTo(0, size * 0.45);
+      ctx.lineTo(0, -size * 0.5);
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-size * 0.35, -size * 0.18);
+      ctx.moveTo(0, size * 0.12);
+      ctx.lineTo(size * 0.34, -size * 0.1);
+      ctx.stroke();
     } else if (o.type === "rock") {
       ctx.fillStyle = forest ? "#737a61" : "#75664e";
-      ctx.beginPath(); ctx.ellipse(0, 0, size * 0.62, size * 0.43, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,.2)"; ctx.lineWidth = 0.6; ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(0, 0, size * 0.62, size * 0.43, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,.2)";
+      ctx.lineWidth = 0.6;
+      ctx.stroke();
     }
     ctx.restore();
   }
   // A light coordinate grid and the border show the playable map limits.
-  ctx.strokeStyle = "rgba(236,239,209,.12)"; ctx.lineWidth = 0.7;
+  ctx.strokeStyle = "rgba(236,239,209,.12)";
+  ctx.lineWidth = 0.7;
   for (let n = -1; n <= 1; n++) {
-    ctx.beginPath(); ctx.moveTo(X(n * MAP_HALF / 2), 0); ctx.lineTo(X(n * MAP_HALF / 2), S); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, Y(n * MAP_HALF / 2)); ctx.lineTo(S, Y(n * MAP_HALF / 2)); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(X((n * MAP_HALF) / 2), 0);
+    ctx.lineTo(X((n * MAP_HALF) / 2), S);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, Y((n * MAP_HALF) / 2));
+    ctx.lineTo(S, Y((n * MAP_HALF) / 2));
+    ctx.stroke();
   }
   ctx.strokeStyle = forest ? "#c8f27a" : "#f3d38c";
   ctx.lineWidth = 2;
@@ -3884,7 +4033,7 @@ function frame() {
       local.swimDepth = 0;
       local.swimY = null;
       const targetHeight =
-        groundHeightAt(local.x, local.z) +
+        (local.groundY = standingHeightAt(local.x, local.z, local.groundY)) +
         (isProne ? PRONE_HEIGHT : isCrouching ? CROUCH_HEIGHT : STAND_HEIGHT);
       if (!grounded) {
         verticalSpeed -= 20 * dt;

@@ -312,7 +312,7 @@ function createLoot(room) {
 }
 function groundHeightAt(room, x, z) {
   let height = 0;
-  for (const hill of room.obstacles) {
+  for (const hill of room.hills || room.obstacles) {
     if (hill.type !== "hill") continue;
     const radius = hill.w / 2;
     const distanceSquared =
@@ -321,6 +321,45 @@ function groundHeightAt(room, x, z) {
     height = Math.max(height, hill.h * Math.pow(1 - distanceSquared, 1.4));
   }
   return height;
+}
+// Walkable upper surfaces: the pitched roof and the safe crown of large rocks.
+function raisedSurfaceAt(room, x, z) {
+  let best = null;
+  for (const o of room.obstacles) {
+    const base = groundHeightAt(room, o.x, o.z);
+    if (o.type === "house" || o.type === "hut") {
+      const dx = x - o.x, dz = z - o.z;
+      const c = Math.cos(o.yaw || 0), s = Math.sin(o.yaw || 0);
+      const lx = c * dx - s * dz, lz = s * dx + c * dz;
+      if (Math.abs(lx) > o.w * 0.53 || Math.abs(lz) > o.w / 2 + 0.27) continue;
+      const wallH = o.h * 0.72;
+      const height = base + wallH + o.w * 0.16 + 0.12 * Math.cos(0.48) +
+        (o.w * 0.245 - Math.abs(lx)) * Math.sin(0.48);
+      if (!best || height > best.height) best = { height, base, type: "roof", obstacle: o };
+    } else if (o.type === "rock") {
+      const nx = (x - o.x) / (o.w * 0.48);
+      const nz = (z - o.z) / (o.w * 0.4);
+      const r2 = nx * nx + nz * nz;
+      if (r2 > 0.64) continue;
+      const height = base + o.h * (0.42 + 0.5 * Math.sqrt(1 - r2));
+      if (!best || height > best.height) best = { height, base, type: "rock", obstacle: o };
+    }
+  }
+  return best;
+}
+function landingHeightAt(room, x, z, previousY) {
+  const terrain = groundHeightAt(room, x, z);
+  const raised = raisedSurfaceAt(room, x, z);
+  return raised && previousY >= raised.height - 0.25
+    ? Math.max(terrain, raised.height)
+    : terrain;
+}
+function standingHeightAt(room, x, z, previousGroundY) {
+  const terrain = groundHeightAt(room, x, z);
+  const raised = raisedSurfaceAt(room, x, z);
+  return raised && previousGroundY > raised.base + 0.55
+    ? Math.max(terrain, raised.height)
+    : terrain;
 }
 function waterAt(room, x, z) {
   for (const water of room.obstacles) {
@@ -380,14 +419,21 @@ function blockedPosition(room, x, z, ignoreId) {
   const mover = room.players.get(ignoreId);
   const moverRadius = mover?.prone ? 1.15 : PLAYER_RADIUS;
   const obstacleRadius = mover?.prone ? 0.55 : PLAYER_RADIUS;
+  const support = mover?.groundY > 0.45 ? raisedSurfaceAt(room, x, z) : null;
   for (const o of room.obstacles) {
     if (o.solid === false) continue;
     if (o.type === "house" || o.type === "hut") {
+      const moverIsOnRoof = mover && support?.type === "roof" && support.obstacle === o &&
+        mover.groundY > support.base + o.h * 0.72 + 0.1;
+      if (moverIsOnRoof) continue;
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
       continue;
     }
     const footprint = obstacleFootprintRadius(o);
     if (footprint !== null) {
+      const rockTop = o.type === "rock" && support?.type === "rock" &&
+        support.obstacle === o && mover.groundY > support.base + o.h * 0.62;
+      if (rockTop) continue;
       if (Math.hypot(x - o.x, z - o.z) < footprint + obstacleRadius)
         return true;
       continue;
@@ -490,7 +536,11 @@ function jumpPlayer(room, p) {
   p.lastAirAt = Date.now();
 }
 // Tìm chỗ trống gần nhất để không kẹt trong cây / đá / tường khi tiếp đất.
-function findFreeSpot(room, x, z, id) {
+function findFreeSpot(room, x, z, id, landingY = null) {
+  const roofOrRock = raisedSurfaceAt(room, x, z);
+  if (roofOrRock && Number.isFinite(landingY) &&
+      landingY >= roofOrRock.height - 0.35 && landingY <= roofOrRock.height + 2)
+    return { x, z };
   if (!blockedPosition(room, x, z, id)) return { x, z };
   for (let r = 0.5; r <= 12; r += 0.5) {
     for (let k = 0; k < 16; k++) {
@@ -566,13 +616,15 @@ wss.on("connection", (ws) => {
       if (!room) {
         const mapId = m.mapId === "desert" ? "desert" : "forest";
         const mapSeed = Math.floor(Math.random() * 0xffffffff);
+        const obstacles = createObstacles(mapSeed, mapId);
         room = {
           code,
           phase: "waiting",
           players: new Map(),
           mapSeed,
           mapId,
-          obstacles: createObstacles(mapSeed, mapId),
+          obstacles,
+          hills: obstacles.filter((obstacle) => obstacle.type === "hill"),
           crates: [],
           nextCrateId: 1,
           nextLootId: 1,
@@ -721,6 +773,11 @@ wss.on("connection", (ws) => {
       (p.state === "freefall" || p.state === "parachute")
     ) {
       if (p.y - groundHeightAt(room, p.x, p.z) > AIR.maxLandingHeight) return;
+      const reportedLandingY = Number(m.y);
+      const landingY = Number.isFinite(reportedLandingY) &&
+        Math.abs(reportedLandingY - p.y) <= 5
+        ? reportedLandingY
+        : p.y;
       let lx = Number(m.x);
       let lz = Number(m.z);
       if (
@@ -736,17 +793,18 @@ wss.on("connection", (ws) => {
         Math.max(-MAP_HALF + 1.5, Math.min(MAP_HALF - 1.5, lx)),
         Math.max(-MAP_HALF + 1.5, Math.min(MAP_HALF - 1.5, lz)),
         p.id,
+        landingY,
       );
       p.x = spot.x;
       p.z = spot.z;
-      p.groundY = groundHeightAt(room, p.x, p.z);
+      p.groundY = landingHeightAt(room, p.x, p.z, landingY);
       p.y = null;
       p.state = "ground";
       p.jumpY = 0;
       p.swimming = false;
       p.swimY = null;
       p.lastMoveAt = Date.now();
-      send(ws, { type: "landed", x: p.x, z: p.z });
+      send(ws, { type: "landed", x: p.x, z: p.z, groundY: p.groundY });
       broadcast(room);
       return;
     }
@@ -808,7 +866,7 @@ wss.on("connection", (ws) => {
         )
           p.z = nextZ;
       }
-      p.groundY = groundHeightAt(room, p.x, p.z);
+      p.groundY = standingHeightAt(room, p.x, p.z, p.groundY);
       const water = waterAt(room, p.x, p.z);
       if (water) {
         p.swimming = true;
