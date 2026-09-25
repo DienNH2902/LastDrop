@@ -124,7 +124,8 @@ let inMatch = false, // đã vào màn hình trận (phòng chờ trong map, má
   planeObject = null,
   envBlend = 0,
   airState = { vx: 0, vz: 0, fall: 0, time: 0 };
-const audioLoops = { plane: null, wind: null };
+const audioLoops = { plane: null, wind: null, weather: null };
+let weatherFx = null;
 // Track nguồn MP3, tự lặp ở các màn menu và dừng khi vào trận.
 const homeMusic = new Audio(
   "https://orangefreesounds.com/wp-content/uploads/2025/06/Deep-ambient-dramatic-background-music.mp3",
@@ -1415,8 +1416,12 @@ function initWorld() {
   host.innerHTML = "";
   const forest = mapId === "forest";
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(forest ? "#91b18a" : "#c5aa79");
-  scene.fog = new THREE.Fog(forest ? "#91b18a" : "#c5aa79", 96, 224);
+  scene.background = new THREE.Color(forest ? "#879c88" : "#ad9367");
+  scene.fog = new THREE.Fog(
+    forest ? "#879c88" : "#ad9367",
+    forest ? 32 : 8,
+    forest ? 125 : 40,
+  );
   baseFov = 76;
   const viewport = host.getBoundingClientRect();
   camera = new THREE.PerspectiveCamera(
@@ -1527,6 +1532,8 @@ function initWorld() {
   gun.visible = false; // phòng chờ / máy bay / đang nhảy dù: tay không, chỉ cầm súng sau khi tiếp đất
   camera.add(gun);
   scene.add(camera);
+  createWeather(forest);
+  startWeatherSound(forest ? "rain" : "sandstorm");
   planeObject = buildPlane();
   planeObject.visible = false;
   scene.add(planeObject);
@@ -2829,6 +2836,13 @@ function cleanupGame() {
   crateOpenId = null;
   stopLoop("plane", 0.05);
   stopLoop("wind", 0.05);
+  stopLoop("weather", 0.12);
+  if (weatherFx?.mesh) {
+    scene?.remove(weatherFx.mesh);
+    weatherFx.geometry.dispose();
+    weatherFx.material.dispose();
+  }
+  weatherFx = null;
   inMatch = false;
   plane = null;
   planeObject = null;
@@ -3232,6 +3246,79 @@ function updateRemoteMotion(dt) {
   }
 }
 // Trời xanh + sương mù xa khi ở trên cao; về màu đất và sương mù gần khi sắp chạm đất.
+function createWeather(forest) {
+  if (weatherFx?.mesh) {
+    scene?.remove(weatherFx.mesh);
+    weatherFx.geometry.dispose();
+    weatherFx.material.dispose();
+  }
+  const count = forest ? 1000 : 1450;
+  const itemSize = forest ? 6 : 3;
+  const positions = new Float32Array(count * itemSize);
+  const speed = new Float32Array(count);
+  const drift = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    const x = (Math.random() - 0.5) * 90;
+    const y = forest ? Math.random() * 48 - 12 : Math.random() * 36 - 12;
+    const z = (Math.random() - 0.5) * 90;
+    const n = i * itemSize;
+    positions[n] = x;
+    positions[n + 1] = y;
+    positions[n + 2] = z;
+    if (forest) {
+      positions[n + 3] = x + 0.18;
+      positions[n + 4] = y - 0.9;
+      positions[n + 5] = z + 0.12;
+    }
+    speed[i] = forest ? 32 + Math.random() * 20 : 5 + Math.random() * 17;
+    drift[i] = forest ? 1.5 + Math.random() * 2.5 : 0.4 + Math.random() * 1.3;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.attributes.position.setUsage(THREE.DynamicDrawUsage);
+  const material = forest
+    ? new THREE.LineBasicMaterial({ color: 0xc8d9dc, transparent: true, opacity: 0.38, depthWrite: false })
+    : new THREE.PointsMaterial({ color: 0xe0c79a, size: 0.12, transparent: true, opacity: 0.42, depthWrite: false, sizeAttenuation: true });
+  const mesh = forest ? new THREE.LineSegments(geometry, material) : new THREE.Points(geometry, material);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 2;
+  scene.add(mesh);
+  weatherFx = { forest, count, positions, speed, drift, geometry, material, mesh };
+}
+function updateWeather(dt) {
+  if (!weatherFx || !camera) return;
+  const { forest, count, positions, speed, drift, geometry, mesh } = weatherFx;
+  mesh.position.copy(camera.position);
+  for (let i = 0; i < count; i++) {
+    const step = i * (forest ? 6 : 3);
+    let x = positions[step], y = positions[step + 1], z = positions[step + 2];
+    if (forest) {
+      y -= speed[i] * dt;
+      x += drift[i] * dt;
+      if (y < -14) {
+        x = (Math.random() - 0.5) * 90;
+        y = 34 + Math.random() * 20;
+        z = (Math.random() - 0.5) * 90;
+      }
+      positions[step] = x;
+      positions[step + 1] = y;
+      positions[step + 2] = z;
+      positions[step + 3] = x + 0.18;
+      positions[step + 4] = y - 0.9;
+      positions[step + 5] = z + 0.12;
+    } else {
+      x += speed[i] * dt;
+      y += Math.sin(performance.now() * 0.0007 + i) * drift[i] * dt;
+      z += drift[i] * dt;
+      if (x > 48) x -= 96;
+      if (z > 48) z -= 96;
+      positions[step] = x;
+      positions[step + 1] = y;
+      positions[step + 2] = z;
+    }
+  }
+  geometry.attributes.position.needsUpdate = true;
+}
 function updateEnvironment(dt) {
   if (!scene || !camera) return;
   let target = 0;
@@ -3243,12 +3330,13 @@ function updateEnvironment(dt) {
       1,
     );
   envBlend += (target - envBlend) * Math.min(1, 4 * dt);
-  tmpColorA.set(mapId === "forest" ? "#91b18a" : "#c5aa79");
+  const forest = mapId === "forest";
+  tmpColorA.set(forest ? "#879c88" : "#ad9367");
   tmpColorB.set("#9cc9ea");
   scene.background.lerpColors(tmpColorA, tmpColorB, envBlend);
   scene.fog.color.copy(scene.background);
-  scene.fog.near = 96 + (400 - 96) * envBlend;
-  scene.fog.far = 224 + (1200 - 224) * envBlend;
+  scene.fog.near = (forest ? 32 : 8) + (forest ? 260 : 170) * envBlend;
+  scene.fog.far = (forest ? 125 : 40) + (forest ? 700 : 430) * envBlend;
   const far = envBlend > 0.02 ? 1300 : 400;
   if (camera.far !== far) {
     camera.far = far;
@@ -3803,6 +3891,12 @@ const sfxLevel = () =>
 function applyAudioSettings() {
   syncHomeMusic();
   setLoopGain(audioLoops.plane, 0.55 * sfxLevel(), 0.1);
+  if (audioLoops.weather)
+    setLoopGain(
+      audioLoops.weather,
+      (audioLoops.weather.kind === "rain" ? 0.2 : 0.25) * sfxLevel(),
+      0.12,
+    );
   if (audioLoops.wind) updateWind(local.state === "parachute");
 }
 syncPauseSettings();
@@ -3860,6 +3954,59 @@ function stopLoop(name, fade = 1) {
     },
     fade * 1000 + 250,
   );
+}
+function startWeatherSound(kind) {
+  if (audioLoops.weather?.kind === kind) return;
+  if (audioLoops.weather) stopLoop("weather", 0.08);
+  const ctx = ensureAudio();
+  const master = ctx.createGain();
+  master.gain.value = 0;
+  master.connect(ctx.destination);
+  const sources = [];
+  if (kind === "rain") {
+    const rain = ctx.createBufferSource();
+    rain.buffer = loopBuffer("white");
+    rain.loop = true;
+    const high = ctx.createBiquadFilter();
+    high.type = "highpass";
+    high.frequency.value = 700;
+    const low = ctx.createBiquadFilter();
+    low.type = "lowpass";
+    low.frequency.value = 7600;
+    rain.connect(high);
+    high.connect(low);
+    low.connect(master);
+    rain.start();
+    sources.push(rain);
+  } else {
+    const gustNoise = ctx.createBufferSource();
+    gustNoise.buffer = loopBuffer("brown");
+    gustNoise.loop = true;
+    const band = ctx.createBiquadFilter();
+    band.type = "bandpass";
+    band.frequency.value = 420;
+    band.Q.value = 0.55;
+    const gustGain = ctx.createGain();
+    gustGain.gain.value = 1.4;
+    const gustLayer = ctx.createGain();
+    gustLayer.gain.value = 0.9;
+    gustNoise.connect(band);
+    band.connect(gustGain);
+    gustGain.connect(gustLayer);
+    gustLayer.connect(master);
+    gustNoise.start();
+    const oscillator = ctx.createOscillator();
+    oscillator.type = "sine";
+    oscillator.frequency.value = 0.22;
+    const depth = ctx.createGain();
+    depth.gain.value = 0.16;
+    oscillator.connect(depth);
+    depth.connect(gustLayer.gain);
+    oscillator.start();
+    sources.push(gustNoise, oscillator);
+  }
+  audioLoops.weather = { kind, master, sources };
+  setLoopGain(audioLoops.weather, (kind === "rain" ? 0.2 : 0.25) * sfxLevel(), 0.8);
 }
 // Tiếng máy bay: tiếng ù trầm (brown noise) + hai dao động lệch tần số bị "băm" nhịp cánh quạt.
 function startPlaneSound() {
@@ -4057,6 +4204,7 @@ function frame() {
   else if (local.state === "freefall" || local.state === "parachute")
     updateAir(dt);
   updateEnvironment(dt);
+  updateWeather(dt);
   updateFlightHud();
   updateMatchClock();
   if (!paused && (local.state === "ground" || local.state === "lobby")) {
