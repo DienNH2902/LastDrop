@@ -142,7 +142,9 @@ const tmpColorB = new THREE.Color();
 const PICKUP_RADIUS = 2;
 const HEAL_DURATION_MS = 5000;
 const lootItems = new Map(); // id -> { id, type, x, z, amount, mesh, body }
+const lootCrates = new Map(); // Hòm đồ được đồng bộ từ server theo vị trí người chơi bị hạ.
 let backpackOpen = false,
+  crateOpenId = null,
   lootToastTimer = null,
   gunBusy = 0, // 0 = cầm súng bình thường, 1 = súng gập ngang (đang hồi máu)
   packLimits = { ammo: 210, medkits: 5 }; // sức chứa balo, server gửi lại khi bắt đầu trận
@@ -666,6 +668,7 @@ function connect(message) {
     if (m.type === "lootUpdate" && lootItems.has(m.id))
       lootItems.get(m.id).amount = m.amount;
     if (m.type === "lootRemoved") removeLootItem(m.id);
+    if (m.type === "lootAdded" && m.item) addLootItem(m.item);
     if (m.type === "toast") showLootToast(m.text);
     // Server sửa lại chỗ tiếp đất (ví dụ trúng cây / đá).
     if (m.type === "landed" && local.state === "ground") {
@@ -674,6 +677,7 @@ function connect(message) {
     }
     if (m.type === "state") {
       gameState = m;
+      syncLootCrates(m.crates || []);
       // Đồng bộ đồng hồ với server để máy bay / đếm ngược khớp giữa các máy.
       const offset = m.now - Date.now();
       serverOffset = serverOffsetReady
@@ -712,7 +716,13 @@ function connect(message) {
   };
 }
 function send(data) {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data));
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(data));
+    return true;
+  }
+  if (data.type === "dropItem" || data.type === "transferCrate")
+    showLootToast("MẤT KẾT NỐI VỚI SERVER");
+  return false;
 }
 function renderLobby() {
   if (!gameState) return;
@@ -1390,6 +1400,10 @@ function initWorld() {
     item.mesh = null;
     addLootMesh(item);
   }
+  for (const crate of lootCrates.values()) {
+    crate.mesh = null;
+    addCrateMesh(crate);
+  }
   addEventListener("resize", resizeWorld);
   requestAnimationFrame(frame);
 }
@@ -1791,6 +1805,78 @@ function removeLootItem(id) {
   disposeLootMesh(item);
   lootItems.delete(id);
 }
+function addLootItem(item) {
+  const previous = lootItems.get(item.id);
+  if (previous) disposeLootMesh(previous);
+  const entry = { ...item, mesh: null, body: null };
+  lootItems.set(entry.id, entry);
+  if (scene && renderer) addLootMesh(entry);
+}
+function syncLootCrates(crates) {
+  const liveIds = new Set(crates.map((crate) => crate.id));
+  for (const [id, crate] of lootCrates) {
+    if (liveIds.has(id)) continue;
+    disposeCrateMesh(crate);
+    lootCrates.delete(id);
+    if (crateOpenId === id) closeBackpack();
+  }
+  for (const data of crates) {
+    const crate = lootCrates.get(data.id);
+    if (crate) {
+      const contentsChanged =
+        crate.contents?.ammo !== data.contents?.ammo ||
+        crate.contents?.medkit !== data.contents?.medkit;
+      crate.x = data.x;
+      crate.z = data.z;
+      crate.contents = data.contents;
+      if (contentsChanged && backpackOpen && crateOpenId === crate.id)
+        renderBackpack();
+      continue;
+    }
+    const entry = { ...data, mesh: null };
+    lootCrates.set(entry.id, entry);
+    if (scene && renderer) addCrateMesh(entry);
+  }
+}
+function addCrateMesh(crate) {
+  if (!scene || crate.mesh) return;
+  const root = new THREE.Group();
+  const orange = makeMat("#e87520", 0.88);
+  const dark = makeMat("#49301d", 0.95);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.62, 0.72), orange);
+  body.position.y = 0.34;
+  root.add(body);
+  const lid = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.12, 0.78), makeMat("#ff922f", 0.8));
+  lid.position.y = 0.69;
+  root.add(lid);
+  for (const z of [-0.27, 0.27]) {
+    const strap = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.68, 0.8), dark);
+    strap.position.set(0, 0.35, z);
+    root.add(strap);
+  }
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.035, 1.25, 6), dark);
+  pole.position.set(-0.12, 1.27, 0);
+  root.add(pole);
+  const flag = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.58, 0.38),
+    new THREE.MeshBasicMaterial({ color: "#111111", side: THREE.DoubleSide }),
+  );
+  flag.position.set(0.18, 1.65, 0);
+  root.add(flag);
+  root.position.set(crate.x, groundHeightAt(crate.x, crate.z), crate.z);
+  scene.add(root);
+  crate.mesh = root;
+}
+function disposeCrateMesh(crate) {
+  if (!crate.mesh) return;
+  scene?.remove(crate.mesh);
+  crate.mesh.traverse((object) => {
+    object.geometry?.dispose();
+    if (Array.isArray(object.material)) object.material.forEach((mat) => mat.dispose());
+    else object.material?.dispose();
+  });
+  crate.mesh = null;
+}
 function disposeLootMesh(item) {
   if (!item.mesh) return;
   scene?.remove(item.mesh);
@@ -1901,11 +1987,35 @@ function nearestLoot() {
   }
   return best;
 }
+function nearestCrate() {
+  if (local.state !== "ground" || local.swimming) return null;
+  let best = null;
+  let bestDistance = 4.5;
+  for (const crate of lootCrates.values()) {
+    const distance = Math.hypot(crate.x - local.x, crate.z - local.z);
+    if (distance < bestDistance) {
+      best = crate;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
 function onInteract() {
+  // F is also the close key while the death crate is open.
+  if (backpackOpen && crateOpenId) {
+    closeBackpack();
+    return;
+  }
   if (local.state !== "ground") return; // chưa tiếp đất thì chưa nhặt được gì
   // F: đang hồi máu thì hủy hồi máu, ngược lại nhặt vật phẩm gần nhất.
   if (local.healing) {
     send({ type: "cancelHeal" });
+    return;
+  }
+  if (backpackOpen) return;
+  const crate = nearestCrate();
+  if (crate) {
+    openBackpack(crate.id);
     return;
   }
   if (!local.swimming && nearestLoot()) send({ type: "pickup" });
@@ -1925,7 +2035,7 @@ function installLootUi() {
     const style = document.createElement("style");
     style.id = "lootStyles";
     style.textContent = `
-#backpack{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(430px,92vw);pointer-events:auto;background:#171a14ed;border:1px solid #555b48;box-shadow:0 15px 60px #0009;padding:22px;color:#f3f3ed;font-family:'DM Mono',monospace;z-index:5}
+#backpack{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(760px,94vw);max-height:88vh;overflow:auto;pointer-events:auto;background:#171a14ed;border:1px solid #555b48;box-shadow:0 15px 60px #0009;padding:22px;color:#f3f3ed;font-family:'DM Mono',monospace;z-index:5}
 #backpack .bp-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px}
 #backpack .bp-head span{font:900 26px 'Barlow Condensed',Arial,sans-serif;letter-spacing:3px;color:#d6ff45}
 #backpack .bp-head small,#backpack .bp-foot{font-size:9px;letter-spacing:1px;color:#85897d}
@@ -1941,6 +2051,14 @@ function installLootUi() {
 #backpack .bp-usable:hover{border-color:#d6ff45;background:#d6ff4514}
 #backpack .bp-usable.empty{opacity:.45;cursor:not-allowed}
 #backpack .bp-usable.empty:hover{border-color:#373b31;background:none}
+#backpack .bp-row{flex-wrap:wrap}
+#backpack .bp-actions{display:flex;align-items:center;gap:6px;margin-left:auto}
+#backpack .bp-actions input{width:72px;padding:7px;background:#252920;border:1px solid #454b3d;color:#fff;font:12px 'DM Mono',monospace}
+#backpack .bp-actions button{padding:8px 10px;background:#d6ff45;color:#14170f;font:bold 10px 'DM Mono',monospace}
+#backpack .bp-actions button.secondary-action{background:#30352b;color:#f2f2e9;border:1px solid #555b48}
+#backpack .bp-actions button:disabled{opacity:.4;cursor:not-allowed}
+#backpack .bp-section{margin-top:16px;padding-top:12px;border-top:1px solid #454b3d}
+#backpack .bp-section h3{margin:0 0 8px;color:#ff922f;font:900 20px 'Barlow Condensed',Arial,sans-serif;letter-spacing:2px}
 #lootHud{position:absolute;left:50%;bottom:118px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;font-family:'DM Mono',monospace;text-shadow:0 1px 4px #000;z-index:4}
 #lootHud .lh-prompt{background:#111c;border:1px solid #d6ff4599;padding:8px 14px;font-size:12px;letter-spacing:1px;color:#fff}
 #lootHud .lh-prompt b{color:#d6ff45;margin-right:8px}
@@ -1954,15 +2072,47 @@ function installLootUi() {
   panel.id = "backpack";
   panel.className = "hidden";
   panel.innerHTML = `
-    <div class="bp-head"><span>BALO</span><small>TAB / ESC · ĐÓNG</small></div>
-    <div class="bp-row"><b>▮</b><div><strong>ĐẠN 5.56 MM</strong><small>ĐANG LẮP TRONG SÚNG: <span id="bpMag">30</span> / 30</small></div><span class="bp-count" id="bpAmmoCount">0</span></div>
-    <div class="bp-row bp-usable" id="bpMed"><b>✚</b><div><strong>BỊCH MÁU</strong><small>CHUỘT PHẢI ĐỂ DÙNG · +20 MÁU · 5 GIÂY</small></div><span class="bp-count" id="bpMedCount">0</span></div>
-    <div class="bp-foot">F · NHẶT VẬT PHẨM GẦN BẠN · F KHI ĐANG HỒI MÁU = HỦY</div>`;
+    <div class="bp-head"><span id="bpTitle">BALO</span><small>F / TAB / ESC · ĐÓNG</small></div>
+    <div class="bp-row"><b>▮</b><div><strong>ĐẠN 5.56 MM</strong><small>ĐANG LẮP TRONG SÚNG: <span id="bpMag">30</span> / 30</small></div><span class="bp-count" id="bpAmmoCount">0</span><div class="bp-actions"><input id="bpDropAmmo" type="number" min="1" value="1" aria-label="Số viên đạn muốn thả"><button data-drop-item="ammo">THẢ</button></div></div>
+    <div class="bp-row" id="bpMed"><b>✚</b><div><strong>BỊCH MÁU</strong><small>+20 MÁU · HỒI TRONG 5 GIÂY</small></div><span class="bp-count" id="bpMedCount">0</span><div class="bp-actions"><input id="bpDropMedkit" type="number" min="1" value="1" aria-label="Số bịch máu muốn thả"><button class="secondary-action" data-use-medkit>DÙNG</button><button data-drop-item="medkit">THẢ</button></div></div>
+    <div id="crateSection" class="bp-section hidden"><h3>HÒM TIẾP TẾ</h3><div id="crateRows"></div></div>
+    <div class="bp-foot">F · MỞ HÒM / NHẶT ĐỒ · NHẬP SỐ LƯỢNG ĐỂ THẢ HOẶC LẤY ĐỒ</div>`;
   $(".hud").append(panel);
-  $("#bpMed").addEventListener("contextmenu", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    useMedkit();
+  panel.addEventListener("click", (event) => {
+    const useButton = event.target.closest("[data-use-medkit]");
+    if (useButton) {
+      useMedkit();
+      return;
+    }
+    const dropButton = event.target.closest("[data-drop-item]");
+    if (dropButton) {
+      const type = dropButton.dataset.dropItem;
+      const input = $(type === "ammo" ? "#bpDropAmmo" : "#bpDropMedkit");
+      const amount = Math.floor(Number(input.value));
+      const owned = type === "ammo" ? (local.reserveAmmo || 0) : (local.medkits || 0);
+      if (!Number.isFinite(amount) || amount <= 0 || amount > owned) {
+        showLootToast(`NHẬP SỐ LƯỢNG TỪ 1 ĐẾN ${owned}`);
+        return;
+      }
+      send({ type: "dropItem", itemType: type, amount });
+      return;
+    }
+    const takeButton = event.target.closest("[data-take-item]");
+    if (takeButton && crateOpenId) {
+      const type = takeButton.dataset.takeItem;
+      const amount = Math.floor(Number($(`#crateAmount-${type}`)?.value));
+      const crate = lootCrates.get(crateOpenId);
+      const capacity = type === "ammo"
+        ? packLimits.ammo - (local.reserveAmmo || 0)
+        : packLimits.medkits - (local.medkits || 0);
+      const available = crate?.contents?.[type] || 0;
+      if (!Number.isFinite(amount) || amount <= 0 || amount > Math.min(capacity, available)) {
+        showLootToast("SỐ LƯỢNG KHÔNG HỢP LỆ HOẶC BALO ĐÃ ĐẦY");
+        return;
+      }
+      if (send({ type: "transferCrate", crateId: crateOpenId, itemType: type, amount }))
+        showLootToast("ĐANG LẤY VẬT PHẨM...");
+    }
   });
   const hud = document.createElement("div");
   hud.id = "lootHud";
@@ -1971,6 +2121,9 @@ function installLootUi() {
 }
 function renderBackpack() {
   if (!$("#backpack")) return;
+  const enteredAmounts = new Map(
+    [...$("#backpack").querySelectorAll("input[type=number]")].map((input) => [input.id, input.value]),
+  );
   $("#bpAmmoCount").innerHTML =
     `${local.reserveAmmo ?? 0}<small>/${packLimits.ammo}</small>`;
   $("#bpMag").textContent = ammo;
@@ -1978,9 +2131,45 @@ function renderBackpack() {
     `${local.medkits || 0}<small>/${packLimits.medkits}</small>`;
   $("#bpAmmoCount").classList.toggle("full", !packHasRoom("ammo"));
   $("#bpMedCount").classList.toggle("full", !packHasRoom("medkit"));
-  $("#bpMed").classList.toggle("empty", !(local.medkits > 0));
+  const ammoDrop = $("#bpDropAmmo");
+  const medkitDrop = $("#bpDropMedkit");
+  for (const [input, count] of [[ammoDrop, local.reserveAmmo || 0], [medkitDrop, local.medkits || 0]]) {
+    input.max = count;
+    input.disabled = count <= 0;
+    const nextValue = String(Math.min(count, Math.max(1, Number(enteredAmounts.get(input.id) || 1))));
+    if (input.value !== nextValue) input.value = nextValue;
+  }
+  const crateSection = $("#crateSection");
+  const crateRows = $("#crateRows");
+  const crate = crateOpenId ? lootCrates.get(crateOpenId) : null;
+  $("#bpTitle").textContent = crate ? "BALO / HÒM TIẾP TẾ" : "BALO";
+  crateSection.classList.toggle("hidden", !crate);
+  if (!crate) {
+    if (crateRows.innerHTML) crateRows.innerHTML = "";
+    delete crateRows.dataset.renderKey;
+    return;
+  }
+  const specs = [
+    { type: "ammo", name: "ĐẠN 5.56 MM", space: packLimits.ammo - (local.reserveAmmo || 0) },
+    { type: "medkit", name: "BỊCH MÁU", space: packLimits.medkits - (local.medkits || 0) },
+  ];
+  const renderKey = JSON.stringify({
+    id: crate.id,
+    items: specs.map(({ type, space }) => [type, crate.contents?.[type] || 0, space]),
+  });
+  // State snapshots arrive repeatedly. Keep the same buttons/inputs in the DOM
+  // between actual inventory changes so a click cannot be interrupted mid-flight.
+  if (crateRows.dataset.renderKey === renderKey) return;
+  crateRows.innerHTML = specs.map(({ type, name, space }) => {
+    const available = crate.contents?.[type] || 0;
+    const maximum = Math.max(0, Math.min(available, space));
+    const inputId = `crateAmount-${type}`;
+    const desired = Math.max(1, Number(enteredAmounts.get(inputId) || maximum || 1));
+    return `<div class="bp-row"><b>${type === "ammo" ? "▮" : "✚"}</b><div><strong>${name}</strong><small>CÒN TRONG HÒM: ${available}</small></div><span class="bp-count">${available}</span><div class="bp-actions"><input id="${inputId}" type="number" min="1" max="${maximum}" value="${Math.min(maximum, desired)}" ${maximum <= 0 ? "disabled" : ""} aria-label="Số lượng muốn lấy"><button data-take-item="${type}" ${maximum <= 0 ? "disabled" : ""}>LẤY</button></div></div>`;
+  }).join("");
+  crateRows.dataset.renderKey = renderKey;
 }
-function openBackpack() {
+function openBackpack(forCrateId = null) {
   if (
     backpackOpen ||
     paused ||
@@ -1989,6 +2178,7 @@ function openBackpack() {
   )
     return;
   backpackOpen = true;
+  crateOpenId = forCrateId;
   stopFiring();
   if (scoped) setScope(false);
   renderBackpack();
@@ -1999,6 +2189,7 @@ function openBackpack() {
 function closeBackpack(relock = true) {
   if (!backpackOpen) return;
   backpackOpen = false;
+  crateOpenId = null;
   $("#backpack")?.classList.add("hidden");
   if (relock && !paused && $("#game").classList.contains("active")) {
     renderer?.domElement.requestPointerLock?.();
@@ -2069,7 +2260,11 @@ function updateLootHud(dt) {
   }
   heal.classList.add("hidden");
   const near = nearestLoot();
-  if (near) {
+  const crate = nearestCrate();
+  if (crate) {
+    prompt.innerHTML = `<b>F</b>MỞ HÒM TIẾP TẾ`;
+    prompt.classList.remove("hidden");
+  } else if (near) {
     prompt.innerHTML = packHasRoom(near.type)
       ? `<b>F</b>NHẶT ${lootLabel(near)}`
       : `<b>✕</b>BALO ĐẦY · KHÔNG NHẶT ĐƯỢC ${near.type === "ammo" ? "ĐẠN" : "BỊCH MÁU"}`;
@@ -2344,6 +2539,9 @@ function cleanupGame() {
   closeBackpack(false);
   for (const item of lootItems.values()) disposeLootMesh(item);
   lootItems.clear();
+  for (const crate of lootCrates.values()) disposeCrateMesh(crate);
+  lootCrates.clear();
+  crateOpenId = null;
   stopLoop("plane", 0.05);
   stopLoop("wind", 0.05);
   inMatch = false;

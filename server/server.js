@@ -19,6 +19,9 @@ const rooms = new Map();
 const MAP_HALF = 100; // map 200 × 200 m: gấp 4 lần diện tích bản đồ cũ
 const MAP_SCALE = MAP_HALF / 50;
 const COUNTDOWN_MS = 5000;
+// Trận không kết thúc ngay khi hạ người chơi cuối cùng — cho người thắng vài
+// giây để nhặt hòm tiếp tế vừa rơi ra trước khi chuyển sang màn kết quả.
+const MATCH_END_DELAY_MS = 3000;
 const STAGING_TIMEOUT_MS = 20000; // chờ tối đa bấy nhiêu ms cho máy chậm dựng map
 const PLANE_ALT = 200; // độ cao máy bay (m)
 const PLANE_SPEED = 12; // m/s
@@ -32,7 +35,12 @@ const PLANE_SEATS = [
   [-0.9, -1.0],
 ];
 // Giới hạn tốc độ để server chặn gian lận thô (client dùng các số nhỏ hơn một chút).
-const AIR = { freefallHoriz: 20, chuteHoriz: 9, maxFall: 55, maxLandingHeight: 40 };
+const AIR = {
+  freefallHoriz: 20,
+  chuteHoriz: 9,
+  maxFall: 55,
+  maxLandingHeight: 40,
+};
 const isGrounded = (p) => p.state === "lobby" || p.state === "ground";
 // Đi lại: đứng chờ trong map (staging/countdown) hoặc đã tiếp đất.
 const canWalk = (room, p) =>
@@ -92,6 +100,7 @@ const snapshot = (room) => ({
   plane: room.plane || null,
   mapSeed: room.mapSeed,
   mapId: room.mapId,
+  crates: room.crates || [],
   lastHit: room.lastHit || null,
   players: [...room.players.values()].map((p) => ({
     id: p.id,
@@ -194,7 +203,8 @@ function createObstacles(seed, mapId) {
   }
   const overlapsWater = (x, z, radius) =>
     forest &&
-    (Math.hypot(x - 22 * MAP_SCALE, z + 3 * MAP_SCALE) < radius + 11 * MAP_SCALE ||
+    (Math.hypot(x - 22 * MAP_SCALE, z + 3 * MAP_SCALE) <
+      radius + 11 * MAP_SCALE ||
       Array.from({ length: 10 }, (_, i) => (-45 + i * 10) * MAP_SCALE).some(
         (rx) => Math.hypot(x - rx, z - riverZ(rx)) < radius + 3,
       ));
@@ -357,9 +367,12 @@ function obstacleFootprintRadius(o) {
 }
 function blockedPosition(room, x, z, ignoreId) {
   if (
-    x < -MAP_HALF + 1 || x > MAP_HALF - 1 ||
-    z < -MAP_HALF + 1 || z > MAP_HALF - 1
-  ) return true;
+    x < -MAP_HALF + 1 ||
+    x > MAP_HALF - 1 ||
+    z < -MAP_HALF + 1 ||
+    z > MAP_HALF - 1
+  )
+    return true;
   const mover = room.players.get(ignoreId);
   const moverRadius = mover?.prone ? 1.15 : PLAYER_RADIUS;
   const obstacleRadius = mover?.prone ? 0.55 : PLAYER_RADIUS;
@@ -440,11 +453,14 @@ function seatWorldPosition(plane, seat, t) {
   const s = Math.sin(yaw);
   return { x: px + lx * c + lz * s, z: pz - lx * s + lz * c };
 }
-const clampToMap = (v) => Math.max(-MAP_HALF + 0.5, Math.min(MAP_HALF - 0.5, v));
+const clampToMap = (v) =>
+  Math.max(-MAP_HALF + 0.5, Math.min(MAP_HALF - 0.5, v));
 function startPlane(room) {
   room.phase = "plane";
   room.plane = { ...createFlight(), startedAt: Date.now() };
   room.loot = createLoot(room);
+  room.nextLootId =
+    Math.max(0, ...room.loot.map((item) => Number(item.id) || 0)) + 1;
   let seat = 0;
   for (const p of room.players.values()) {
     p.state = "plane";
@@ -517,6 +533,13 @@ function tickRoom(room) {
       changed = true;
     }
     if (changed) broadcast(room);
+    return;
+  }
+  // Người sống sót cuối cùng vẫn "playing" thêm MATCH_END_DELAY_MS để có thời
+  // gian nhặt hòm tiếp tế của đối thủ vừa bị hạ trước khi trận thật sự kết thúc.
+  if (room.phase === "playing" && room.finishAt && now >= room.finishAt) {
+    room.phase = "finished";
+    broadcast(room);
   }
 }
 wss.on("connection", (ws) => {
@@ -544,6 +567,9 @@ wss.on("connection", (ws) => {
           mapSeed,
           mapId,
           obstacles: createObstacles(mapSeed, mapId),
+          crates: [],
+          nextCrateId: 1,
+          nextLootId: 1,
         };
         rooms.set(code, room);
       }
@@ -610,6 +636,7 @@ wss.on("connection", (ws) => {
       room.phase = "staging";
       room.lastHit = null;
       room.loot = [];
+      room.crates = [];
       room.stagingStartedAt = Date.now();
       for (const q of room.players.values()) {
         q.state = "lobby";
@@ -650,7 +677,10 @@ wss.on("connection", (ws) => {
       (p.state === "freefall" || p.state === "parachute")
     ) {
       const now = Date.now();
-      const elapsed = Math.max(0.01, Math.min(0.25, (now - (p.lastAirAt || now)) / 1000));
+      const elapsed = Math.max(
+        0.01,
+        Math.min(0.25, (now - (p.lastAirAt || now)) / 1000),
+      );
       p.lastAirAt = now;
       const cap = p.state === "parachute" ? AIR.chuteHoriz : AIR.freefallHoriz;
       let dx = Number(m.x) - p.x;
@@ -846,6 +876,80 @@ wss.on("connection", (ws) => {
             (p.medkits >= MAX_MEDKITS ? " · BALO ĐẦY BỊCH MÁU" : ""),
         });
       }
+      broadcast(room);
+      return;
+    }
+    if (m.type === "transferCrate") {
+      if (!canFight(room, p))
+        return send(ws, {
+          type: "toast",
+          text: "CHỈ CÓ THỂ LẤY ĐỒ KHI ĐANG CHƠI",
+        });
+      if (p.swimming)
+        return send(ws, {
+          type: "toast",
+          text: "KHÔNG THỂ LẤY ĐỒ KHI ĐANG BƠI",
+        });
+      const crate = (room.crates || []).find((item) => item.id === m.crateId);
+      const type = m.itemType === "medkit" ? "medkit" : "ammo";
+      const requested = Math.floor(Number(m.amount));
+      if (!crate)
+        return send(ws, { type: "toast", text: "HÒM ĐỒ KHÔNG CÒN TỒN TẠI" });
+      if (Math.hypot(crate.x - p.x, crate.z - p.z) > 5)
+        return send(ws, { type: "toast", text: "HÃY ĐẾN GẦN HÒM ĐỒ HƠN" });
+      if (!Number.isFinite(requested) || requested <= 0)
+        return send(ws, { type: "toast", text: "SỐ LƯỢNG KHÔNG HỢP LỆ" });
+      const space =
+        type === "ammo"
+          ? MAX_RESERVE_AMMO - p.reserveAmmo
+          : MAX_MEDKITS - (p.medkits || 0);
+      const amount = Math.min(requested, crate.contents[type] || 0, space);
+      if (amount <= 0)
+        return send(ws, { type: "toast", text: "KHÔNG ĐỦ CHỖ TRONG BALO" });
+      if (type === "ammo") p.reserveAmmo += amount;
+      else p.medkits = (p.medkits || 0) + amount;
+      crate.contents[type] -= amount;
+      send(ws, {
+        type: "toast",
+        text: `ĐÃ LẤY ${amount} ${type === "ammo" ? "VIÊN ĐẠN" : "BỊCH MÁU"}`,
+      });
+      if (!crate.contents.ammo && !crate.contents.medkit)
+        room.crates = room.crates.filter((item) => item !== crate);
+      broadcast(room);
+      return;
+    }
+    if (m.type === "dropItem") {
+      if (!canFight(room, p))
+        return send(ws, {
+          type: "toast",
+          text: "CHỈ CÓ THỂ THẢ ĐỒ KHI ĐANG CHƠI",
+        });
+      if (p.swimming)
+        return send(ws, {
+          type: "toast",
+          text: "KHÔNG THỂ THẢ ĐỒ KHI ĐANG BƠI",
+        });
+      const type = m.itemType === "medkit" ? "medkit" : "ammo";
+      const requested = Math.floor(Number(m.amount));
+      const owned = type === "ammo" ? p.reserveAmmo : p.medkits || 0;
+      if (!Number.isFinite(requested) || requested <= 0 || requested > owned)
+        return send(ws, { type: "toast", text: "SỐ LƯỢNG KHÔNG HỢP LỆ" });
+      if (type === "ammo") p.reserveAmmo -= requested;
+      else p.medkits -= requested;
+      const dropped = {
+        id: room.nextLootId++,
+        type,
+        x: p.x,
+        z: p.z,
+        amount: requested,
+      };
+      room.loot ||= [];
+      room.loot.push(dropped);
+      broadcastRaw(room, { type: "lootAdded", item: dropped });
+      send(ws, {
+        type: "toast",
+        text: `ĐÃ THẢ ${requested} ${type === "ammo" ? "VIÊN ĐẠN" : "BỊCH MÁU"}`,
+      });
       broadcast(room);
       return;
     }
@@ -1200,16 +1304,30 @@ wss.on("connection", (ws) => {
         if (!target.hp) {
           target.alive = false;
           p.kills++;
+          room.crates ||= [];
+          room.crates.push({
+            id: `crate-${room.nextCrateId++}`,
+            x: target.x,
+            z: target.z,
+            contents: {
+              ammo: (target.reserveAmmo || 0) + (target.ammo || 0),
+              medkit: target.medkits || 0,
+            },
+          });
         }
       }
-      // End the round as soon as only one survivor remains, so the winner
-      // receives the same finished state as the eliminated players.
+      // Không kết thúc trận ngay: giữ phase "playing" thêm vài giây để người
+      // thắng còn cơ hội nhặt hòm tiếp tế vừa rơi ra từ đối thủ cuối cùng.
       if (
         target &&
         !target.alive &&
         [...room.players.values()].filter((player) => player.alive).length <= 1
       ) {
-        room.phase = "finished";
+        room.finishAt = Date.now() + MATCH_END_DELAY_MS;
+        send(ws, {
+          type: "toast",
+          text: `CHIẾN THẮNG! TRANH THỦ NHẶT HÒM ĐỒ — VỀ SẢNH SAU ${Math.round(MATCH_END_DELAY_MS / 1000)}S`,
+        });
       }
       broadcast(room);
       return;
@@ -1221,8 +1339,7 @@ wss.on("connection", (ws) => {
       if (!room.players.size) {
         clearInterval(room.timer);
         rooms.delete(room.code);
-      }
-      else broadcast(room);
+      } else broadcast(room);
     }
   });
 });
