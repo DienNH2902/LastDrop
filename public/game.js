@@ -1861,6 +1861,8 @@ function packHasRoom(type) {
     : (local.medkits || 0) < packLimits.medkits;
 }
 function nearestLoot() {
+  // Vật phẩm chỉ nhặt được sau khi tiếp đất và không đang bơi.
+  if (local.state !== "ground" || local.swimming) return null;
   let best = null;
   let bestDistance = PICKUP_RADIUS;
   for (const item of lootItems.values()) {
@@ -2039,7 +2041,7 @@ function updateLootHud(dt) {
     return;
   }
   heal.classList.add("hidden");
-  const near = local.swimming ? null : nearestLoot();
+  const near = nearestLoot();
   if (near) {
     prompt.innerHTML = packHasRoom(near.type)
       ? `<b>F</b>NHẶT ${lootLabel(near)}`
