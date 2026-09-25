@@ -32,7 +32,7 @@
   <div id="app" class="hidden">
     <header>
       <div class="brand"><img src="/logo.svg"><span>LAST DROP<small>ARENA / SEASON 01</small></span></div>
-      <div id="status" class="status">● OFFLINE</div><button class="icon-btn" id="soundToggle"
+      <div id="status" class="status">● ONLINE</div><button class="icon-btn" id="soundToggle"
         title="Bật/tắt âm thanh">♫</button>
     </header>
     <main>
@@ -40,7 +40,7 @@
         <div class="hero">
           <div class="eyebrow">SURVIVE THE LAST DROP</div>
           <h1>CHỈ CÒN<br><em>MỘT NGƯỜI.</em></h1>
-          <p>Đấu trường góc nhìn thứ nhất dành cho 4–5 người.<br>Lập đội, nhặt vũ khí, trở thành người sống sót cuối
+          <p>Đấu trường góc nhìn thứ nhất dành cho 4–5 người.<br>Sinh tồn, nhặt vật phẩm, trở thành người sống sót cuối
             cùng.</p><label class="home-player-name">TÊN NGƯỜI CHƠI<input id="nameInput" value="Rookie" maxlength="18"
               autocomplete="nickname" placeholder="Nhập tên trước khi vào phòng"></label>
           <div class="actions"><button class="primary" id="createBtn">TẠO PHÒNG <b>→</b></button>
@@ -72,8 +72,8 @@
           <div class="room-code">MÃ PHÒNG <strong id="roomCode">------</strong><button id="copyCode">SAO CHÉP</button>
           </div>
           <div class="slots" id="slots"></div>
-          <div class="lobby-footer"><span id="lobbyHint">Đang đợi đồng đội tham gia...</span><button id="startBtn"
-              class="primary">BẮT ĐẦU TRẬN <b>→</b></button></div>
+          <div class="lobby-footer"><span id="lobbyHint">Đang đợi đồng đội tham gia...</span><div class="lobby-actions"><button id="leaveLobbyBtn" class="secondary">RỜI PHÒNG</button><button id="startBtn"
+              class="primary">BẮT ĐẦU TRẬN <b>→</b></button></div></div>
         </div>
       </section>
       <section id="settings" class="screen">
@@ -143,8 +143,8 @@
             <div id="phaseBig"></div>
             <p id="phaseSub"></p>
           </div>
-          <div id="flightHud" class="flight-hud hidden"><canvas id="flightMap" width="132" height="132"></canvas>
-            <div class="flight-info"><b id="flightState"></b>
+          <div id="flightHud" class="flight-hud hidden"><div class="minimap"><small>MINIMAP · TOP-DOWN</small><canvas id="flightMap" width="256" height="256"></canvas></div>
+            <div class="flight-info hidden" id="flightInfo"><b id="flightState"></b>
               <div id="flightAlt"></div>
               <div id="flightHint" class="hint"></div>
             </div>
@@ -156,6 +156,8 @@
             <div id="hudRoom">ROOM ------</div>
           </div>
           <div class="feed" id="feed"></div>
+          <div class="kill-feed" id="killFeed" aria-live="polite"></div>
+          <div class="kill-notice hidden" id="killNotice"></div>
           <div class="crosshair"><i></i><i></i><i></i><i></i><b></b></div>
           <div id="scopeOverlay" class="scope-overlay hidden">
             <div class="scope-reticle">＋</div><small>RIGHT CLICK · THOÁT ỐNG NGẮM</small>

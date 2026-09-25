@@ -100,6 +100,8 @@ const snapshot = (room) => ({
   plane: room.plane || null,
   mapSeed: room.mapSeed,
   mapId: room.mapId,
+  hostId: [...room.players.keys()][0] || null,
+  lastElimination: room.lastElimination || null,
   crates: room.crates || [],
   lastHit: room.lastHit || null,
   players: [...room.players.values()].map((p) => ({
@@ -117,6 +119,7 @@ const snapshot = (room) => ({
     yaw: p.yaw,
     hp: p.hp,
     kills: p.kills,
+    placement: p.placement || 0,
     alive: p.alive,
     crouching: p.crouching,
     prone: p.prone,
@@ -133,7 +136,8 @@ const snapshot = (room) => ({
     shooting: Date.now() - (p.lastShotAt || 0) < 150,
   })),
   alive: [...room.players.values()].filter((p) => p.alive).length,
-  total: room.players.size,
+  // Keep the round denominator fixed even if a disconnected player is removed.
+  total: room.matchTotal ?? room.players.size,
 });
 function broadcast(room) {
   const data = JSON.stringify(snapshot(room));
@@ -538,6 +542,8 @@ function tickRoom(room) {
   // Người sống sót cuối cùng vẫn "playing" thêm MATCH_END_DELAY_MS để có thời
   // gian nhặt hòm tiếp tế của đối thủ vừa bị hạ trước khi trận thật sự kết thúc.
   if (room.phase === "playing" && room.finishAt && now >= room.finishAt) {
+    const winner = [...room.players.values()].find((player) => player.alive);
+    if (winner) winner.placement = 1;
     room.phase = "finished";
     broadcast(room);
   }
@@ -558,7 +564,7 @@ wss.on("connection", (ws) => {
       if (m.type === "join" && !room)
         return send(ws, { type: "error", message: "Không tìm thấy phòng." });
       if (!room) {
-        const mapId = m.mapId === "forest" ? "forest" : "desert";
+        const mapId = m.mapId === "desert" ? "desert" : "forest";
         const mapSeed = Math.floor(Math.random() * 0xffffffff);
         room = {
           code,
@@ -595,6 +601,7 @@ wss.on("connection", (ws) => {
         yaw: 0,
         hp: 100,
         kills: 0,
+        placement: 0,
         alive: true,
         crouching: false,
         prone: false,
@@ -634,13 +641,17 @@ wss.on("connection", (ws) => {
     ) {
       // Cả phòng vào map chờ (tay không, không có vật phẩm). Loot chỉ sinh ra khi lên máy bay.
       room.phase = "staging";
+      room.matchTotal = room.players.size;
       room.lastHit = null;
+      room.lastElimination = null;
+      room.eliminationSequence = 0;
       room.loot = [];
       room.crates = [];
       room.stagingStartedAt = Date.now();
       for (const q of room.players.values()) {
         q.state = "lobby";
         q.ready = false;
+        q.placement = 0;
       }
       room.timer = setInterval(() => tickRoom(room), 100);
       broadcast(room);
@@ -820,18 +831,10 @@ wss.on("connection", (ws) => {
       return;
     }
     if (m.type === "pickup" && canFight(room, p)) {
-      // F: nhặt vật phẩm gần nhất trong bán kính PICKUP_RADIUS (đang hồi máu thì F là hủy hồi máu).
+      // The client sends the item targeted by the crosshair; validate that exact item here.
       if (p.healingUntil > Date.now() || p.swimming) return;
-      let best = null;
-      let bestDistance = PICKUP_RADIUS;
-      for (const item of room.loot || []) {
-        const d = Math.hypot(item.x - p.x, item.z - p.z);
-        if (d < bestDistance) {
-          best = item;
-          bestDistance = d;
-        }
-      }
-      if (!best) return;
+      const best = (room.loot || []).find((item) => item.id === m.itemId);
+      if (!best || Math.hypot(best.x - p.x, best.z - p.z) > PICKUP_RADIUS) return;
       if (best.type === "ammo") {
         const space = MAX_RESERVE_AMMO - p.reserveAmmo;
         if (space <= 0)
@@ -1303,7 +1306,18 @@ wss.on("connection", (ws) => {
         target.hp = Math.max(0, target.hp - (targetPart === "head" ? 70 : 10));
         if (!target.hp) {
           target.alive = false;
+          // Place eliminated players by elimination order; the last survivor is first.
+          target.placement =
+            [...room.players.values()].filter((player) => player.alive).length + 1;
           p.kills++;
+          room.eliminationSequence = (room.eliminationSequence || 0) + 1;
+          room.lastElimination = {
+            id: room.eliminationSequence,
+            victimId: target.id,
+            victimName: target.name,
+            killerId: p.id,
+            killerName: p.name,
+          };
           room.crates ||= [];
           room.crates.push({
             id: `crate-${room.nextCrateId++}`,

@@ -39,6 +39,7 @@ let socket = null,
     yaw: 0,
     hp: 100,
     kills: 0,
+    placement: 0,
     crouching: false,
     jumping: false,
     swimming: false,
@@ -62,16 +63,20 @@ let keys = {},
   jumpOffset = 0,
   baseFov = 76,
   mapObstacles = [],
-  mapId = "desert",
+  mapId = "forest",
   selectedMap =
-    localStorage.getItem("ld-selected-map") === "forest" ? "forest" : "desert",
+    localStorage.getItem("ld-selected-map") === "desert" ? "desert" : "forest",
   triggerHeld = false,
   fireInterval = null,
   lastHitEventId = 0,
+  lastFlightMapDraw = 0,
   bloodParticles = [],
   resultTimeout = null,
   resultCountdown = null,
-  resultEndsAt = 0;
+  resultEndsAt = 0,
+  lastEliminationId = 0,
+  localEliminationMessage = "",
+  killFeedTimers = [];
 const FIRE_INTERVAL_MS = 120;
 
 const STATE_ORDER = {
@@ -120,7 +125,9 @@ const homeMusic = new Audio(
 );
 homeMusic.loop = true;
 homeMusic.preload = "none";
-function syncHomeMusic(screenId = screens.find((screen) => screen.classList.contains("active"))?.id) {
+function syncHomeMusic(
+  screenId = screens.find((screen) => screen.classList.contains("active"))?.id,
+) {
   const volume = soundOn
     ? (Number($("#music")?.value ?? 0) / 100) *
       (Number($("#masterVolume")?.value ?? 0) / 100)
@@ -143,6 +150,8 @@ const PICKUP_RADIUS = 2;
 const HEAL_DURATION_MS = 5000;
 const lootItems = new Map(); // id -> { id, type, x, z, amount, mesh, body }
 const lootCrates = new Map(); // Hòm đồ được đồng bộ từ server theo vị trí người chơi bị hạ.
+const interactRaycaster = new THREE.Raycaster();
+const crosshairNdc = new THREE.Vector2(0, 0);
 let backpackOpen = false,
   crateOpenId = null,
   lootToastTimer = null,
@@ -578,7 +587,7 @@ function renderMapChoice(id) {
   });
   const forest = selectedMap === "forest";
   $("#mapName").textContent = forest ? "VERDANT WILDS" : "DUSTY BASIN";
-  $("#mapCount").textContent = forest ? "02 / 02" : "01 / 02";
+  $("#mapCount").textContent = forest ? "01 / 02" : "02 / 02";
   $("#mapDescription").textContent = forest
     ? "CỎ XANH · HỒ · SÔNG · ĐỒI"
     : "SA MẠC · ĐÁ · XƯƠNG RỒNG";
@@ -595,7 +604,7 @@ mapCard.querySelector(".map-info").innerHTML =
 const mapPicker = document.createElement("div");
 mapPicker.className = "map-select";
 mapPicker.innerHTML =
-  '<button type="button" data-map-choice="desert">SA MẠC</button><button type="button" data-map-choice="forest">RỪNG</button>';
+  '<button type="button" data-map-choice="forest">RỪNG</button><button type="button" data-map-choice="desert">SA MẠC</button>';
 mapCard.querySelector(".map-title").after(mapPicker);
 mapPicker.querySelectorAll("[data-map-choice]").forEach((button) => {
   button.addEventListener("click", () =>
@@ -647,7 +656,7 @@ function connect(message) {
       roomCode = m.code;
       playerId = m.playerId;
       isHost = m.isHost;
-      mapId = m.mapId === "forest" ? "forest" : "desert";
+      mapId = m.mapId === "desert" ? "desert" : "forest";
       mapObstacles = m.obstacles || [];
       renderMapChoice(mapId);
       local.x = m.spawn.x;
@@ -712,7 +721,7 @@ function connect(message) {
     }
   };
   socket.onclose = () => {
-    $("#status").textContent = "● OFFLINE";
+    $("#status").textContent = "● ONLINE";
   };
 }
 function send(data) {
@@ -726,6 +735,7 @@ function send(data) {
 }
 function renderLobby() {
   if (!gameState) return;
+  isHost = gameState.hostId === playerId;
   const slots = $("#slots");
   slots.innerHTML = "";
   for (let i = 0; i < 5; i++) {
@@ -740,6 +750,7 @@ function renderLobby() {
   $("#lobbyHint").textContent =
     `${gameState.players.length}/5 người chơi · MAP ${mapId === "forest" ? "RỪNG" : "SA MẠC"}`;
   $("#startBtn").classList.toggle("hidden", !isHost);
+  $("#leaveLobbyBtn")?.classList.remove("hidden");
 }
 $("#copyCode").onclick = async () => {
   try {
@@ -752,6 +763,18 @@ $("#copyCode").onclick = async () => {
 };
 $("#startBtn").onclick = () => {
   send({ type: "start" });
+};
+$("#leaveLobbyBtn").onclick = () => {
+  // Closing the room socket makes the server remove this player from the team.
+  if (socket) socket.close();
+  socket = null;
+  roomCode = "";
+  playerId = "";
+  gameState = null;
+  isHost = false;
+  $("#roomCode").textContent = "------";
+  $("#status").textContent = "● ONLINE";
+  show("menu");
 };
 function escapeHtml(s) {
   return String(s).replace(
@@ -1243,8 +1266,13 @@ function addForestGrass(seed) {
     const x = (rand() - 0.5) * 196;
     const z = (rand() - 0.5) * 196;
     if (Math.hypot(x, z - 8) < 10 || Math.hypot(x, z + 8) < 9) continue;
-    const streamZ = (-7 + Math.sin((x + 12 * MAP_SCALE) / (13 * MAP_SCALE)) * 13) * MAP_SCALE;
-    if (Math.abs(z - streamZ) < 3.1 * MAP_SCALE || Math.hypot(x - 22 * MAP_SCALE, z + 3 * MAP_SCALE) < 12 * MAP_SCALE) continue;
+    const streamZ =
+      (-7 + Math.sin((x + 12 * MAP_SCALE) / (13 * MAP_SCALE)) * 13) * MAP_SCALE;
+    if (
+      Math.abs(z - streamZ) < 3.1 * MAP_SCALE ||
+      Math.hypot(x - 22 * MAP_SCALE, z + 3 * MAP_SCALE) < 12 * MAP_SCALE
+    )
+      continue;
     dummy.position.set(x, groundHeightAt(x, z) + 0.29, z);
     dummy.rotation.set(
       (rand() - 0.5) * 0.22,
@@ -1277,7 +1305,13 @@ function obstacleFootprintRadius(o) {
   return null;
 }
 function isBlockedAt(x, z) {
-  if (x < -MAP_HALF + 1 || x > MAP_HALF - 1 || z < -MAP_HALF + 1 || z > MAP_HALF - 1) return true;
+  if (
+    x < -MAP_HALF + 1 ||
+    x > MAP_HALF - 1 ||
+    z < -MAP_HALF + 1 ||
+    z > MAP_HALF - 1
+  )
+    return true;
   const selfRadius = local.prone ? 1.15 : PLAYER_RADIUS;
   const obstacleRadius = local.prone ? 0.55 : PLAYER_RADIUS;
   for (const o of mapObstacles) {
@@ -1519,12 +1553,35 @@ function placeRemote(mesh, p) {
 function renderPlayers(state) {
   $("#aliveCount").textContent = state.alive;
   $("#totalCount").textContent = state.total;
+  if (state.lastElimination && state.lastElimination.id !== lastEliminationId) {
+    const event = state.lastElimination;
+    lastEliminationId = event.id;
+    const row = document.createElement("div");
+    row.className = "kill-feed-row";
+    row.textContent = `${event.killerName} đã hạ ${event.victimName}`;
+    $("#killFeed")?.prepend(row);
+    const timer = setTimeout(() => row.remove(), 5000);
+    killFeedTimers.push(timer);
+    if (event.victimId === playerId) {
+      localEliminationMessage = `Bạn đã bị hạ bởi ${event.killerName}.`;
+      $("#resultDetail").textContent = localEliminationMessage;
+    }
+    if (event.killerId === playerId) {
+      const notice = $("#killNotice");
+      if (notice) {
+        notice.textContent = `Bạn đã hạ ${event.victimName}.`;
+        notice.classList.remove("hidden");
+        setTimeout(() => notice.classList.add("hidden"), 3500);
+      }
+    }
+  }
   const living = new Set();
   const nowMs = Date.now();
   for (const p of state.players) {
     if (p.id === playerId) {
       local.hp = p.hp;
       local.kills = p.kills;
+      local.placement = p.placement || 0;
       ammo = p.ammo;
       local.reserveAmmo = p.reserveAmmo;
       local.medkits = p.medkits || 0;
@@ -1769,7 +1826,6 @@ function renderPlayers(state) {
   $("#healthText").textContent = local.hp;
   $("#healthBar").style.width = local.hp + "%";
   $("#hitFlash").style.borderWidth = local.hp < 40 ? "8px" : "0";
-  if (local.hp <= 0) showResult();
   if (state.lastHit && state.lastHit.id !== lastHitEventId) {
     lastHitEventId = state.lastHit.id;
     const point = state.lastHit.point;
@@ -1782,6 +1838,7 @@ function renderPlayers(state) {
       showDamageDirection(shooter);
     }
   }
+  if (local.hp <= 0) showResult();
 }
 // ---------------------------------------------------------------------------
 // VẬT PHẨM RƠI TRÊN MAP (đạn, bịch máu) · BALO (Tab) · HỒI MÁU
@@ -1841,12 +1898,16 @@ function syncLootCrates(crates) {
 function addCrateMesh(crate) {
   if (!scene || crate.mesh) return;
   const root = new THREE.Group();
+  root.userData.interactionTarget = { kind: "crate", id: crate.id };
   const orange = makeMat("#e87520", 0.88);
   const dark = makeMat("#49301d", 0.95);
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.62, 0.72), orange);
   body.position.y = 0.34;
   root.add(body);
-  const lid = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.12, 0.78), makeMat("#ff922f", 0.8));
+  const lid = new THREE.Mesh(
+    new THREE.BoxGeometry(1.02, 0.12, 0.78),
+    makeMat("#ff922f", 0.8),
+  );
   lid.position.y = 0.69;
   root.add(lid);
   for (const z of [-0.27, 0.27]) {
@@ -1854,7 +1915,10 @@ function addCrateMesh(crate) {
     strap.position.set(0, 0.35, z);
     root.add(strap);
   }
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.035, 1.25, 6), dark);
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.025, 0.035, 1.25, 6),
+    dark,
+  );
   pole.position.set(-0.12, 1.27, 0);
   root.add(pole);
   const flag = new THREE.Mesh(
@@ -1872,7 +1936,8 @@ function disposeCrateMesh(crate) {
   scene?.remove(crate.mesh);
   crate.mesh.traverse((object) => {
     object.geometry?.dispose();
-    if (Array.isArray(object.material)) object.material.forEach((mat) => mat.dispose());
+    if (Array.isArray(object.material))
+      object.material.forEach((mat) => mat.dispose());
     else object.material?.dispose();
   });
   crate.mesh = null;
@@ -1891,6 +1956,7 @@ function addLootMesh(item) {
   if (!scene || item.mesh) return;
   const isMed = item.type === "medkit";
   const root = new THREE.Group();
+  root.userData.interactionTarget = { kind: "loot", id: item.id };
   const body = new THREE.Group();
   if (isMed) {
     body.add(
@@ -2000,6 +2066,34 @@ function nearestCrate() {
   }
   return best;
 }
+// Chỉ chọn vật thể mà tia giữa màn hình chạm trúng, thay vì vật gần nhất.
+function aimedInteractable() {
+  if (!camera || !scene || local.state !== "ground" || local.swimming)
+    return null;
+  const roots = [];
+  for (const item of lootItems.values()) if (item.mesh) roots.push(item.mesh);
+  for (const crate of lootCrates.values())
+    if (crate.mesh) roots.push(crate.mesh);
+  if (!roots.length) return null;
+  camera.updateMatrixWorld(true);
+  interactRaycaster.setFromCamera(crosshairNdc, camera);
+  interactRaycaster.far = 5;
+  for (const hit of interactRaycaster.intersectObjects(roots, true)) {
+    let object = hit.object;
+    while (object && !object.userData.interactionTarget) object = object.parent;
+    if (object?.userData.interactionTarget) {
+      const target = object.userData.interactionTarget;
+      const data =
+        target.kind === "crate"
+          ? lootCrates.get(target.id)
+          : lootItems.get(target.id);
+      const maxReach = target.kind === "crate" ? 5 : PICKUP_RADIUS;
+      if (data && Math.hypot(data.x - local.x, data.z - local.z) <= maxReach)
+        return { kind: target.kind, data };
+    }
+  }
+  return null;
+}
 function onInteract() {
   // F is also the close key while the death crate is open.
   if (backpackOpen && crateOpenId) {
@@ -2013,12 +2107,13 @@ function onInteract() {
     return;
   }
   if (backpackOpen) return;
-  const crate = nearestCrate();
-  if (crate) {
-    openBackpack(crate.id);
+  const target = aimedInteractable();
+  if (target?.kind === "crate" && target.data) {
+    openBackpack(target.data.id);
     return;
   }
-  if (!local.swimming && nearestLoot()) send({ type: "pickup" });
+  if (target?.kind === "loot" && target.data && packHasRoom(target.data.type))
+    send({ type: "pickup", itemId: target.data.id });
 }
 function useMedkit() {
   if (local.healing) return showLootToast("ĐANG HỒI MÁU · NHẤN F ĐỂ HỦY");
@@ -2089,7 +2184,8 @@ function installLootUi() {
       const type = dropButton.dataset.dropItem;
       const input = $(type === "ammo" ? "#bpDropAmmo" : "#bpDropMedkit");
       const amount = Math.floor(Number(input.value));
-      const owned = type === "ammo" ? (local.reserveAmmo || 0) : (local.medkits || 0);
+      const owned =
+        type === "ammo" ? local.reserveAmmo || 0 : local.medkits || 0;
       if (!Number.isFinite(amount) || amount <= 0 || amount > owned) {
         showLootToast(`NHẬP SỐ LƯỢNG TỪ 1 ĐẾN ${owned}`);
         return;
@@ -2102,15 +2198,27 @@ function installLootUi() {
       const type = takeButton.dataset.takeItem;
       const amount = Math.floor(Number($(`#crateAmount-${type}`)?.value));
       const crate = lootCrates.get(crateOpenId);
-      const capacity = type === "ammo"
-        ? packLimits.ammo - (local.reserveAmmo || 0)
-        : packLimits.medkits - (local.medkits || 0);
+      const capacity =
+        type === "ammo"
+          ? packLimits.ammo - (local.reserveAmmo || 0)
+          : packLimits.medkits - (local.medkits || 0);
       const available = crate?.contents?.[type] || 0;
-      if (!Number.isFinite(amount) || amount <= 0 || amount > Math.min(capacity, available)) {
+      if (
+        !Number.isFinite(amount) ||
+        amount <= 0 ||
+        amount > Math.min(capacity, available)
+      ) {
         showLootToast("SỐ LƯỢNG KHÔNG HỢP LỆ HOẶC BALO ĐÃ ĐẦY");
         return;
       }
-      if (send({ type: "transferCrate", crateId: crateOpenId, itemType: type, amount }))
+      if (
+        send({
+          type: "transferCrate",
+          crateId: crateOpenId,
+          itemType: type,
+          amount,
+        })
+      )
         showLootToast("ĐANG LẤY VẬT PHẨM...");
     }
   });
@@ -2122,7 +2230,10 @@ function installLootUi() {
 function renderBackpack() {
   if (!$("#backpack")) return;
   const enteredAmounts = new Map(
-    [...$("#backpack").querySelectorAll("input[type=number]")].map((input) => [input.id, input.value]),
+    [...$("#backpack").querySelectorAll("input[type=number]")].map((input) => [
+      input.id,
+      input.value,
+    ]),
   );
   $("#bpAmmoCount").innerHTML =
     `${local.reserveAmmo ?? 0}<small>/${packLimits.ammo}</small>`;
@@ -2133,10 +2244,15 @@ function renderBackpack() {
   $("#bpMedCount").classList.toggle("full", !packHasRoom("medkit"));
   const ammoDrop = $("#bpDropAmmo");
   const medkitDrop = $("#bpDropMedkit");
-  for (const [input, count] of [[ammoDrop, local.reserveAmmo || 0], [medkitDrop, local.medkits || 0]]) {
+  for (const [input, count] of [
+    [ammoDrop, local.reserveAmmo || 0],
+    [medkitDrop, local.medkits || 0],
+  ]) {
     input.max = count;
     input.disabled = count <= 0;
-    const nextValue = String(Math.min(count, Math.max(1, Number(enteredAmounts.get(input.id) || 1))));
+    const nextValue = String(
+      Math.min(count, Math.max(1, Number(enteredAmounts.get(input.id) || 1))),
+    );
     if (input.value !== nextValue) input.value = nextValue;
   }
   const crateSection = $("#crateSection");
@@ -2150,23 +2266,40 @@ function renderBackpack() {
     return;
   }
   const specs = [
-    { type: "ammo", name: "ĐẠN 5.56 MM", space: packLimits.ammo - (local.reserveAmmo || 0) },
-    { type: "medkit", name: "BỊCH MÁU", space: packLimits.medkits - (local.medkits || 0) },
+    {
+      type: "ammo",
+      name: "ĐẠN 5.56 MM",
+      space: packLimits.ammo - (local.reserveAmmo || 0),
+    },
+    {
+      type: "medkit",
+      name: "BỊCH MÁU",
+      space: packLimits.medkits - (local.medkits || 0),
+    },
   ];
   const renderKey = JSON.stringify({
     id: crate.id,
-    items: specs.map(({ type, space }) => [type, crate.contents?.[type] || 0, space]),
+    items: specs.map(({ type, space }) => [
+      type,
+      crate.contents?.[type] || 0,
+      space,
+    ]),
   });
   // State snapshots arrive repeatedly. Keep the same buttons/inputs in the DOM
   // between actual inventory changes so a click cannot be interrupted mid-flight.
   if (crateRows.dataset.renderKey === renderKey) return;
-  crateRows.innerHTML = specs.map(({ type, name, space }) => {
-    const available = crate.contents?.[type] || 0;
-    const maximum = Math.max(0, Math.min(available, space));
-    const inputId = `crateAmount-${type}`;
-    const desired = Math.max(1, Number(enteredAmounts.get(inputId) || maximum || 1));
-    return `<div class="bp-row"><b>${type === "ammo" ? "▮" : "✚"}</b><div><strong>${name}</strong><small>CÒN TRONG HÒM: ${available}</small></div><span class="bp-count">${available}</span><div class="bp-actions"><input id="${inputId}" type="number" min="1" max="${maximum}" value="${Math.min(maximum, desired)}" ${maximum <= 0 ? "disabled" : ""} aria-label="Số lượng muốn lấy"><button data-take-item="${type}" ${maximum <= 0 ? "disabled" : ""}>LẤY</button></div></div>`;
-  }).join("");
+  crateRows.innerHTML = specs
+    .map(({ type, name, space }) => {
+      const available = crate.contents?.[type] || 0;
+      const maximum = Math.max(0, Math.min(available, space));
+      const inputId = `crateAmount-${type}`;
+      const desired = Math.max(
+        1,
+        Number(enteredAmounts.get(inputId) || maximum || 1),
+      );
+      return `<div class="bp-row"><b>${type === "ammo" ? "▮" : "✚"}</b><div><strong>${name}</strong><small>CÒN TRONG HÒM: ${available}</small></div><span class="bp-count">${available}</span><div class="bp-actions"><input id="${inputId}" type="number" min="1" max="${maximum}" value="${Math.min(maximum, desired)}" ${maximum <= 0 ? "disabled" : ""} aria-label="Số lượng muốn lấy"><button data-take-item="${type}" ${maximum <= 0 ? "disabled" : ""}>LẤY</button></div></div>`;
+    })
+    .join("");
   crateRows.dataset.renderKey = renderKey;
 }
 function openBackpack(forCrateId = null) {
@@ -2259,15 +2392,15 @@ function updateLootHud(dt) {
     return;
   }
   heal.classList.add("hidden");
-  const near = nearestLoot();
-  const crate = nearestCrate();
-  if (crate) {
+  const target = aimedInteractable();
+  if (target?.kind === "crate" && target.data) {
     prompt.innerHTML = `<b>F</b>MỞ HÒM TIẾP TẾ`;
     prompt.classList.remove("hidden");
-  } else if (near) {
-    prompt.innerHTML = packHasRoom(near.type)
-      ? `<b>F</b>NHẶT ${lootLabel(near)}`
-      : `<b>✕</b>BALO ĐẦY · KHÔNG NHẶT ĐƯỢC ${near.type === "ammo" ? "ĐẠN" : "BỊCH MÁU"}`;
+  } else if (target?.kind === "loot" && target.data) {
+    const item = target.data;
+    prompt.innerHTML = packHasRoom(item.type)
+      ? `<b>F</b>NHẶT ${lootLabel(item)}`
+      : `<b>✕</b>BALO ĐẦY · KHÔNG NHẶT ĐƯỢC ${item.type === "ammo" ? "ĐẠN" : "BỊCH MÁU"}`;
     prompt.classList.remove("hidden");
   } else {
     prompt.classList.add("hidden");
@@ -2283,6 +2416,10 @@ function beginGame() {
   local.state = "lobby";
   local.y = 0;
   lastHitEventId = 0;
+  lastEliminationId = 0;
+  localEliminationMessage = "";
+  local.placement = 0;
+  $("#killFeed").replaceChildren();
   local.hp = 100;
   local.kills = 0;
   verticalSpeed = 0;
@@ -2522,7 +2659,7 @@ function leaveMatch() {
   cleanupGame();
   if (socket) socket.close();
   socket = null;
-  $("#status").textContent = "● OFFLINE";
+  $("#status").textContent = "● ONLINE";
   $("#gameMessage").classList.add("hidden");
   show("menu");
 }
@@ -2697,7 +2834,9 @@ function setMode(state) {
   if (scoped) setScope(false);
   if (gun) gun.visible = state === "ground" && !scoped;
   $("#chuteOverlay").classList.toggle("hidden", state !== "parachute");
-  $("#flightHud").classList.toggle(
+  // Keep the top-down minimap visible after landing; flight instructions are contextual.
+  $("#flightHud").classList.remove("hidden");
+  $("#flightInfo").classList.toggle(
     "hidden",
     !(state === "plane" || state === "freefall" || state === "parachute"),
   );
@@ -2984,6 +3123,12 @@ function updateFlightHud() {
   const hud = $("#flightHud");
   if (!hud || hud.classList.contains("hidden")) return;
   const st = local.state;
+  const airborne = ["plane", "freefall", "parachute"].includes(st);
+  $("#flightInfo").classList.toggle("hidden", !airborne);
+  if (!airborne) {
+    drawFlightMap();
+    return;
+  }
   const alt = Math.max(
     0,
     st === "plane"
@@ -3019,26 +3164,120 @@ function updateFlightHud() {
   drawFlightMap();
 }
 function drawFlightMap() {
+  // The map is detailed and only needs refreshing a few times per second.
+  if (performance.now() - lastFlightMapDraw < 150) return;
+  lastFlightMapDraw = performance.now();
   const canvas = $("#flightMap");
   const ctx = canvas?.getContext("2d");
   if (!ctx) return;
   const S = canvas.width;
-  const k = S / (MAP_HALF * 2.6);
+  const k = S / (MAP_HALF * 2);
   const X = (x) => S / 2 + x * k;
   const Y = (z) => S / 2 + z * k;
   ctx.clearRect(0, 0, S, S);
-  ctx.fillStyle = "rgba(12,16,10,.78)";
+  const forest = mapId === "forest";
+  ctx.fillStyle = forest ? "#527d45" : "#b99a62";
   ctx.fillRect(0, 0, S, S);
-  ctx.fillStyle = "rgba(143,224,255,.10)";
-  ctx.fillRect(X(-MAP_HALF), Y(-MAP_HALF), MAP_HALF * 2 * k, MAP_HALF * 2 * k);
-  ctx.strokeStyle = "#8fe0ff";
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(
-    X(-MAP_HALF),
-    Y(-MAP_HALF),
-    MAP_HALF * 2 * k,
-    MAP_HALF * 2 * k,
-  );
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, S, S);
+  ctx.clip();
+  // Subtle seeded terrain patches give the map a real overhead land texture.
+  let seed = (gameState?.mapSeed || 1) >>> 0;
+  const random = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let i = 0; i < 90; i++) {
+    const x = random() * S;
+    const y = random() * S;
+    const r = 3 + random() * 15;
+    ctx.fillStyle = forest
+      ? i % 2 ? "rgba(144,181,91,.18)" : "rgba(29,77,43,.17)"
+      : i % 2 ? "rgba(238,207,133,.2)" : "rgba(106,78,46,.12)";
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * (0.42 + random() * 0.38), random() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (forest) {
+    // Draw the same winding river and lake used by the forest level generator.
+    const riverZ = (x) => (-7 + Math.sin((x + 12 * MAP_SCALE) / (13 * MAP_SCALE)) * 13) * MAP_SCALE;
+    ctx.lineCap = "round";
+    for (const [color, width] of [["#8a9b61", 15], ["#31899a", 9], ["#54b7b8", 3]]) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      for (let i = 0; i <= 80; i++) {
+        const x = -MAP_HALF + (i / 80) * MAP_HALF * 2;
+        if (!i) ctx.moveTo(X(x), Y(riverZ(x)));
+        else ctx.lineTo(X(x), Y(riverZ(x)));
+      }
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#31899a";
+    ctx.beginPath();
+    ctx.ellipse(X(44), Y(-6), 12 * k, 17 * k, 0.12, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // Curving contour bands represent the desert dunes from overhead.
+    for (let band = 0; band < 7; band++) {
+      ctx.strokeStyle = band % 2 ? "rgba(245,219,156,.28)" : "rgba(110,81,48,.18)";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      for (let i = 0; i <= 60; i++) {
+        const x = (i / 60) * S;
+        const y = band * (S / 6) + Math.sin(i * 0.16 + band) * 5;
+        if (!i) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+  }
+  const terrain = mapObstacles || [];
+  // Elevation contours are underneath buildings, trees and rocks.
+  for (const o of terrain) if (o.type === "hill") {
+    const cx = X(o.x), cy = Y(o.z), rx = Math.max(4, o.w * k * 0.52), ry = rx * 0.7;
+    ctx.fillStyle = forest ? "rgba(172,194,104,.42)" : "rgba(129,99,61,.42)";
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, o.yaw || 0, 0, Math.PI * 2); ctx.fill();
+    for (let ring = 0; ring < 3; ring++) {
+      ctx.strokeStyle = forest ? "rgba(218,226,153,.35)" : "rgba(230,199,139,.38)";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.ellipse(cx, cy, rx * (0.78 - ring * 0.18), ry * (0.78 - ring * 0.18), o.yaw || 0, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+  for (const o of terrain) {
+    const x = X(o.x), y = Y(o.z), size = Math.max(1.5, (o.w || 1) * k);
+    ctx.save(); ctx.translate(x, y); ctx.rotate(o.yaw || 0);
+    if (o.type === "house" || o.type === "hut") {
+      ctx.fillStyle = o.type === "house" ? "#675443" : "#8b704b";
+      ctx.fillRect(-size * 0.48, -size * 0.38, size * 0.96, size * 0.76);
+      ctx.strokeStyle = "#e4c895"; ctx.lineWidth = 0.8;
+      ctx.strokeRect(-size * 0.48, -size * 0.38, size * 0.96, size * 0.76);
+      ctx.fillStyle = "#302e28"; ctx.fillRect(-size * 0.08, size * 0.12, size * 0.16, size * 0.26);
+    } else if (o.type === "tree") {
+      ctx.fillStyle = "#234d31"; ctx.beginPath(); ctx.arc(0, 0, size * 0.68, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#528746"; ctx.beginPath(); ctx.arc(-size * 0.18, -size * 0.2, size * 0.37, 0, Math.PI * 2); ctx.fill();
+    } else if (o.type === "cactus" || o.type === "deadTree") {
+      ctx.strokeStyle = o.type === "cactus" ? "#41663d" : "#514b3d"; ctx.lineWidth = 1.3;
+      ctx.beginPath(); ctx.moveTo(0, size * 0.45); ctx.lineTo(0, -size * 0.5);
+      ctx.moveTo(0, 0); ctx.lineTo(-size * 0.35, -size * 0.18);
+      ctx.moveTo(0, size * 0.12); ctx.lineTo(size * 0.34, -size * 0.1); ctx.stroke();
+    } else if (o.type === "rock") {
+      ctx.fillStyle = forest ? "#737a61" : "#75664e";
+      ctx.beginPath(); ctx.ellipse(0, 0, size * 0.62, size * 0.43, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,.2)"; ctx.lineWidth = 0.6; ctx.stroke();
+    }
+    ctx.restore();
+  }
+  // A light coordinate grid and the border show the playable map limits.
+  ctx.strokeStyle = "rgba(236,239,209,.12)"; ctx.lineWidth = 0.7;
+  for (let n = -1; n <= 1; n++) {
+    ctx.beginPath(); ctx.moveTo(X(n * MAP_HALF / 2), 0); ctx.lineTo(X(n * MAP_HALF / 2), S); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, Y(n * MAP_HALF / 2)); ctx.lineTo(S, Y(n * MAP_HALF / 2)); ctx.stroke();
+  }
+  ctx.strokeStyle = forest ? "#c8f27a" : "#f3d38c";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, S - 2, S - 2);
   const dot = (x, z, radius, color) => {
     ctx.fillStyle = color;
     ctx.beginPath();
@@ -3080,6 +3319,7 @@ function drawFlightMap() {
       ? planePosAt(planeTime())
       : { x: local.x, z: local.z };
   dot(me.x, me.z, 3.5, "#ffffff");
+  ctx.restore();
 }
 // Dây dù góc nhìn thứ nhất: hai bó dây từ tay nắm (2 bên, gần) toả lên hai bên khung
 // hình rồi khuất khỏi mép trên, đúng như một người đang treo mình dưới tán dù nhìn ra.
@@ -3695,14 +3935,16 @@ function showResult() {
   closeBackpack(false);
   document.exitPointerLock?.();
   $("#killsResult").textContent = local.kills;
-  $("#placeResult").textContent = local.hp > 0 ? "TOP 1" : "TOP —";
+  const finalPlace = local.placement || (local.hp > 0 ? 1 : 0);
+  $("#placeResult").textContent = finalPlace ? `TOP ${finalPlace}` : "TOP —";
   const e = Math.floor((Date.now() - startedAt) / 1000);
   $("#surviveResult").textContent =
     `${String(Math.floor(e / 60)).padStart(2, "0")}:${String(e % 60).padStart(2, "0")}`;
   const resultMessage =
     local.hp > 0
       ? "Bạn là người sống sót cuối cùng!"
-      : "Bạn đã bị hạ. Hãy xem lại chiến thuật và thử thêm lần nữa.";
+      : localEliminationMessage ||
+        "Bạn đã bị hạ. Hãy xem lại chiến thuật và thử thêm lần nữa.";
   resultEndsAt = Date.now() + 20000;
   const updateCountdown = () => {
     const secondsLeft = Math.max(
@@ -3724,10 +3966,12 @@ function returnHome() {
   clearInterval(resultCountdown);
   resultTimeout = null;
   resultCountdown = null;
+  localEliminationMessage = "";
+  lastEliminationId = 0;
   cleanupGame();
   if (socket) socket.close();
   socket = null;
-  $("#status").textContent = "● OFFLINE";
+  $("#status").textContent = "● ONLINE";
   show("menu");
 }
 $("#returnBtn").onclick = returnHome;
