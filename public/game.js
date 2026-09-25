@@ -1441,6 +1441,27 @@ function showBloodScreenFlash() {
     setTimeout(() => (flash.style.background = ""), 220);
   }, 90);
 }
+function showDamageDirection(shooter) {
+  let overlay = $("#damageDirection");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "damageDirection";
+    overlay.className = "damage-direction";
+    overlay.innerHTML = "<i></i>";
+    $(".hud")?.append(overlay);
+  }
+  let bearing = 0;
+  if (shooter) {
+    const dx = shooter.x - local.x;
+    const dz = shooter.z - local.z;
+    bearing = Math.atan2(dx, -dz) - local.yaw;
+  }
+  overlay.style.setProperty("--damage-bearing", `${bearing}rad`);
+  overlay.classList.remove("show");
+  // Restart the short animation when several bullets hit in quick succession.
+  void overlay.offsetWidth;
+  overlay.classList.add("show");
+}
 // Đặt avatar người khác theo trạng thái. Trên máy bay thì updateRemoteMotion() đặt theo
 // chỗ ngồi mỗi khung hình; đang bay thì lướt mượt tới vị trí mới nhất.
 function placeRemote(mesh, p) {
@@ -1739,7 +1760,13 @@ function renderPlayers(state) {
     lastHitEventId = state.lastHit.id;
     const point = state.lastHit.point;
     spawnBloodBurst(new THREE.Vector3(point.x, point.y, point.z));
-    if (state.lastHit.targetId === playerId) showBloodScreenFlash();
+    if (state.lastHit.targetId === playerId) {
+      showBloodScreenFlash();
+      const shooter = state.players.find(
+        (player) => player.id === state.lastHit.shooterId,
+      );
+      showDamageDirection(shooter);
+    }
   }
 }
 // ---------------------------------------------------------------------------
