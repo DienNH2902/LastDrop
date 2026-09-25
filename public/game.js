@@ -126,6 +126,8 @@ let inMatch = false, // đã vào màn hình trận (phòng chờ trong map, má
   airState = { vx: 0, vz: 0, fall: 0, time: 0 };
 const audioLoops = { plane: null, wind: null, weather: null };
 let weatherFx = null;
+let weatherTimer = null; // hẹn giờ bắt đầu/kết thúc thời tiết (random mỗi trận)
+
 // Track nguồn MP3, tự lặp ở các màn menu và dừng khi vào trận.
 const homeMusic = new Audio(
   "https://orangefreesounds.com/wp-content/uploads/2025/06/Deep-ambient-dramatic-background-music.mp3",
@@ -1411,17 +1413,34 @@ function isBlockedAt(x, z) {
   }
   return false;
 }
+
+// Sương mù nền: lúc trời quang nhìn xa thoải mái, chỉ khi có bão cát (desert)
+// mới kéo gần lại để mô phỏng tầm nhìn bị che. Rừng giữ nguyên như cũ vì mưa
+// rừng không cần đổi tầm nhìn.
+const FOG_CLEAR = { forest: [32, 125], desert: [140, 360] };
+const FOG_STORM = { forest: [32, 125], desert: [8, 40] };
+let fogBaseNear = 32,
+  fogBaseFar = 125;
+function applyBaseFog(forest, stormy) {
+  const [near, far] = (stormy ? FOG_STORM : FOG_CLEAR)[
+    forest ? "forest" : "desert"
+  ];
+  fogBaseNear = near;
+  fogBaseFar = far;
+  if (scene?.fog) {
+    scene.fog.near = near;
+    scene.fog.far = far;
+  }
+}
+
 function initWorld() {
   const host = $("#world");
   host.innerHTML = "";
   const forest = mapId === "forest";
   scene = new THREE.Scene();
   scene.background = new THREE.Color(forest ? "#879c88" : "#ad9367");
-  scene.fog = new THREE.Fog(
-    forest ? "#879c88" : "#ad9367",
-    forest ? 32 : 8,
-    forest ? 125 : 40,
-  );
+  scene.fog = new THREE.Fog(forest ? "#879c88" : "#ad9367", 1, 1);
+  applyBaseFog(forest, false); // vào map luôn trời quang trước
   baseFov = 76;
   const viewport = host.getBoundingClientRect();
   camera = new THREE.PerspectiveCamera(
@@ -1500,25 +1519,43 @@ function initWorld() {
   gun.add(magazine);
   const rangerParts = [body, barrel, stock, magazine];
   const sniper = new THREE.Group();
-  const sniperBody = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.82), makeMat("#30332d"));
+  const sniperBody = new THREE.Mesh(
+    new THREE.BoxGeometry(0.15, 0.15, 0.82),
+    makeMat("#30332d"),
+  );
   sniperBody.position.set(0.28, -0.24, -0.62);
   sniper.add(sniperBody);
-  const sniperBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.03, 0.88, 8), makeMat("#171a16"));
+  const sniperBarrel = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.022, 0.03, 0.88, 8),
+    makeMat("#171a16"),
+  );
   sniperBarrel.rotation.x = Math.PI / 2;
   sniperBarrel.position.set(0.28, -0.2, -1.38);
   sniper.add(sniperBarrel);
-  const sniperStock = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.17, 0.36), makeMat("#645a43"));
+  const sniperStock = new THREE.Mesh(
+    new THREE.BoxGeometry(0.13, 0.17, 0.36),
+    makeMat("#645a43"),
+  );
   sniperStock.position.set(0.28, -0.25, -0.12);
   sniper.add(sniperStock);
-  const sniperMag = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.19, 0.12), makeMat("#45483f"));
+  const sniperMag = new THREE.Mesh(
+    new THREE.BoxGeometry(0.085, 0.19, 0.12),
+    makeMat("#45483f"),
+  );
   sniperMag.position.set(0.28, -0.36, -0.58);
   sniper.add(sniperMag);
-  const scopeTube = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.42, 10), makeMat("#10130f"));
+  const scopeTube = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.075, 0.075, 0.42, 10),
+    makeMat("#10130f"),
+  );
   scopeTube.rotation.x = Math.PI / 2;
   scopeTube.position.set(0.28, -0.105, -0.66);
   sniper.add(scopeTube);
   for (const z of [-0.88, -0.44]) {
-    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.055, 10), makeMat("#56727a"));
+    const lens = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.09, 0.09, 0.055, 10),
+      makeMat("#56727a"),
+    );
     lens.rotation.x = Math.PI / 2;
     lens.position.set(0.28, -0.105, z);
     sniper.add(lens);
@@ -1532,8 +1569,7 @@ function initWorld() {
   gun.visible = false; // phòng chờ / máy bay / đang nhảy dù: tay không, chỉ cầm súng sau khi tiếp đất
   camera.add(gun);
   scene.add(camera);
-  createWeather(forest);
-  startWeatherSound(forest ? "rain" : "sandstorm");
+  scheduleWeather(forest);
   planeObject = buildPlane();
   planeObject.visible = false;
   scene.add(planeObject);
@@ -1773,14 +1809,23 @@ function renderPlayers(state) {
       grip.position.set(0.39, 1.03, -0.2);
       weapon.add(grip);
       const sniperWeapon = new THREE.Group();
-      const sniperReceiver = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.68), makeMat("#30332d"));
+      const sniperReceiver = new THREE.Mesh(
+        new THREE.BoxGeometry(0.18, 0.18, 0.68),
+        makeMat("#30332d"),
+      );
       sniperReceiver.position.set(0.39, 1.22, -0.43);
       sniperWeapon.add(sniperReceiver);
-      const sniperBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 1.15, 7), makeMat("#666b5e"));
+      const sniperBarrel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.035, 0.04, 1.15, 7),
+        makeMat("#666b5e"),
+      );
       sniperBarrel.rotation.x = Math.PI / 2;
       sniperBarrel.position.set(0.39, 1.24, -1.18);
       sniperWeapon.add(sniperBarrel);
-      const remoteScope = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.38, 8), makeMat("#11140f"));
+      const remoteScope = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.075, 0.075, 0.38, 8),
+        makeMat("#11140f"),
+      );
       remoteScope.rotation.x = Math.PI / 2;
       remoteScope.position.set(0.39, 1.37, -0.48);
       sniperWeapon.add(remoteScope);
@@ -1886,8 +1931,10 @@ function renderPlayers(state) {
         playLanding({ x: p.x, y: (p.groundY || 0) + 0.3, z: p.z });
     }
     // Chỉ cầm súng sau khi tiếp đất; ở phòng chờ / máy bay / trên không thì tay không.
-    mesh.userData.weapon.visible = curState === "ground" && p.weapon !== "sniper";
-    mesh.userData.sniperWeapon.visible = curState === "ground" && p.weapon === "sniper";
+    mesh.userData.weapon.visible =
+      curState === "ground" && p.weapon !== "sniper";
+    mesh.userData.sniperWeapon.visible =
+      curState === "ground" && p.weapon === "sniper";
     mesh.userData.chute.visible = curState === "parachute";
     mesh.userData.slowWalking = Boolean(p.slowWalking);
     const wasReloading = Boolean(mesh.userData.reloading);
@@ -1980,7 +2027,8 @@ function renderPlayers(state) {
 // Client chỉ vẽ vật phẩm, hiện gợi ý "F" và gửi yêu cầu lên server.
 function lootLabel(item) {
   if (item.type === "ammo") return `ĐẠN 5.56 (+${item.amount})`;
-  if (item.type === "weapon") return `${item.weapon === "sniper" ? "SNIPER" : "RANGER-9"} · NHẤN F ĐỔI SÚNG`;
+  if (item.type === "weapon")
+    return `${item.weapon === "sniper" ? "SNIPER" : "RANGER-9"} · NHẤN F ĐỔI SÚNG`;
   return "BỊCH MÁU";
 }
 function setLootItems(items) {
@@ -2095,17 +2143,34 @@ function addLootMesh(item) {
   root.userData.interactionTarget = { kind: "loot", id: item.id };
   const body = new THREE.Group();
   if (isWeapon) {
-    const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.16, 0.55), makeMat("#33372f"));
+    const receiver = new THREE.Mesh(
+      new THREE.BoxGeometry(0.18, 0.16, 0.55),
+      makeMat("#33372f"),
+    );
     body.add(receiver);
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, item.weapon === "sniper" ? 0.9 : 0.52, 7), makeMat("#171a16"));
+    const barrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(
+        0.035,
+        0.035,
+        item.weapon === "sniper" ? 0.9 : 0.52,
+        7,
+      ),
+      makeMat("#171a16"),
+    );
     barrel.rotation.x = Math.PI / 2;
     barrel.position.z = -0.62;
     body.add(barrel);
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.15, 0.3), makeMat("#594432"));
+    const stock = new THREE.Mesh(
+      new THREE.BoxGeometry(0.13, 0.15, 0.3),
+      makeMat("#594432"),
+    );
     stock.position.z = 0.38;
     body.add(stock);
     if (item.weapon === "sniper") {
-      const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.32, 8), makeMat("#151812"));
+      const scope = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.07, 0.07, 0.32, 8),
+        makeMat("#151812"),
+      );
       scope.rotation.x = Math.PI / 2;
       scope.position.set(0, 0.12, -0.16);
       body.add(scope);
@@ -2837,6 +2902,8 @@ function cleanupGame() {
   stopLoop("plane", 0.05);
   stopLoop("wind", 0.05);
   stopLoop("weather", 0.12);
+  clearTimeout(weatherTimer);
+  weatherTimer = null;
   if (weatherFx?.mesh) {
     scene?.remove(weatherFx.mesh);
     weatherFx.geometry.dispose();
@@ -2882,10 +2949,17 @@ function onFire(e) {
     return;
   if (triggerHeld) return;
   // Clicking repeatedly must not bypass the bolt-action cooldown.
-  if (local.weapon === "sniper" && Date.now() - lastClientShotAt < SNIPER_FIRE_INTERVAL_MS) return;
+  if (
+    local.weapon === "sniper" &&
+    Date.now() - lastClientShotAt < SNIPER_FIRE_INTERVAL_MS
+  )
+    return;
   triggerHeld = true;
   shootOnce();
-  fireInterval = setInterval(shootOnce, local.weapon === "sniper" ? SNIPER_FIRE_INTERVAL_MS : FIRE_INTERVAL_MS);
+  fireInterval = setInterval(
+    shootOnce,
+    local.weapon === "sniper" ? SNIPER_FIRE_INTERVAL_MS : FIRE_INTERVAL_MS,
+  );
 }
 function onMouseUp(e) {
   if (e.button === 0) stopFiring();
@@ -2908,7 +2982,11 @@ function shootOnce() {
   }
   if (local.reloading || local.healing) return;
   const now = Date.now();
-  if (local.weapon === "sniper" && now - lastClientShotAt < SNIPER_FIRE_INTERVAL_MS) return;
+  if (
+    local.weapon === "sniper" &&
+    now - lastClientShotAt < SNIPER_FIRE_INTERVAL_MS
+  )
+    return;
   if (ammo <= 0) {
     tone(120, 0.07, "square", 0.015);
     stopFiring();
@@ -2938,7 +3016,11 @@ function shootOnce() {
 }
 function setScope(enabled) {
   scoped = enabled;
-  camera.fov = scoped ? (local.weapon === "sniper" ? sniperZoomFov : 30) : baseFov;
+  camera.fov = scoped
+    ? local.weapon === "sniper"
+      ? sniperZoomFov
+      : 30
+    : baseFov;
   camera.updateProjectionMatrix();
   gun.visible = !scoped && local.state === "ground";
   $(".crosshair").classList.toggle("scope-hidden", scoped);
@@ -2956,9 +3038,15 @@ function updateLocalWeaponVisual() {
   const sniper = local.weapon === "sniper";
   for (const part of gun.userData.rangerParts || []) part.visible = !sniper;
   if (gun.userData.sniper) gun.userData.sniper.visible = sniper;
-  gun.userData.magazine = gun.userData.magazines?.[sniper ? "sniper" : "ranger"] || gun.userData.magazine;
-  const small = $(".weapon small"), name = $(".weapon b");
-  if (small) small.textContent = sniper ? "RIFLE / SNIPER · BOLT ACTION" : "RIFLE / ASSAULT";
+  gun.userData.magazine =
+    gun.userData.magazines?.[sniper ? "sniper" : "ranger"] ||
+    gun.userData.magazine;
+  const small = $(".weapon small"),
+    name = $(".weapon b");
+  if (small)
+    small.textContent = sniper
+      ? "RIFLE / SNIPER · BOLT ACTION"
+      : "RIFLE / ASSAULT";
   if (name) name.textContent = sniper ? "SNIPER" : "RANGER-9";
   if (scoped) setScope(true);
 }
@@ -2968,7 +3056,9 @@ function makeTracer() {
   const eye = new THREE.Vector3();
   camera.getWorldPosition(eye);
   const muzzle = new THREE.Vector3();
-  camera.localToWorld(muzzle.set(0.28, -0.2, local.weapon === "sniper" ? -1.65 : -1));
+  camera.localToWorld(
+    muzzle.set(0.28, -0.2, local.weapon === "sniper" ? -1.65 : -1),
+  );
   // End the tracer on the exact same camera-center ray sent to the server.
   const end = eye.addScaledVector(direction, 140);
   const geometry = new THREE.BufferGeometry().setFromPoints([muzzle, end]);
@@ -3245,6 +3335,48 @@ function updateRemoteMotion(dt) {
       ud.chute.rotation.z = Math.sin(performance.now() / 700 + mesh.id) * 0.06;
   }
 }
+
+// Bản đồ vào trận luôn quang đãng; thời tiết (mưa rừng / bão cát sa mạc) chỉ
+// xuất hiện sau một khoảng chờ ngẫu nhiên, kéo dài một khoảng ngẫu nhiên rồi
+// tắt hẳn — không lặp lại — để mỗi trận là một mốc thời gian khác nhau.
+const WEATHER_START_DELAY_RANGE = [25, 75]; // giây chờ trước khi thời tiết bắt đầu
+const WEATHER_DURATION_RANGE = [30, 70]; // giây thời tiết kéo dài trước khi kết thúc
+
+function randomBetween([min, max]) {
+  return min + Math.random() * (max - min);
+}
+
+function scheduleWeather(forest) {
+  clearTimeout(weatherTimer);
+  weatherTimer = setTimeout(
+    () => beginWeather(forest),
+    randomBetween(WEATHER_START_DELAY_RANGE) * 1000,
+  );
+}
+
+function beginWeather(forest) {
+  if (!scene) return; // đã rời map trước khi hẹn giờ kịp chạy
+  createWeather(forest);
+  startWeatherSound(forest ? "rain" : "sandstorm");
+  applyBaseFog(forest, true);
+  clearTimeout(weatherTimer);
+  weatherTimer = setTimeout(
+    () => endWeather(forest),
+    randomBetween(WEATHER_DURATION_RANGE) * 1000,
+  );
+}
+
+function endWeather(forest) {
+  stopLoop("weather", 0.6);
+  if (weatherFx?.mesh) {
+    scene?.remove(weatherFx.mesh);
+    weatherFx.geometry.dispose();
+    weatherFx.material.dispose();
+  }
+  weatherFx = null;
+  applyBaseFog(forest, false);
+}
+
 // Trời xanh + sương mù xa khi ở trên cao; về màu đất và sương mù gần khi sắp chạm đất.
 function createWeather(forest) {
   if (weatherFx?.mesh) {
@@ -3277,13 +3409,36 @@ function createWeather(forest) {
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.attributes.position.setUsage(THREE.DynamicDrawUsage);
   const material = forest
-    ? new THREE.LineBasicMaterial({ color: 0xc8d9dc, transparent: true, opacity: 0.38, depthWrite: false })
-    : new THREE.PointsMaterial({ color: 0xe0c79a, size: 0.12, transparent: true, opacity: 0.42, depthWrite: false, sizeAttenuation: true });
-  const mesh = forest ? new THREE.LineSegments(geometry, material) : new THREE.Points(geometry, material);
+    ? new THREE.LineBasicMaterial({
+        color: 0xc8d9dc,
+        transparent: true,
+        opacity: 0.38,
+        depthWrite: false,
+      })
+    : new THREE.PointsMaterial({
+        color: 0xe0c79a,
+        size: 0.12,
+        transparent: true,
+        opacity: 0.42,
+        depthWrite: false,
+        sizeAttenuation: true,
+      });
+  const mesh = forest
+    ? new THREE.LineSegments(geometry, material)
+    : new THREE.Points(geometry, material);
   mesh.frustumCulled = false;
   mesh.renderOrder = 2;
   scene.add(mesh);
-  weatherFx = { forest, count, positions, speed, drift, geometry, material, mesh };
+  weatherFx = {
+    forest,
+    count,
+    positions,
+    speed,
+    drift,
+    geometry,
+    material,
+    mesh,
+  };
 }
 function updateWeather(dt) {
   if (!weatherFx || !camera) return;
@@ -3291,7 +3446,9 @@ function updateWeather(dt) {
   mesh.position.copy(camera.position);
   for (let i = 0; i < count; i++) {
     const step = i * (forest ? 6 : 3);
-    let x = positions[step], y = positions[step + 1], z = positions[step + 2];
+    let x = positions[step],
+      y = positions[step + 1],
+      z = positions[step + 2];
     if (forest) {
       y -= speed[i] * dt;
       x += drift[i] * dt;
@@ -3335,8 +3492,8 @@ function updateEnvironment(dt) {
   tmpColorB.set("#9cc9ea");
   scene.background.lerpColors(tmpColorA, tmpColorB, envBlend);
   scene.fog.color.copy(scene.background);
-  scene.fog.near = (forest ? 32 : 8) + (forest ? 260 : 170) * envBlend;
-  scene.fog.far = (forest ? 125 : 40) + (forest ? 700 : 430) * envBlend;
+  scene.fog.near = fogBaseNear + (forest ? 260 : 170) * envBlend;
+  scene.fog.far = fogBaseFar + (forest ? 700 : 430) * envBlend;
   const far = envBlend > 0.02 ? 1300 : 400;
   if (camera.far !== far) {
     camera.far = far;
@@ -4006,7 +4163,11 @@ function startWeatherSound(kind) {
     sources.push(gustNoise, oscillator);
   }
   audioLoops.weather = { kind, master, sources };
-  setLoopGain(audioLoops.weather, (kind === "rain" ? 0.2 : 0.25) * sfxLevel(), 0.8);
+  setLoopGain(
+    audioLoops.weather,
+    (kind === "rain" ? 0.2 : 0.25) * sfxLevel(),
+    0.8,
+  );
 }
 // Tiếng máy bay: tiếng ù trầm (brown noise) + hai dao động lệch tần số bị "băm" nhịp cánh quạt.
 function startPlaneSound() {
