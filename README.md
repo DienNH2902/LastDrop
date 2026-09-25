@@ -64,6 +64,10 @@ Không có cam kết “miễn phí không giới hạn”. Không thể đảm 
 
 Map hiện sinh trực tiếp từ hình khối trong `public/game.js` (`initWorld`). Để tự làm asset miễn phí, dựng model trong Blender, export `.glb`, đặt file vào `public/assets/`, rồi import `GLTFLoader` từ Three.js và thêm model vào scene trong `initWorld`. Giữ texture nhỏ, gộp vật thể tĩnh và dùng ít polygon để tối ưu. Có thể thay các khối người chơi trong `renderPlayers()` bằng model nhân vật. Không dùng ảnh khuôn mặt nếu chưa có đồng ý rõ ràng; upload ảnh và phân phối ảnh cần thêm kiểm soát quyền riêng tư/bảo mật.
 
+## PWA (Add to Home / cài lên desktop)
+
+Thêm `public/manifest.webmanifest`, `public/sw.js` (service worker tối giản, chỉ cache shell tĩnh, không đụng vào WebSocket) và các icon trong `public/icons/`. Khi site chạy trên **HTTPS** (bắt buộc — service worker không đăng ký được trên HTTP thường, chỉ `localhost` mới được miễn), Chrome/Edge trên Windows sẽ tự hiện nút cài (biểu tượng màn hình ⊕/máy tính ở thanh địa chỉ, hoặc menu ⋮ → "Cài Last Drop..."). Sau khi cài, game mở như app riêng, có icon taskbar/desktop, không cần gõ lại URL mỗi lần.
+
 ## Phát triển tiếp theo
 
 1. Thêm hệ thống vòng bo, nhặt đồ, đạn/reload, va chạm và nhiều loại vũ khí.

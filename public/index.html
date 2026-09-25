@@ -6,6 +6,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>LAST DROP</title>
   <link rel="icon" href="/logo.svg">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#0b0d08">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Last Drop">
   <link rel="stylesheet" href="/style.css?v=loot-crate-transfer-5">
 </head>
 
@@ -217,6 +224,13 @@
           SURVIVAL</i></span></footer>
   </div>
   <script type="module" src="/game.js?v=loot-crate-transfer-5"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/sw.js").catch(() => {});
+      });
+    }
+  </script>
 </body>
 
 </html>

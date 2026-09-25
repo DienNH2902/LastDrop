@@ -61,6 +61,9 @@ const types = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".webmanifest": "application/manifest+json",
+  ".json": "application/json",
 };
 const server = http.createServer((req, res) => {
   const urlPath = decodeURIComponent(
