@@ -1351,6 +1351,13 @@ function initWorld() {
   );
   stock.position.set(0.28, -0.25, -0.18);
   gun.add(stock);
+  const magazine = new THREE.Mesh(
+    new THREE.BoxGeometry(0.09, 0.2, 0.12),
+    makeMat("#45483f"),
+  );
+  magazine.position.set(0.28, -0.36, -0.55);
+  gun.add(magazine);
+  gun.userData.magazine = magazine;
   gun.visible = false; // phòng chờ / máy bay / đang nhảy dù: tay không, chỉ cầm súng sau khi tiếp đất
   camera.add(gun);
   scene.add(camera);
@@ -1471,7 +1478,11 @@ function renderPlayers(state) {
       if (backpackOpen) renderBackpack();
       const wasLocalReloading = local.reloading;
       local.reloading = Boolean(p.reloading);
-      if (local.reloading && !wasLocalReloading) startReloadSounds(null);
+      if (local.reloading && !wasLocalReloading) {
+        local.reloadStartedAt = performance.now();
+        startReloadSounds(null);
+      }
+      if (!local.reloading) local.reloadStartedAt = 0;
       $("#ammo").innerHTML = `${ammo} <i>/ ${local.reserveAmmo}</i>`;
       $("#feed").textContent = local.reloading ? "⟳ ĐANG NẠP ĐẠN · R" : "";
       const reloadHud = $("#reloadHud");
@@ -1954,14 +1965,35 @@ function showLootToast(text) {
   clearTimeout(lootToastTimer);
   lootToastTimer = setTimeout(() => el.classList.add("hidden"), 1800);
 }
-// Súng góc nhìn thứ nhất hạ xuống và gập ngang khi đang hồi máu (đang bận thao tác).
+// Súng hạ/gập khi hồi máu và có động tác tháo lắp băng đạn khi nạp.
 function updateGunPose(dt) {
   if (!gun) return;
   const target = local.healing ? 1 : 0;
   gunBusy += (target - gunBusy) * Math.min(10 * dt, 1);
   if (Math.abs(target - gunBusy) < 0.002) gunBusy = target;
-  gun.rotation.set(0.15 * gunBusy, 1.35 * gunBusy, -0.12 * gunBusy);
-  gun.position.set(0.3 * gunBusy, -0.14 * gunBusy, 0.05 * gunBusy);
+  const reloadProgress =
+    local.reloading && local.reloadStartedAt
+      ? clamp((performance.now() - local.reloadStartedAt) / 1800, 0, 1)
+      : 0;
+  const reloadDip = local.reloading ? Math.sin(reloadProgress * Math.PI) : 0;
+  gun.rotation.set(
+    0.15 * gunBusy + 0.12 * reloadDip,
+    1.35 * gunBusy - 0.18 * reloadDip,
+    -0.12 * gunBusy + 0.34 * reloadDip,
+  );
+  gun.position.set(
+    0.3 * gunBusy,
+    -0.14 * gunBusy - 0.2 * reloadDip,
+    0.05 * gunBusy + 0.06 * reloadDip,
+  );
+  const magazine = gun.userData.magazine;
+  if (magazine) {
+    const down = local.reloading
+      ? clamp((reloadProgress - 0.12) / 0.2, 0, 1) *
+        (1 - clamp((reloadProgress - 0.56) / 0.22, 0, 1))
+      : 0;
+    magazine.position.set(0.28 - 0.04 * down, -0.36 - 0.34 * down, -0.55);
+  }
 }
 // Gọi mỗi frame: xoay/nhấp nhô vật phẩm, gợi ý phím F, thanh hồi máu.
 function updateLootHud(dt) {
@@ -2469,7 +2501,8 @@ function enterFreefall(p, state) {
   setMode(state === "parachute" ? "parachute" : "freefall");
   stopLoop("plane", 3);
   startWind();
-  playJumpWhoosh();
+  if (state === "parachute") playChuteOpen(null);
+  else playJumpWhoosh();
 }
 function requestJump() {
   if (!plane || local.state !== "plane") return;
@@ -2799,28 +2832,55 @@ function drawFlightMap() {
       : { x: local.x, z: local.z };
   dot(me.x, me.z, 3.5, "#ffffff");
 }
-// Tay nắm dù đơn giản cho giao diện: mái dù đỏ/trắng ở đầu màn hình, dây dù tụ về giữa.
+// Dây dù góc nhìn thứ nhất: hai bó dây từ tay nắm (2 bên, gần) toả lên hai bên khung
+// hình rồi khuất khỏi mép trên, đúng như một người đang treo mình dưới tán dù nhìn ra.
+// Tán dù thật vẫn được dựng trong cảnh 3D (buildChute) để người chơi khác nhìn thấy.
 function buildChuteOverlay() {
-  const cx = 200,
-    cy = 150,
-    rx = 190,
-    ry = 130,
-    n = 6;
-  const pt = (i) => {
-    const a = Math.PI - (i * Math.PI) / n;
-    return [cx + rx * Math.cos(a), cy - ry * Math.sin(a)];
+  const W = 1000,
+    H = 560;
+  // Tứ giác thon dần mô phỏng một sợi dây có độ dày (to ở tay, mảnh dần lên cao).
+  const cord = (p0, p1, w0, w1, fill, opacity) => {
+    const dx = p1[0] - p0[0],
+      dz = p1[1] - p0[1];
+    const len = Math.hypot(dx, dz) || 1;
+    const nx = (-dz / len) * 0.5,
+      nz = (dx / len) * 0.5;
+    const a = [p0[0] + nx * w0, p0[1] + nz * w0];
+    const b = [p1[0] + nx * w1, p1[1] + nz * w1];
+    const c = [p1[0] - nx * w1, p1[1] - nz * w1];
+    const d = [p0[0] - nx * w0, p0[1] - nz * w0];
+    return `<polygon points="${a[0].toFixed(1)},${a[1].toFixed(1)} ${b[0].toFixed(1)},${b[1].toFixed(1)} ${c[0].toFixed(1)},${c[1].toFixed(1)} ${d[0].toFixed(1)},${d[1].toFixed(1)}" fill="${fill}" opacity="${opacity}"/>`;
   };
-  let out = `<svg viewBox="0 0 400 210" xmlns="http://www.w3.org/2000/svg">`;
-  for (let i = 0; i < n; i++) {
-    const [x0, y0] = pt(i);
-    const [x1, y1] = pt(i + 1);
-    out += `<path d="M${cx},${cy - ry - 8} L${x0.toFixed(1)},${y0.toFixed(1)} A${rx},${ry} 0 0 1 ${x1.toFixed(1)},${y1.toFixed(1)} Z" fill="${i % 2 ? "#f1efe6" : "#e8622c"}" stroke="#2a2f24" stroke-width="2"/>`;
-  }
-  for (let i = 0; i <= n; i++) {
-    const [x, y] = pt(i);
-    out += `<line x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${cx}" y2="210" stroke="#e9ecdc" stroke-opacity=".7" stroke-width="1.5"/>`;
-  }
-  return out + "</svg>";
+  const side = (mirror) => {
+    // Tay nắm (toggle) đặt gần mép dưới, lệch hẳn về một bên khung hình.
+    const hand = [mirror ? W - 175 : 175, H - 55];
+    const wristA = [mirror ? W - 40 : 40, H + 60];
+    const wristB = [mirror ? W - 235 : 235, H + 90];
+    let out = "";
+    // Cẳng tay khuất dần xuống mép dưới, giữ cảm giác đang nắm dây bằng hai tay.
+    out += cord(hand, wristA, 46, 70, "#171913", 0.9);
+    out += cord(hand, wristB, 46, 70, "#171913", 0.9);
+    out += `<ellipse cx="${hand[0]}" cy="${hand[1]}" rx="30" ry="20" fill="#2a2d24"/>`;
+    out += `<rect x="${(mirror ? hand[0] - 34 : hand[0] - 2).toFixed(1)}" y="${(hand[1] - 12).toFixed(1)}" width="36" height="24" rx="6" fill="#e8622c" opacity=".92"/>`;
+    // Bó dây chính: nhiều sợi từ tay toả lên, khuất khỏi mép trên màn hình.
+    const n = 7;
+    for (let i = 0; i < n; i++) {
+      const t = i / (n - 1);
+      const spread = mirror ? W - (60 + t * 260) : 60 + t * 260;
+      const top = [spread, -30 - t * 40];
+      out += cord(hand, top, 7, 1, "#20221c", 0.85);
+      out += cord(hand, top, 2.4, 0.4, "#efe9d8", 0.5);
+    }
+    // Mép tán dù màu cam thấp thoáng ở góc trên, gợi ý tán dù đang căng phía trên đầu.
+    out += `<polygon points="${mirror ? `${W},-20 ${W - 260},-20 ${W - 60},70` : `0,-20 260,-20 60,70`}" fill="#e8622c" opacity=".22"/>`;
+    return out;
+  };
+  return (
+    `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMax slice">` +
+    side(false) +
+    side(true) +
+    `</svg>`
+  );
 }
 function buildChute() {
   const g = new THREE.Group();
@@ -3175,7 +3235,8 @@ function updateWind(chute) {
 function playChuteOpen(position) {
   const a = spatialAudio(position, { volume: 0.9, ref: 6, max: 80 });
   if (!a) return;
-  noiseBurst(a, { duration: 0.05, filter: "highpass", freq: 2600, gain: 0.7 }); // tiếng "phựt" bật dù
+  noiseBurst(a, { duration: 0.08, filter: "highpass", freq: 2200, gain: 1.1 }); // tiếng vải dù bật mạnh
+  toneBurst(a, { at: 0.01, duration: 0.11, from: 180, to: 95, gain: 0.85 }); // tiếng giật bung khóa dù
   noiseBurst(a, {
     at: 0.03,
     duration: 0.4,
