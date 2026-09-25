@@ -5,6 +5,7 @@ const $ = (s) => document.querySelector(s),
   screens = [...document.querySelectorAll(".screen")];
 const show = (id) => {
   screens.forEach((x) => x.classList.toggle("active", x.id === id));
+  syncHomeMusic(id);
 };
 const companySplash = $("#companySplash"),
   loading = $("#loading"),
@@ -112,6 +113,26 @@ let inMatch = false, // đã vào màn hình trận (phòng chờ trong map, má
   envBlend = 0,
   airState = { vx: 0, vz: 0, fall: 0, time: 0 };
 const audioLoops = { plane: null, wind: null };
+// Track nguồn MP3, tự lặp ở các màn menu và dừng khi vào trận.
+const homeMusic = new Audio(
+  "https://orangefreesounds.com/wp-content/uploads/2025/06/Deep-ambient-dramatic-background-music.mp3",
+);
+homeMusic.loop = true;
+homeMusic.preload = "none";
+function syncHomeMusic(screenId = screens.find((screen) => screen.classList.contains("active"))?.id) {
+  const volume = soundOn
+    ? (Number($("#music")?.value ?? 0) / 100) *
+      (Number($("#masterVolume")?.value ?? 0) / 100)
+    : 0;
+  homeMusic.volume = Math.max(0, Math.min(1, volume));
+  if (screenId !== "game" && homeMusic.volume > 0) {
+    homeMusic.play().catch(() => {}); // Trình duyệt bắt đầu phát sau click đầu tiên.
+  } else {
+    homeMusic.pause();
+  }
+}
+document.addEventListener("pointerdown", () => syncHomeMusic(), { once: true });
+document.addEventListener("keydown", () => syncHomeMusic(), { once: true });
 const loopBuffers = {};
 const tmpColorA = new THREE.Color();
 const tmpColorB = new THREE.Color();
@@ -141,7 +162,7 @@ $("#nameInput").value = savedPlayerName;
 localStorage.setItem("ld-player-name", savedPlayerName);
 $("#sensitivity").value = saved.sensitivity || 50;
 $("#sfx").value = saved.sfx ?? 30;
-$("#music").value = saved.music ?? 25;
+$("#music").value = saved.music ?? 10;
 $("#masterVolume").value = saved.masterVolume ?? 30;
 $("#quality").value = saved.quality || "Performance";
 delete saved.name; // nickname is kept separately from graphics/audio settings
@@ -3066,6 +3087,7 @@ const sfxLevel = () =>
       ((Number($("#masterVolume").value) || 0) / 100)
     : 0;
 function applyAudioSettings() {
+  syncHomeMusic();
   setLoopGain(audioLoops.plane, 0.55 * sfxLevel(), 0.1);
   if (audioLoops.wind) updateWind(local.state === "parachute");
 }
