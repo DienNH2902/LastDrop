@@ -140,9 +140,9 @@ const savedPlayerName =
 $("#nameInput").value = savedPlayerName;
 localStorage.setItem("ld-player-name", savedPlayerName);
 $("#sensitivity").value = saved.sensitivity || 50;
-$("#sfx").value = saved.sfx ?? 65;
+$("#sfx").value = saved.sfx ?? 30;
 $("#music").value = saved.music ?? 25;
-$("#masterVolume").value = saved.masterVolume ?? 100;
+$("#masterVolume").value = saved.masterVolume ?? 30;
 $("#quality").value = saved.quality || "Performance";
 delete saved.name; // nickname is kept separately from graphics/audio settings
 localStorage.setItem(
