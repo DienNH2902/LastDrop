@@ -1603,7 +1603,38 @@ function applyGraphicsSettings() {
   renderer.domElement.style.imageRendering =
     $("#quality").value === "Performance" ? "pixelated" : "auto";
 }
+
 const remoteMeshes = new Map();
+// Đầu mèo 3D dùng chung cho mọi nhân vật: 1 ảnh cho mỗi mặt (trước/sau/2 bên/trên/dưới)
+// cắt ra từ đúng ảnh mèo người dùng gửi, để nhìn góc nào cũng ra hình con mèo đó
+// chứ không phải một mặt phẳng dán phía trước.
+const catHeadLoader = new THREE.TextureLoader();
+const loadHeadTex = (name) => {
+  const tex = catHeadLoader.load(`/cat-head-${name}.png`);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+};
+
+// Tạo texture cho mặt bên phải
+const sideRightTex = loadHeadTex("side");
+
+// Tạo texture cho mặt bên trái và LẬT NGANG (Mirror)
+const sideLeftTex = loadHeadTex("side").clone();
+sideLeftTex.center.set(0.5, 0.5); // Đặt tâm xoay/lật vào giữa ảnh
+sideLeftTex.repeat.x = -1; // Lật ngược chiều ngang (Horizontal Flip)
+sideLeftTex.needsUpdate = true;
+
+// Thứ tự material của THREE.BoxGeometry: [+X phải, -X trái, +Y trên, -Y dưới, +Z sau, -Z trước]
+const catHeadMaterials = [
+  new THREE.MeshStandardMaterial({ map: sideRightTex, roughness: 1 }), // +X: Bên phải
+  new THREE.MeshStandardMaterial({ map: sideLeftTex, roughness: 1 }), // -X: Bên trái (đã lật)
+  new THREE.MeshStandardMaterial({ map: loadHeadTex("top"), roughness: 1 }),
+  new THREE.MeshStandardMaterial({ map: loadHeadTex("bottom"), roughness: 1 }),
+  new THREE.MeshStandardMaterial({ map: loadHeadTex("back"), roughness: 1 }),
+  new THREE.MeshStandardMaterial({ map: loadHeadTex("face-zoom"), roughness: 1 }),
+];
+const catEarMat = makeMat("#8a8175");
+
 function spawnBloodBurst(position) {
   if (!scene) return;
   for (let i = 0; i < 13; i++) {
@@ -1703,7 +1734,7 @@ function renderPlayers(state) {
     row.className = "kill-feed-row";
     row.textContent = `${event.killerName} đã chịch ${event.victimName} đến chết`;
     $("#killFeed")?.prepend(row);
-    const timer = setTimeout(() => row.remove(), 12000);
+    const timer = setTimeout(() => row.remove(), 20000);
     killFeedTimers.push(timer);
     if (event.victimId === playerId) {
       localEliminationMessage = `Bạn đã bị chịch đến chết bởi ${event.killerName}.`;
@@ -1721,7 +1752,7 @@ function renderPlayers(state) {
           document.createTextNode(` ${event.victimName} đến chết.`),
         );
         notice.classList.remove("hidden");
-        setTimeout(() => notice.classList.add("hidden"), 7000);
+        setTimeout(() => notice.classList.add("hidden"), 10000);
       }
     }
   }
@@ -1769,10 +1800,25 @@ function renderPlayers(state) {
       );
       torso.position.y = 1.05;
       mesh.add(torso);
-      const head = new THREE.Mesh(
-        new THREE.SphereGeometry(0.24, 8, 8),
-        makeMat("#d4b995"),
+      const head = new THREE.Group();
+      const headBox = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 0.48, 0.44),
+        catHeadMaterials,
       );
+      head.add(headBox);
+      // Tai 3D (hình nón dẹt) để nhìn từ mọi góc — trước/sau/2 bên/trên — đều
+      // thấy đúng dáng đầu mèo tai vểnh, không chỉ là ảnh phẳng ở mặt trước.
+      const earGeo = new THREE.ConeGeometry(0.1, 0.2, 4);
+      const earLeft = new THREE.Mesh(earGeo, catEarMat);
+      earLeft.rotation.y = Math.PI / 4;
+      earLeft.rotation.z = 0.32;
+      earLeft.position.set(-0.17, 0.32, -0.02);
+      head.add(earLeft);
+      const earRight = new THREE.Mesh(earGeo, catEarMat);
+      earRight.rotation.y = Math.PI / 4;
+      earRight.rotation.z = -0.32;
+      earRight.position.set(0.17, 0.32, -0.02);
+      head.add(earRight);
       head.position.y = 1.72;
       mesh.add(head);
       const legs = new THREE.Mesh(
