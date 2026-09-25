@@ -126,6 +126,7 @@ const snapshot = (room) => ({
     slowWalking: p.slowWalking,
     jumpY: p.jumpY,
     ammo: p.ammo,
+    weapon: p.weapon || "ranger",
     reserveAmmo: p.reserveAmmo,
     medkits: p.medkits || 0,
     healing: p.alive && p.healingUntil > Date.now(),
@@ -308,8 +309,15 @@ function createLoot(room) {
   };
   place("ammo", AMMO_BOX_COUNT, AMMO_PER_BOX);
   place("medkit", MEDKIT_COUNT, 1);
+  // Two sniper rifles spawn at separate, walkable positions each round.
+  place("weapon", 2, 1);
+  for (const item of items.filter((entry) => entry.type === "weapon")) {
+    item.weapon = "sniper";
+    item.ammo = 5;
+  }
   return items;
 }
+const magazineSize = (player) => (player.weapon === "sniper" ? 5 : 30);
 function groundHeightAt(room, x, z) {
   let height = 0;
   for (const hill of room.hills || room.obstacles) {
@@ -661,6 +669,7 @@ wss.on("connection", (ws) => {
         jumpY: 0,
         lastMoveAt: Date.now(),
         ammo: 30,
+        weapon: "ranger",
         reserveAmmo: 90,
         medkits: 0,
         healingUntil: 0,
@@ -920,6 +929,27 @@ wss.on("connection", (ws) => {
             `+${taken} ĐẠN 5.56` +
             (p.reserveAmmo >= MAX_RESERVE_AMMO ? " · BALO ĐẦY ĐẠN" : ""),
         });
+      } else if (best.type === "weapon") {
+        const oldWeapon = p.weapon || "ranger";
+        const dropped = {
+          id: room.nextLootId++, type: "weapon", weapon: oldWeapon,
+          x: Math.round(p.x * 100) / 100, z: Math.round(p.z * 100) / 100,
+          amount: 1, ammo: p.ammo,
+        };
+        room.loot.push(dropped);
+        p.weapon = best.weapon === "sniper" ? "sniper" : "ranger";
+        const storedMagazineAmmo = Number(best.ammo);
+        p.ammo = Math.max(
+          0,
+          Math.min(
+            magazineSize(p),
+            Number.isFinite(storedMagazineAmmo) ? storedMagazineAmmo : magazineSize(p),
+          ),
+        );
+        room.loot = room.loot.filter((item) => item !== best);
+        broadcastRaw(room, { type: "lootRemoved", id: best.id });
+        broadcastRaw(room, { type: "lootAdded", item: dropped });
+        send(ws, { type: "toast", text: `ĐÃ ĐỔI SANG ${p.weapon === "sniper" ? "SNIPER" : "RANGER-9"}` });
       } else {
         if ((p.medkits || 0) >= MAX_MEDKITS) {
           return send(ws, {
@@ -1053,7 +1083,7 @@ wss.on("connection", (ws) => {
       if (
         p.healingUntil > now ||
         p.reloadingUntil > now ||
-        p.ammo >= 30 ||
+        p.ammo >= magazineSize(p) ||
         p.reserveAmmo <= 0
       ) {
         broadcast(room);
@@ -1065,7 +1095,7 @@ wss.on("connection", (ws) => {
       setTimeout(() => {
         if (!room.players.has(p.id) || p.reloadingUntil !== reloadFinishesAt)
           return;
-        const amount = Math.min(30 - p.ammo, p.reserveAmmo);
+        const amount = Math.min(magazineSize(p) - p.ammo, p.reserveAmmo);
         p.ammo += amount;
         p.reserveAmmo -= amount;
         p.reloadingUntil = 0;
@@ -1085,7 +1115,7 @@ wss.on("connection", (ws) => {
         p.healingUntil > shotTime ||
         p.reloadingUntil > shotTime ||
         p.ammo <= 0 ||
-        shotTime - p.lastShotAt < 120
+        shotTime - p.lastShotAt < (p.weapon === "sniper" ? 1500 : 120)
       ) {
         broadcast(room);
         return;
@@ -1361,7 +1391,7 @@ wss.on("connection", (ws) => {
             z: origin.z + dir.z * nearest,
           },
         };
-        target.hp = Math.max(0, target.hp - (targetPart === "head" ? 70 : 10));
+        target.hp = Math.max(0, target.hp - (p.weapon === "sniper" ? (targetPart === "head" ? 100 : 60) : (targetPart === "head" ? 70 : 10)));
         if (!target.hp) {
           target.alive = false;
           // Place eliminated players by elimination order; the last survivor is first.

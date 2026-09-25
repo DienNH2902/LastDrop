@@ -39,6 +39,7 @@ let socket = null,
     groundY: 0,
     yaw: 0,
     hp: 100,
+    weapon: "ranger",
     kills: 0,
     placement: 0,
     crouching: false,
@@ -63,6 +64,7 @@ let keys = {},
   grounded = true,
   jumpOffset = 0,
   baseFov = 76,
+  sniperZoomFov = 12,
   mapObstacles = [],
   mapHills = [],
   mapId = "forest",
@@ -70,6 +72,7 @@ let keys = {},
     localStorage.getItem("ld-selected-map") === "desert" ? "desert" : "forest",
   triggerHeld = false,
   fireInterval = null,
+  lastClientShotAt = 0,
   lastHitEventId = 0,
   lastFlightMapDraw = 0,
   bloodParticles = [],
@@ -80,6 +83,7 @@ let keys = {},
   localEliminationMessage = "",
   killFeedTimers = [];
 const FIRE_INTERVAL_MS = 120;
+const SNIPER_FIRE_INTERVAL_MS = 2500;
 
 const STATE_ORDER = {
   lobby: 0,
@@ -1489,7 +1493,37 @@ function initWorld() {
   );
   magazine.position.set(0.28, -0.36, -0.55);
   gun.add(magazine);
+  const rangerParts = [body, barrel, stock, magazine];
+  const sniper = new THREE.Group();
+  const sniperBody = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.82), makeMat("#30332d"));
+  sniperBody.position.set(0.28, -0.24, -0.62);
+  sniper.add(sniperBody);
+  const sniperBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.03, 0.88, 8), makeMat("#171a16"));
+  sniperBarrel.rotation.x = Math.PI / 2;
+  sniperBarrel.position.set(0.28, -0.2, -1.38);
+  sniper.add(sniperBarrel);
+  const sniperStock = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.17, 0.36), makeMat("#645a43"));
+  sniperStock.position.set(0.28, -0.25, -0.12);
+  sniper.add(sniperStock);
+  const sniperMag = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.19, 0.12), makeMat("#45483f"));
+  sniperMag.position.set(0.28, -0.36, -0.58);
+  sniper.add(sniperMag);
+  const scopeTube = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.42, 10), makeMat("#10130f"));
+  scopeTube.rotation.x = Math.PI / 2;
+  scopeTube.position.set(0.28, -0.105, -0.66);
+  sniper.add(scopeTube);
+  for (const z of [-0.88, -0.44]) {
+    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.055, 10), makeMat("#56727a"));
+    lens.rotation.x = Math.PI / 2;
+    lens.position.set(0.28, -0.105, z);
+    sniper.add(lens);
+  }
+  sniper.visible = false;
+  gun.add(sniper);
   gun.userData.magazine = magazine;
+  gun.userData.magazines = { ranger: magazine, sniper: sniperMag };
+  gun.userData.rangerParts = rangerParts;
+  gun.userData.sniper = sniper;
   gun.visible = false; // phòng chờ / máy bay / đang nhảy dù: tay không, chỉ cầm súng sau khi tiếp đất
   camera.add(gun);
   scene.add(camera);
@@ -1652,6 +1686,9 @@ function renderPlayers(state) {
   const nowMs = Date.now();
   for (const p of state.players) {
     if (p.id === playerId) {
+      const weaponChanged = local.weapon !== (p.weapon || "ranger");
+      local.weapon = p.weapon || "ranger";
+      if (weaponChanged) updateLocalWeaponVisual();
       local.hp = p.hp;
       local.kills = p.kills;
       local.placement = p.placement || 0;
@@ -1728,6 +1765,19 @@ function renderPlayers(state) {
       );
       grip.position.set(0.39, 1.03, -0.2);
       weapon.add(grip);
+      const sniperWeapon = new THREE.Group();
+      const sniperReceiver = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.68), makeMat("#30332d"));
+      sniperReceiver.position.set(0.39, 1.22, -0.43);
+      sniperWeapon.add(sniperReceiver);
+      const sniperBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 1.15, 7), makeMat("#666b5e"));
+      sniperBarrel.rotation.x = Math.PI / 2;
+      sniperBarrel.position.set(0.39, 1.24, -1.18);
+      sniperWeapon.add(sniperBarrel);
+      const remoteScope = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.38, 8), makeMat("#11140f"));
+      remoteScope.rotation.x = Math.PI / 2;
+      remoteScope.position.set(0.39, 1.37, -0.48);
+      sniperWeapon.add(remoteScope);
+      mesh.add(sniperWeapon);
       const armMaterial = makeMat("#a94d39");
       const armGeo = new THREE.BoxGeometry(0.16, 0.18, 0.48);
       const armNear = new THREE.Mesh(armGeo, armMaterial);
@@ -1798,6 +1848,7 @@ function renderPlayers(state) {
         head,
         legs,
         weapon,
+        sniperWeapon,
         muzzleFlash,
         reloadIndicator,
         healIndicator,
@@ -1828,7 +1879,8 @@ function renderPlayers(state) {
         playLanding({ x: p.x, y: (p.groundY || 0) + 0.3, z: p.z });
     }
     // Chỉ cầm súng sau khi tiếp đất; ở phòng chờ / máy bay / trên không thì tay không.
-    mesh.userData.weapon.visible = curState === "ground";
+    mesh.userData.weapon.visible = curState === "ground" && p.weapon !== "sniper";
+    mesh.userData.sniperWeapon.visible = curState === "ground" && p.weapon === "sniper";
     mesh.userData.chute.visible = curState === "parachute";
     mesh.userData.slowWalking = Boolean(p.slowWalking);
     const wasReloading = Boolean(mesh.userData.reloading);
@@ -1920,7 +1972,9 @@ function renderPlayers(state) {
 // Server sinh vật phẩm ngẫu nhiên khi bắt đầu trận và quyết định ai nhặt được.
 // Client chỉ vẽ vật phẩm, hiện gợi ý "F" và gửi yêu cầu lên server.
 function lootLabel(item) {
-  return item.type === "ammo" ? `ĐẠN 5.56 (+${item.amount})` : "BỊCH MÁU";
+  if (item.type === "ammo") return `ĐẠN 5.56 (+${item.amount})`;
+  if (item.type === "weapon") return `${item.weapon === "sniper" ? "SNIPER" : "RANGER-9"} · NHẤN F ĐỔI SÚNG`;
+  return "BỊCH MÁU";
 }
 function setLootItems(items) {
   for (const item of lootItems.values()) disposeLootMesh(item);
@@ -2029,10 +2083,27 @@ function disposeLootMesh(item) {
 function addLootMesh(item) {
   if (!scene || item.mesh) return;
   const isMed = item.type === "medkit";
+  const isWeapon = item.type === "weapon";
   const root = new THREE.Group();
   root.userData.interactionTarget = { kind: "loot", id: item.id };
   const body = new THREE.Group();
-  if (isMed) {
+  if (isWeapon) {
+    const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.16, 0.55), makeMat("#33372f"));
+    body.add(receiver);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, item.weapon === "sniper" ? 0.9 : 0.52, 7), makeMat("#171a16"));
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.z = -0.62;
+    body.add(barrel);
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.15, 0.3), makeMat("#594432"));
+    stock.position.z = 0.38;
+    body.add(stock);
+    if (item.weapon === "sniper") {
+      const scope = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.32, 8), makeMat("#151812"));
+      scope.rotation.x = Math.PI / 2;
+      scope.position.set(0, 0.12, -0.16);
+      body.add(scope);
+    }
+  } else if (isMed) {
     body.add(
       new THREE.Mesh(
         new THREE.BoxGeometry(0.5, 0.34, 0.34),
@@ -2076,7 +2147,7 @@ function addLootMesh(item) {
     }
   }
   root.add(body);
-  const color = isMed ? 0xff4d5e : 0xffd24a;
+  const color = isMed ? 0xff4d5e : isWeapon ? 0x7de5ff : 0xffd24a;
   // Vòng sáng dưới đất + cột sáng mảnh để dễ thấy từ xa.
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.55, 0.7, 24),
@@ -2109,6 +2180,7 @@ function addLootMesh(item) {
 }
 // Balo còn chỗ cho loại vật phẩm này không?
 function packHasRoom(type) {
+  if (type === "weapon") return true;
   return type === "ammo"
     ? (local.reserveAmmo ?? 0) < packLimits.ammo
     : (local.medkits || 0) < packLimits.medkits;
@@ -2528,6 +2600,7 @@ function beginGame() {
   document.addEventListener("pointerlockchange", onPointerLockChange);
   document.addEventListener("mousemove", onMouse);
   document.addEventListener("mousedown", onFire);
+  document.addEventListener("wheel", onScopeWheel, { passive: false });
   document.addEventListener("mouseup", onMouseUp);
   window.addEventListener("blur", stopFiring);
   document.addEventListener("contextmenu", blockContextMenu);
@@ -2740,6 +2813,7 @@ function leaveMatch() {
 function cleanupGame() {
   document.removeEventListener("mousemove", onMouse);
   document.removeEventListener("mousedown", onFire);
+  document.removeEventListener("wheel", onScopeWheel);
   document.removeEventListener("mouseup", onMouseUp);
   window.removeEventListener("blur", stopFiring);
   stopFiring();
@@ -2793,9 +2867,11 @@ function onFire(e) {
   )
     return;
   if (triggerHeld) return;
+  // Clicking repeatedly must not bypass the bolt-action cooldown.
+  if (local.weapon === "sniper" && Date.now() - lastClientShotAt < SNIPER_FIRE_INTERVAL_MS) return;
   triggerHeld = true;
   shootOnce();
-  fireInterval = setInterval(shootOnce, FIRE_INTERVAL_MS);
+  fireInterval = setInterval(shootOnce, local.weapon === "sniper" ? SNIPER_FIRE_INTERVAL_MS : FIRE_INTERVAL_MS);
 }
 function onMouseUp(e) {
   if (e.button === 0) stopFiring();
@@ -2817,11 +2893,14 @@ function shootOnce() {
     return;
   }
   if (local.reloading || local.healing) return;
+  const now = Date.now();
+  if (local.weapon === "sniper" && now - lastClientShotAt < SNIPER_FIRE_INTERVAL_MS) return;
   if (ammo <= 0) {
     tone(120, 0.07, "square", 0.015);
     stopFiring();
     return;
   }
+  lastClientShotAt = now;
   ammo--;
   $("#ammo").innerHTML = `${ammo} <i>/ ${local.reserveAmmo ?? 90}</i>`;
   playSpatialGunshot(null, 0.65);
@@ -2845,11 +2924,29 @@ function shootOnce() {
 }
 function setScope(enabled) {
   scoped = enabled;
-  camera.fov = scoped ? 30 : baseFov;
+  camera.fov = scoped ? (local.weapon === "sniper" ? sniperZoomFov : 30) : baseFov;
   camera.updateProjectionMatrix();
   gun.visible = !scoped && local.state === "ground";
   $(".crosshair").classList.toggle("scope-hidden", scoped);
   $("#scopeOverlay").classList.toggle("hidden", !scoped);
+}
+function onScopeWheel(event) {
+  if (!scoped || local.weapon !== "sniper") return;
+  event.preventDefault();
+  sniperZoomFov = clamp(sniperZoomFov + Math.sign(event.deltaY) * 2, 5, 24);
+  camera.fov = sniperZoomFov;
+  camera.updateProjectionMatrix();
+}
+function updateLocalWeaponVisual() {
+  if (!gun) return;
+  const sniper = local.weapon === "sniper";
+  for (const part of gun.userData.rangerParts || []) part.visible = !sniper;
+  if (gun.userData.sniper) gun.userData.sniper.visible = sniper;
+  gun.userData.magazine = gun.userData.magazines?.[sniper ? "sniper" : "ranger"] || gun.userData.magazine;
+  const small = $(".weapon small"), name = $(".weapon b");
+  if (small) small.textContent = sniper ? "RIFLE / SNIPER · BOLT ACTION" : "RIFLE / ASSAULT";
+  if (name) name.textContent = sniper ? "SNIPER" : "RANGER-9";
+  if (scoped) setScope(true);
 }
 function makeTracer() {
   const direction = new THREE.Vector3();
@@ -2857,7 +2954,7 @@ function makeTracer() {
   const eye = new THREE.Vector3();
   camera.getWorldPosition(eye);
   const muzzle = new THREE.Vector3();
-  camera.localToWorld(muzzle.set(0.28, -0.2, -1));
+  camera.localToWorld(muzzle.set(0.28, -0.2, local.weapon === "sniper" ? -1.65 : -1));
   // End the tracer on the exact same camera-center ray sent to the server.
   const end = eye.addScaledVector(direction, 140);
   const geometry = new THREE.BufferGeometry().setFromPoints([muzzle, end]);
