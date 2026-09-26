@@ -4034,14 +4034,19 @@ function drawFlightMap() {
     ctx.strokeStyle = "#6fd8ff";
     ctx.lineWidth = 2;
     ctx.stroke();
-    // Đang thu hẹp: vẽ thêm viền vòng đích (nét đứt) để biết sắp thu về đâu.
-    if (gameState.zone?.phase === "shrink") {
-      const tx = X(gameState.zone.toCenter.x),
-        ty = Y(gameState.zone.toCenter.z),
-        tr = Math.max(0, gameState.zone.toRadius * k);
+    // Show the upcoming circle during the waiting phase as well, before it starts shrinking.
+    const nextZone = gameState.zone?.nextCenter
+      ? { center: gameState.zone.nextCenter, radius: gameState.zone.nextRadius }
+      : gameState.zone?.phase === "shrink"
+        ? { center: gameState.zone.toCenter, radius: gameState.zone.toRadius }
+        : null;
+    if (nextZone) {
+      const tx = X(nextZone.center.x),
+        ty = Y(nextZone.center.z),
+        tr = Math.max(0, nextZone.radius * k);
       ctx.setLineDash([4, 4]);
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = gameState.zone.phase === "wait" ? "#d6ff45" : "#ffffff";
+      ctx.lineWidth = 1.7;
       ctx.beginPath();
       ctx.arc(tx, ty, tr, 0, Math.PI * 2);
       ctx.stroke();

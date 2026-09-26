@@ -574,7 +574,7 @@ const clampToMap = (v) =>
 function initZone(room) {
   const now = Date.now();
   const full = { x: 0, z: 0 };
-  room.zone = {
+  const zone = {
     stageIndex: -1, // -1 = còn nguyên bản đồ, chưa vòng nào hình thành
     phase: "wait", // "wait" (đang chờ thu hẹp) | "shrink" (đang thu hẹp) | "done" (đã tới vòng cuối)
     fromCenter: full,
@@ -586,6 +586,13 @@ function initZone(room) {
     waitEndsAt: now + ZONE_STAGES[0].waitMs,
     damage: 0,
   };
+  // Pick and replicate the first destination as soon as the current circle
+  // starts waiting, so players can plan their rotation before the shrink.
+  const firstStage = ZONE_STAGES[0];
+  const next = firstStage ? pickNextZoneCircle({ center: full, radius: ZONE_FULL_RADIUS }, firstStage.radiusRatio) : null;
+  zone.nextCenter = next?.center || null;
+  zone.nextRadius = next?.radius || 0;
+  room.zone = zone;
 }
 // Chọn vòng kế tiếp: bán kính nhỏ hơn theo tỉ lệ, tâm ngẫu nhiên sao cho vòng
 // mới luôn nằm trọn bên trong vòng hiện tại.
@@ -626,7 +633,9 @@ function tickZone(room, now) {
     const stage = ZONE_STAGES[nextIndex];
     if (stage) {
       const from = currentZoneCircle(zone, now);
-      const next = pickNextZoneCircle(from, stage.radiusRatio);
+      const next = zone.nextCenter
+        ? { center: zone.nextCenter, radius: zone.nextRadius }
+        : pickNextZoneCircle(from, stage.radiusRatio);
       zone.fromCenter = from.center;
       zone.fromRadius = from.radius;
       zone.toCenter = next.center;
@@ -643,6 +652,11 @@ function tickZone(room, now) {
   } else if (zone.phase === "shrink" && now >= zone.shrinkEndsAt) {
     zone.phase = "wait";
     zone.waitEndsAt = now + (ZONE_STAGES[zone.stageIndex + 1]?.waitMs ?? 20000);
+    const followingStage = ZONE_STAGES[zone.stageIndex + 1];
+    const settled = { center: zone.toCenter, radius: zone.toRadius };
+    const next = followingStage ? pickNextZoneCircle(settled, followingStage.radiusRatio) : null;
+    zone.nextCenter = next?.center || null;
+    zone.nextRadius = next?.radius || 0;
     changed = true;
   }
   // Sát thương cho người đứng ngoài vòng an toàn hiện tại (chỉ tính người đã tiếp đất).
