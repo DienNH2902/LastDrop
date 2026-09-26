@@ -6562,6 +6562,9 @@ function showResult() {
   clearTimeout(resultTimeout);
   clearInterval(resultCountdown);
   updateCountdown();
+  // Trận đấu đang chạy ở fullscreen; thoát ra trước khi hiện bảng kết quả
+  // vì bảng kết quả nằm ngoài phần tử #game đang được fullscreen.
+  releaseGameInputMode();
   show("result");
   resultCountdown = setInterval(updateCountdown, 250);
   resultTimeout = setTimeout(returnHome, 20000);
