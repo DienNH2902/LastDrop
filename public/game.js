@@ -123,6 +123,7 @@ let inMatch = false, // đã vào màn hình trận (phòng chờ trong map, má
   lastCountdownNumber = null,
   readySent = false,
   jumpRequestedAt = 0,
+  jumpCuePlayed = false,
   planeObject = null,
   envBlend = 0,
   localFootstepDistance = 0,
@@ -3412,6 +3413,7 @@ function syncLocalState(p) {
 function enterPlane(p) {
   if (!plane) return;
   local.seat = p.seat || 0;
+  jumpCuePlayed = false;
   local.prone = false;
   local.crouching = false;
   local.jumping = false;
@@ -3588,15 +3590,27 @@ function updatePlaneObject(dt) {
     return;
   }
   const t = planeTime();
+  if (local.state === "plane" && t >= plane.tEnter && !jumpCuePlayed) {
+    jumpCuePlayed = true;
+    playJumpReadyBell();
+  }
   planeObject.visible = t < plane.tExit + 25;
   if (!planeObject.visible) return;
   const pos = planePosAt(t);
   planeObject.position.set(pos.x, plane.alt, pos.z);
   planeObject.rotation.y = planeYaw();
   for (const prop of planeObject.userData.props) prop.rotation.z += dt * 40;
-  planeObject.userData.jumpLight.material.color.set(
-    t >= plane.tEnter && t < plane.tExit ? 0x39ff6a : 0xff3b30,
-  );
+  const canJump = t >= plane.tEnter && t < plane.tExit;
+  const color = canJump ? 0x39ff6a : 0xff3028;
+  const pulse = 0.5 + 0.5 * Math.sin(performance.now() * (canJump ? 0.009 : 0.004));
+  const { jumpLight, jumpGlow, jumpRing, jumpPointLight } = planeObject.userData;
+  jumpLight.material.color.set(color);
+  jumpLight.scale.setScalar(canJump ? 1.1 + pulse * 0.12 : 1);
+  jumpGlow.material.color.set(color);
+  jumpGlow.material.opacity = canJump ? 0.3 + pulse * 0.22 : 0.12 + pulse * 0.08;
+  jumpRing.material.color.set(canJump ? 0xd9ffe2 : 0xffd6cf);
+  jumpPointLight.color.set(color);
+  jumpPointLight.intensity = canJump ? 22 + pulse * 18 : 7 + pulse * 5;
 }
 // Người chơi khác: đứng trong khoang theo chỗ ngồi, hoặc lướt mượt tới vị trí bay mới nhất.
 function updateRemoteMotion(dt) {
@@ -4338,12 +4352,34 @@ function buildPlane() {
     props.push(prop);
   }
   const jumpLight = new THREE.Mesh(
-    new THREE.BoxGeometry(0.32, 0.32, 0.1),
-    new THREE.MeshBasicMaterial({ color: 0xff3b30 }),
+    new THREE.BoxGeometry(0.48, 0.48, 0.16),
+    new THREE.MeshBasicMaterial({ color: 0xff3028, toneMapped: false }),
   );
   jumpLight.position.set(0, 2.3, -3.2);
   g.add(jumpLight);
-  g.userData = { props, jumpLight };
+  const jumpGlow = new THREE.Mesh(
+    new THREE.SphereGeometry(0.72, 12, 10),
+    new THREE.MeshBasicMaterial({
+      color: 0xff3028,
+      transparent: true,
+      opacity: 0.18,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+  jumpGlow.position.copy(jumpLight.position);
+  g.add(jumpGlow);
+  const jumpRing = new THREE.Mesh(
+    new THREE.TorusGeometry(0.48, 0.045, 8, 24),
+    new THREE.MeshBasicMaterial({ color: 0xffd6cf, toneMapped: false }),
+  );
+  jumpRing.position.copy(jumpLight.position);
+  g.add(jumpRing);
+  const jumpPointLight = new THREE.PointLight(0xff3028, 10, 24, 2);
+  jumpPointLight.position.copy(jumpLight.position);
+  g.add(jumpPointLight);
+  g.userData = { props, jumpLight, jumpGlow, jumpRing, jumpPointLight };
   return g;
 }
 // Đất quanh map (chỉ để nhìn từ trên cao) và bức tường zone mờ bao quanh khu chơi.
@@ -4733,6 +4769,27 @@ function playJumpWhoosh() {
     q: 0.6,
     gain: 1,
   });
+}
+function playJumpReadyBell() {
+  if (!soundOn || sfxLevel() <= 0) return;
+  const ctx = ensureAudio();
+  const overall = sfxLevel();
+  // Three bright ascending notes announce that the door is over the map.
+  for (const [offset, frequency] of [[0, 880], [0.16, 1174], [0.34, 1568]]) {
+    const start = ctx.currentTime + offset;
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(frequency, start);
+    oscillator.frequency.exponentialRampToValueAtTime(frequency * 0.985, start + 0.65);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.linearRampToValueAtTime(0.22 * overall, start + 0.018);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.72);
+    oscillator.connect(gain);
+    gain.connect(ctx.destination);
+    oscillator.start(start);
+    oscillator.stop(start + 0.75);
+  }
 }
 function frame() {
   if (!renderer || !$("#game").classList.contains("active")) return;
