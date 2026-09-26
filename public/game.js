@@ -102,7 +102,7 @@ const PLANE_SEATS = [
   [0.9, 0.6],
   [-0.9, -1.0],
 ];
-const MAP_HALF = 100; // zone của map: 200 × 200 m, diện tích gấp 4 lần map cũ
+const MAP_HALF = 200; // map 400 × 400 m, diện tích gấp 4 lần bản hiện tại
 const MAP_SCALE = MAP_HALF / 50;
 const AIR = {
   freefallHoriz: 20, // m/s bay ngang khi rơi tự do
@@ -896,7 +896,7 @@ function waterAt(x, z) {
   return null;
 }
 function createGroundMesh(forest) {
-  const size = 220;
+  const size = MAP_HALF * 2 + 20;
   const segments = forest ? 320 : 1;
   const step = size / segments;
   const positions = [];
@@ -963,6 +963,32 @@ function drawMapObject(o, forest) {
   };
   const w = o.w || 1;
   switch (o.type) {
+    case "road": {
+      // Roads are rendered as flat surfaces and have no collision volume.
+      const road = new THREE.Group();
+      road.position.set(o.x, 0.095, o.z);
+      road.rotation.y = o.yaw || 0;
+      const surface = (width, height, color, y) => {
+        const geometry = new THREE.PlaneGeometry(width, height);
+        geometry.rotateX(-Math.PI / 2);
+        const mesh = new THREE.Mesh(geometry, makeMat(color));
+        mesh.position.y = y;
+        road.add(mesh);
+      };
+      surface(o.w + 2.2, o.length, forest ? "#827d68" : "#8d8068", 0);
+      surface(o.w, o.length, forest ? "#514f47" : "#5e594f", 0.012);
+      // Short center dashes repeat over each segment, leaving the edges clear.
+      for (let z = -o.length / 2 + 1; z < o.length / 2 - 0.5; z += 3.2) {
+        const dash = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.16, 1.7).rotateX(-Math.PI / 2),
+          makeMat("#d9d0a8"),
+        );
+        dash.position.set(0, 0.026, z);
+        road.add(dash);
+      }
+      scene.add(road);
+      break;
+    }
     case "river": {
       const depth = o.depth || 4;
       const bed = add(
@@ -1333,14 +1359,15 @@ function addForestGrass(seed) {
   const grass = new THREE.InstancedMesh(
     blade,
     new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 1 }),
-    9600,
+    38400,
   );
   const dummy = new THREE.Object3D();
   const tint = new THREE.Color();
   let count = 0;
-  for (let i = 0; i < 9600; i++) {
-    const x = (rand() - 0.5) * 196;
-    const z = (rand() - 0.5) * 196;
+  for (let i = 0; i < 38400; i++) {
+    const x = (rand() - 0.5) * (MAP_HALF * 2 - 4);
+    const z = (rand() - 0.5) * (MAP_HALF * 2 - 4);
+    if (isNearRoad(x, z, 1.25)) continue;
     if (Math.hypot(x, z - 8) < 10 || Math.hypot(x, z + 8) < 9) continue;
     const streamZ =
       (-7 + Math.sin((x + 12 * MAP_SCALE) / (13 * MAP_SCALE)) * 13) * MAP_SCALE;
@@ -1370,6 +1397,19 @@ function addForestGrass(seed) {
   grass.count = count;
   grass.instanceMatrix.needsUpdate = true;
   scene.add(grass);
+}
+// Match the road clearance used by server-side obstacle and loot placement.
+function isNearRoad(x, z, clearance = 0) {
+  return mapObstacles.some((road) => {
+    if (road.type !== "road") return false;
+    const dx = Math.sin(road.yaw || 0) * road.length / 2;
+    const dz = Math.cos(road.yaw || 0) * road.length / 2;
+    const ax = road.x - dx, az = road.z - dz;
+    const bx = road.x + dx, bz = road.z + dz;
+    const vx = bx - ax, vz = bz - az;
+    const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)));
+    return Math.hypot(x - (ax + t * vx), z - (az + t * vz)) < road.w / 2 + clearance;
+  });
 }
 const PLAYER_RADIUS = 0.38;
 // Ground collision follows the visible footprint, not the full square map cell.
@@ -3960,7 +4000,15 @@ function drawFlightMap() {
     }
     ctx.fillStyle = "#31899a";
     ctx.beginPath();
-    ctx.ellipse(X(44), Y(-6), 12 * k, 17 * k, 0.12, 0, Math.PI * 2);
+    ctx.ellipse(
+      X(22 * MAP_SCALE),
+      Y(-3 * MAP_SCALE),
+      12 * MAP_SCALE * k,
+      17 * MAP_SCALE * k,
+      0.12,
+      0,
+      Math.PI * 2,
+    );
     ctx.fill();
   } else {
     // Curving contour bands represent the desert dunes from overhead.
@@ -3979,6 +4027,21 @@ function drawFlightMap() {
     }
   }
   const terrain = mapObstacles || [];
+  // Roads appear as continuous clean tracks on the tactical map.
+  ctx.lineCap = "round";
+  for (const [color, factor] of [["#b2a98c", 1.28], ["#4f514b", 1]]) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1, 9 * k * factor);
+    ctx.beginPath();
+    for (const road of terrain) {
+      if (road.type !== "road") continue;
+      const dx = Math.sin(road.yaw || 0) * road.length / 2;
+      const dz = Math.cos(road.yaw || 0) * road.length / 2;
+      ctx.moveTo(X(road.x - dx), Y(road.z - dz));
+      ctx.lineTo(X(road.x + dx), Y(road.z + dz));
+    }
+    ctx.stroke();
+  }
   // Elevation contours are underneath buildings, trees and rocks.
   for (const o of terrain)
     if (o.type === "hill") {
@@ -4015,7 +4078,18 @@ function drawFlightMap() {
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(o.yaw || 0);
-    if (o.type === "house" || o.type === "hut") {
+    if (o.type === "road") {
+      ctx.strokeStyle = "rgba(226,216,179,.82)";
+      ctx.lineWidth = Math.max(0.7, 0.8 * k);
+      ctx.setLineDash([2.4 * k, 2.2 * k]);
+      ctx.beginPath();
+      const dx = Math.sin(o.yaw || 0) * o.length * 0.36;
+      const dz = Math.cos(o.yaw || 0) * o.length * 0.36;
+      ctx.moveTo(-dx, -dz);
+      ctx.lineTo(dx, dz);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (o.type === "house" || o.type === "hut") {
       ctx.fillStyle = o.type === "house" ? "#675443" : "#8b704b";
       ctx.fillRect(-size * 0.48, -size * 0.38, size * 0.96, size * 0.76);
       ctx.strokeStyle = "#e4c895";

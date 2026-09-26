@@ -16,7 +16,7 @@ const rooms = new Map();
 //  countdown : đếm ngược COUNTDOWN_MS.
 //  plane     : tất cả lên chung một máy bay bay thẳng qua map; nhảy dù khi máy bay vào vùng map.
 //  playing   : mọi người đã nhảy; ai tiếp đất rồi mới được cầm súng / nhặt đồ / bắn.
-const MAP_HALF = 100; // map 200 × 200 m: gấp 4 lần diện tích bản đồ cũ
+const MAP_HALF = 200; // map 400 × 400 m: gấp 4 lần diện tích hiện tại (200 × 200)
 const MAP_SCALE = MAP_HALF / 50;
 const COUNTDOWN_MS = 5000;
 // Thời tiết (mưa rừng / bão cát sa mạc): server tự chọn mốc bắt đầu/kết thúc
@@ -204,6 +204,37 @@ function createObstacles(seed, mapId) {
     [0, -8],
   ];
   const obstacles = [];
+  // Hai tuyến đường chạy xuyên suốt map. Mỗi đoạn đường là vật thể không va chạm.
+  // Chúng nằm xa sông/hồ của rừng và được dùng làm vùng cấm đặt mọi vật thể khác.
+  const roads = [];
+  const roadPaths = [
+    (x) => 24 * MAP_SCALE + Math.sin(x / (30 * MAP_SCALE)) * 1.5 * MAP_SCALE,
+    (x) => -29 * MAP_SCALE + Math.sin((x + 17 * MAP_SCALE) / (34 * MAP_SCALE)) * 1.5 * MAP_SCALE,
+  ];
+  for (const pathZ of roadPaths) {
+    const points = [];
+    for (let x = -MAP_HALF; x <= MAP_HALF; x += 20) points.push({ x, z: pathZ(x) });
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i], b = points[i + 1];
+      const dx = b.x - a.x, dz = b.z - a.z;
+      const segment = {
+        type: "road", x: (a.x + b.x) / 2, z: (a.z + b.z) / 2,
+        w: 9, length: Math.hypot(dx, dz), h: 0.12,
+        yaw: Math.atan2(dx, dz), solid: false,
+      };
+      roads.push(segment);
+      obstacles.push(segment);
+    }
+  }
+  const nearRoad = (x, z, clearance = 0) => roads.some((road) => {
+    const dx = Math.sin(road.yaw) * road.length / 2;
+    const dz = Math.cos(road.yaw) * road.length / 2;
+    const ax = road.x - dx, az = road.z - dz;
+    const bx = road.x + dx, bz = road.z + dz;
+    const vx = bx - ax, vz = bz - az;
+    const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)));
+    return Math.hypot(x - (ax + t * vx), z - (az + t * vz)) < road.w / 2 + clearance;
+  });
   const riverZ = (x) =>
     (-7 + Math.sin((x + 12 * MAP_SCALE) / (13 * MAP_SCALE)) * 13) * MAP_SCALE;
   if (forest) {
@@ -245,8 +276,8 @@ function createObstacles(seed, mapId) {
   function add(type, count, minW, maxW, minH, maxH, gap = 1.2) {
     let made = 0;
     for (let attempt = 0; attempt < count * 30 && made < count; attempt++) {
-      const x = (random() - 0.5) * 88 * MAP_SCALE;
-      const z = (random() - 0.5) * 88 * MAP_SCALE;
+      const x = (random() - 0.5) * (MAP_HALF * 2 - 16);
+      const z = (random() - 0.5) * (MAP_HALF * 2 - 16);
       const w = minW + random() * (maxW - minW);
       const h = minH + random() * (maxH - minH);
       const spawnClearance = type === "hill" ? w / 2 + 8 : w / 2 + 5;
@@ -255,6 +286,7 @@ function createObstacles(seed, mapId) {
       )
         continue;
       if (overlapsWater(x, z, w / 2)) continue;
+      if (nearRoad(x, z, w / 2 + 1.5)) continue;
       if (
         obstacles.some(
           (o) =>
@@ -296,22 +328,35 @@ function createObstacles(seed, mapId) {
 // ---- Vật phẩm rơi trên map: đạn và bịch máu ----
 const PICKUP_RADIUS = 2.5; // mét; client hiện gợi ý F ở 2 m, server dư 0.5 m để bù độ trễ vị trí
 const AMMO_PER_BOX = 30;
-const AMMO_BOX_COUNT = 104;
-const MEDKIT_COUNT = 56;
+const AMMO_BOX_COUNT = 416;
+const MEDKIT_COUNT = 224;
 const HEAL_AMOUNT = 20;
 const HEAL_DURATION_MS = 5000;
 const MAX_HP = 100;
 // Sức chứa balo (đạn dự trữ và bịch máu). Không tính đạn đang lắp trong súng.
 const MAX_RESERVE_AMMO = 210;
 const MAX_MEDKITS = 5;
+function isNearRoad(obstacles, x, z, clearance = 0) {
+  return obstacles.some((road) => {
+    if (road.type !== "road") return false;
+    const dx = Math.sin(road.yaw || 0) * road.length / 2;
+    const dz = Math.cos(road.yaw || 0) * road.length / 2;
+    const ax = road.x - dx, az = road.z - dz;
+    const bx = road.x + dx, bz = road.z + dz;
+    const vx = bx - ax, vz = bz - az;
+    const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)));
+    return Math.hypot(x - (ax + t * vx), z - (az + t * vz)) < road.w / 2 + clearance;
+  });
+}
 function createLoot(room) {
   const items = [];
   let nextId = 1;
   const place = (type, count, amount) => {
     let made = 0;
     for (let attempt = 0; attempt < count * 80 && made < count; attempt++) {
-      const x = (Math.random() - 0.5) * 192;
-      const z = (Math.random() - 0.5) * 192;
+      const x = (Math.random() - 0.5) * (MAP_HALF * 2 - 8);
+      const z = (Math.random() - 0.5) * (MAP_HALF * 2 - 8);
+      if (isNearRoad(room.obstacles, x, z, 2.5)) continue;
       if (blockedPosition(room, x, z, null)) continue; // cây, đá, tường nhà...
       // Không đặt trong nước (kể cả sát mép sông/hồ).
       if (
