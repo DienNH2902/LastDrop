@@ -3636,7 +3636,10 @@ function beginGame() {
     $("#chuteOverlay").innerHTML = buildChuteOverlay();
   setMode("lobby"); // vào map chờ: tay không, không vật phẩm
   $("#world").onclick = () => {
-    if (!paused && !backpackOpen) renderer.domElement.requestPointerLock?.();
+    if (paused || backpackOpen) return;
+    // Bật fullscreen/keyboard lock từ cú click của người chơi. Đây là cách
+    // trình duyệt hỗ trợ để gửi các tổ hợp như Ctrl+W về game khi có thể.
+    enterGameInputMode();
   };
   $("#world").oncontextmenu = (e) => e.preventDefault();
   document.addEventListener("pointerlockchange", onPointerLockChange);
@@ -3647,6 +3650,7 @@ function beginGame() {
   window.addEventListener("blur", onGameWindowBlur);
   document.addEventListener("contextmenu", blockContextMenu);
   document.addEventListener("keydown", onKeyDown);
+  document.addEventListener("keydown", blockBrowserShortcuts, true);
   document.addEventListener("keyup", onKeyUp);
   installReloadHud();
   installLootUi();
@@ -3656,6 +3660,72 @@ function beginGame() {
   $("#openPauseSettings").onclick = openPauseSettings;
   $("#closePauseSettings").onclick = closePauseSettings;
   $("#leaveMatchBtn").onclick = leaveMatch;
+}
+
+// Keyboard Lock chỉ được hỗ trợ ở một số trình duyệt và thường cần fullscreen.
+// Ctrl+W sẽ vẫn đặt KeyW cho điều khiển đi chậm, nhưng không đóng tab nếu browser
+// cho phép khóa phím. Các trình duyệt/OS vẫn có thể giữ lại một số shortcut.
+const GAME_KEY_CODES = [
+  "KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyZ", "KeyF",
+  "Space", "Tab", "Escape", "F5", "F6", "F11", "F12",
+];
+
+function enterGameInputMode() {
+  const canvas = renderer?.domElement;
+  const game = $("#game");
+  if (!canvas || !game) return;
+
+  // Gọi cả hai API đồng bộ trong cùng thao tác click để đáp ứng user activation.
+  try {
+    const lockRequest = canvas.requestPointerLock?.();
+    lockRequest?.catch?.(() => {});
+  } catch {}
+
+  if (!document.fullscreenElement && game.requestFullscreen) {
+    try {
+      const fullscreenRequest = game.requestFullscreen({
+        navigationUI: "hide",
+        keyboardLock: "browser",
+      });
+      fullscreenRequest?.then(() => lockGameKeys()).catch(() => {
+        // Hỗ trợ browser không nhận tùy chọn keyboardLock nhưng vẫn có fullscreen.
+        game.requestFullscreen?.().then(() => lockGameKeys()).catch(() => {});
+      });
+    } catch {
+      // Tiếp tục chơi dạng cửa sổ nếu fullscreen không được hỗ trợ.
+    }
+  } else if (document.fullscreenElement === game) {
+    lockGameKeys();
+  }
+}
+
+function lockGameKeys() {
+  try {
+    const request = navigator.keyboard?.lock?.(GAME_KEY_CODES);
+    request?.catch?.(() => {});
+  } catch {
+    // Fallback: blockBrowserShortcuts vẫn ngăn được các sự kiện trình duyệt.
+  }
+}
+
+function releaseGameInputMode() {
+  try { navigator.keyboard?.unlock?.(); } catch {}
+  if (document.fullscreenElement === $("#game")) {
+    document.exitFullscreen?.().catch?.(() => {});
+  }
+}
+
+function blockBrowserShortcuts(e) {
+  const game = $("#game");
+  const editing = e.target?.closest?.("input, textarea, select, [contenteditable='true']");
+  if (!game?.classList.contains("active") || editing) return;
+  if (document.pointerLockElement !== renderer?.domElement) return;
+
+  // Không stopPropagation: các phím điều khiển của game vẫn nhận được sự kiện.
+  // preventDefault chặn các shortcut có thể chặn bằng trang web.
+  if (e.ctrlKey || e.metaKey || e.altKey || ["F5", "F6", "F11", "F12"].includes(e.code)) {
+    e.preventDefault();
+  }
 }
 function installReloadHud() {
   document.querySelector("#reloadHud")?.remove();
@@ -3841,6 +3911,14 @@ function onPointerLockChange() {
     pauseGame();
 }
 function onKeyDown(e) {
+  const modifierKey = ["ControlLeft", "ControlRight", "AltLeft", "AltRight", "ShiftLeft", "ShiftRight", "MetaLeft", "MetaRight"].includes(e.code);
+  const ctrlWalkKey = e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && ["KeyW", "KeyS"].includes(e.code);
+  if (!modifierKey && !ctrlWalkKey && (e.ctrlKey || e.metaKey || e.altKey)) {
+    // Ctrl+R, Ctrl+T, Alt+Left... không được kích hoạt thao tác game.
+    e.preventDefault();
+    return;
+  }
+
   if (e.code === "Escape") {
     e.preventDefault();
 
@@ -4036,6 +4114,7 @@ function leaveMatch() {
   show("menu");
 }
 function cleanupGame() {
+  releaseGameInputMode();
   if (deathResultTimer) clearTimeout(deathResultTimer);
   deathResultTimer = null;
   deathView = null;
@@ -4054,6 +4133,7 @@ function cleanupGame() {
   document.removeEventListener("pointerlockchange", onPointerLockChange);
   document.removeEventListener("contextmenu", blockContextMenu);
   document.removeEventListener("keydown", onKeyDown);
+  document.removeEventListener("keydown", blockBrowserShortcuts, true);
   document.removeEventListener("keyup", onKeyUp);
   closeBackpack(false);
   for (const item of lootItems.values()) disposeLootMesh(item);
