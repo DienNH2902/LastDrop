@@ -19,6 +19,12 @@ const rooms = new Map();
 const MAP_HALF = 100; // map 200 × 200 m: gấp 4 lần diện tích bản đồ cũ
 const MAP_SCALE = MAP_HALF / 50;
 const COUNTDOWN_MS = 5000;
+// Thời tiết (mưa rừng / bão cát sa mạc): server tự chọn mốc bắt đầu/kết thúc
+// ngẫu nhiên cho MỖI TRẬN rồi gửi cho tất cả người chơi trong phòng cùng lúc,
+// để ai cũng thấy thời tiết đến/đi ở đúng một thời điểm — không lệch nhau.
+const WEATHER_START_DELAY_MS = [25000, 75000]; // chờ ngẫu nhiên trước khi thời tiết bắt đầu
+const WEATHER_DURATION_MS = [30000, 70000]; // thời tiết kéo dài ngẫu nhiên trước khi kết thúc
+const randomBetween = ([min, max]) => min + Math.random() * (max - min);
 // Trận không kết thúc ngay khi hạ người chơi cuối cùng — cho người thắng vài
 // giây để nhặt hòm tiếp tế vừa rơi ra trước khi chuyển sang màn kết quả.
 const MATCH_END_DELAY_MS = 3000;
@@ -103,6 +109,7 @@ const snapshot = (room) => ({
   plane: room.plane || null,
   mapSeed: room.mapSeed,
   mapId: room.mapId,
+  weatherActive: Boolean(room.weather?.active),
   hostId: [...room.players.keys()][0] || null,
   lastElimination: room.lastElimination || null,
   crates: room.crates || [],
@@ -339,21 +346,30 @@ function raisedSurfaceAt(room, x, z) {
   for (const o of room.obstacles) {
     const base = groundHeightAt(room, o.x, o.z);
     if (o.type === "house" || o.type === "hut") {
-      const dx = x - o.x, dz = z - o.z;
-      const c = Math.cos(o.yaw || 0), s = Math.sin(o.yaw || 0);
-      const lx = c * dx - s * dz, lz = s * dx + c * dz;
+      const dx = x - o.x,
+        dz = z - o.z;
+      const c = Math.cos(o.yaw || 0),
+        s = Math.sin(o.yaw || 0);
+      const lx = c * dx - s * dz,
+        lz = s * dx + c * dz;
       if (Math.abs(lx) > o.w * 0.53 || Math.abs(lz) > o.w / 2 + 0.27) continue;
       const wallH = o.h * 0.72;
-      const height = base + wallH + o.w * 0.16 + 0.12 * Math.cos(0.48) +
+      const height =
+        base +
+        wallH +
+        o.w * 0.16 +
+        0.12 * Math.cos(0.48) +
         (o.w * 0.245 - Math.abs(lx)) * Math.sin(0.48);
-      if (!best || height > best.height) best = { height, base, type: "roof", obstacle: o };
+      if (!best || height > best.height)
+        best = { height, base, type: "roof", obstacle: o };
     } else if (o.type === "rock") {
       const nx = (x - o.x) / (o.w * 0.48);
       const nz = (z - o.z) / (o.w * 0.4);
       const r2 = nx * nx + nz * nz;
       if (r2 > 0.64) continue;
       const height = base + o.h * (0.42 + 0.5 * Math.sqrt(1 - r2));
-      if (!best || height > best.height) best = { height, base, type: "rock", obstacle: o };
+      if (!best || height > best.height)
+        best = { height, base, type: "rock", obstacle: o };
     }
   }
   return best;
@@ -434,7 +450,10 @@ function blockedPosition(room, x, z, ignoreId) {
   for (const o of room.obstacles) {
     if (o.solid === false) continue;
     if (o.type === "house" || o.type === "hut") {
-      const moverIsOnRoof = mover && support?.type === "roof" && support.obstacle === o &&
+      const moverIsOnRoof =
+        mover &&
+        support?.type === "roof" &&
+        support.obstacle === o &&
         mover.groundY > support.base + o.h * 0.72 + 0.1;
       if (moverIsOnRoof) continue;
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
@@ -442,8 +461,11 @@ function blockedPosition(room, x, z, ignoreId) {
     }
     const footprint = obstacleFootprintRadius(o);
     if (footprint !== null) {
-      const rockTop = o.type === "rock" && support?.type === "rock" &&
-        support.obstacle === o && mover.groundY > support.base + o.h * 0.62;
+      const rockTop =
+        o.type === "rock" &&
+        support?.type === "rock" &&
+        support.obstacle === o &&
+        mover.groundY > support.base + o.h * 0.62;
       if (rockTop) continue;
       if (Math.hypot(x - o.x, z - o.z) < footprint + obstacleRadius)
         return true;
@@ -549,8 +571,12 @@ function jumpPlayer(room, p) {
 // Tìm chỗ trống gần nhất để không kẹt trong cây / đá / tường khi tiếp đất.
 function findFreeSpot(room, x, z, id, landingY = null) {
   const roofOrRock = raisedSurfaceAt(room, x, z);
-  if (roofOrRock && Number.isFinite(landingY) &&
-      landingY >= roofOrRock.height - 0.35 && landingY <= roofOrRock.height + 2)
+  if (
+    roofOrRock &&
+    Number.isFinite(landingY) &&
+    landingY >= roofOrRock.height - 0.35 &&
+    landingY <= roofOrRock.height + 2
+  )
     return { x, z };
   if (!blockedPosition(room, x, z, id)) return { x, z };
   for (let r = 0.5; r <= 12; r += 0.5) {
@@ -566,6 +592,16 @@ function findFreeSpot(room, x, z, id, landingY = null) {
 function tickRoom(room) {
   const now = Date.now();
   const players = [...room.players.values()];
+  const w = room.weather;
+  if (w && room.phase !== "waiting" && room.phase !== "finished") {
+    if (!w.active && now >= w.startAt && now < w.endAt) {
+      w.active = true;
+      broadcast(room);
+    } else if (w.active && now >= w.endAt) {
+      w.active = false;
+      broadcast(room);
+    }
+  }
   if (room.phase === "staging") {
     if (
       players.every((p) => p.ready) ||
@@ -712,6 +748,13 @@ wss.on("connection", (ws) => {
       room.loot = [];
       room.crates = [];
       room.stagingStartedAt = Date.now();
+      const weatherStartAt =
+        room.stagingStartedAt + randomBetween(WEATHER_START_DELAY_MS);
+      room.weather = {
+        startAt: weatherStartAt,
+        endAt: weatherStartAt + randomBetween(WEATHER_DURATION_MS),
+        active: false,
+      };
       for (const q of room.players.values()) {
         q.state = "lobby";
         q.ready = false;
@@ -786,10 +829,11 @@ wss.on("connection", (ws) => {
     ) {
       if (p.y - groundHeightAt(room, p.x, p.z) > AIR.maxLandingHeight) return;
       const reportedLandingY = Number(m.y);
-      const landingY = Number.isFinite(reportedLandingY) &&
+      const landingY =
+        Number.isFinite(reportedLandingY) &&
         Math.abs(reportedLandingY - p.y) <= 5
-        ? reportedLandingY
-        : p.y;
+          ? reportedLandingY
+          : p.y;
       let lx = Number(m.x);
       let lz = Number(m.z);
       if (
@@ -904,7 +948,8 @@ wss.on("connection", (ws) => {
       // The client sends the item targeted by the crosshair; validate that exact item here.
       if (p.healingUntil > Date.now() || p.swimming) return;
       const best = (room.loot || []).find((item) => item.id === m.itemId);
-      if (!best || Math.hypot(best.x - p.x, best.z - p.z) > PICKUP_RADIUS) return;
+      if (!best || Math.hypot(best.x - p.x, best.z - p.z) > PICKUP_RADIUS)
+        return;
       if (best.type === "ammo") {
         const space = MAX_RESERVE_AMMO - p.reserveAmmo;
         if (space <= 0)
@@ -935,9 +980,13 @@ wss.on("connection", (ws) => {
       } else if (best.type === "weapon") {
         const oldWeapon = p.weapon || "ranger";
         const dropped = {
-          id: room.nextLootId++, type: "weapon", weapon: oldWeapon,
-          x: Math.round(p.x * 100) / 100, z: Math.round(p.z * 100) / 100,
-          amount: 1, ammo: p.ammo,
+          id: room.nextLootId++,
+          type: "weapon",
+          weapon: oldWeapon,
+          x: Math.round(p.x * 100) / 100,
+          z: Math.round(p.z * 100) / 100,
+          amount: 1,
+          ammo: p.ammo,
         };
         room.loot.push(dropped);
         p.weapon = best.weapon === "sniper" ? "sniper" : "ranger";
@@ -946,13 +995,18 @@ wss.on("connection", (ws) => {
           0,
           Math.min(
             magazineSize(p),
-            Number.isFinite(storedMagazineAmmo) ? storedMagazineAmmo : magazineSize(p),
+            Number.isFinite(storedMagazineAmmo)
+              ? storedMagazineAmmo
+              : magazineSize(p),
           ),
         );
         room.loot = room.loot.filter((item) => item !== best);
         broadcastRaw(room, { type: "lootRemoved", id: best.id });
         broadcastRaw(room, { type: "lootAdded", item: dropped });
-        send(ws, { type: "toast", text: `ĐÃ ĐỔI SANG ${p.weapon === "sniper" ? "SNIPER" : "RANGER-9"}` });
+        send(ws, {
+          type: "toast",
+          text: `ĐÃ ĐỔI SANG ${p.weapon === "sniper" ? "SNIPER" : "RANGER-9"}`,
+        });
       } else {
         if ((p.medkits || 0) >= MAX_MEDKITS) {
           return send(ws, {
@@ -1394,12 +1448,23 @@ wss.on("connection", (ws) => {
             z: origin.z + dir.z * nearest,
           },
         };
-        target.hp = Math.max(0, target.hp - (p.weapon === "sniper" ? (targetPart === "head" ? 100 : 60) : (targetPart === "head" ? 70 : 10)));
+        target.hp = Math.max(
+          0,
+          target.hp -
+            (p.weapon === "sniper"
+              ? targetPart === "head"
+                ? 100
+                : 60
+              : targetPart === "head"
+                ? 70
+                : 10),
+        );
         if (!target.hp) {
           target.alive = false;
           // Place eliminated players by elimination order; the last survivor is first.
           target.placement =
-            [...room.players.values()].filter((player) => player.alive).length + 1;
+            [...room.players.values()].filter((player) => player.alive).length +
+            1;
           p.kills++;
           room.eliminationSequence = (room.eliminationSequence || 0) + 1;
           room.lastElimination = {

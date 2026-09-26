@@ -126,7 +126,7 @@ let inMatch = false, // đã vào màn hình trận (phòng chờ trong map, má
   airState = { vx: 0, vz: 0, fall: 0, time: 0 };
 const audioLoops = { plane: null, wind: null, weather: null };
 let weatherFx = null;
-let weatherTimer = null; // hẹn giờ bắt đầu/kết thúc thời tiết (random mỗi trận)
+let weatherActive = false; // đồng bộ theo weatherActive server gửi trong state, không tự hẹn giờ nữa
 
 // Track nguồn MP3, tự lặp ở các màn menu và dừng khi vào trận.
 const homeMusic = new Audio(
@@ -710,6 +710,15 @@ function connect(message) {
       if (m.mapId) {
         mapId = m.mapId;
         renderMapChoice(mapId);
+      }
+      if (
+        typeof m.weatherActive === "boolean" &&
+        m.weatherActive !== weatherActive
+      ) {
+        weatherActive = m.weatherActive;
+        const forest = mapId === "forest";
+        if (weatherActive) beginWeather(forest);
+        else endWeather(forest);
       }
       renderLobby();
       // staging: vào map chờ · countdown: đếm ngược · plane: trên máy bay · playing: đã nhảy hết
@@ -1569,7 +1578,7 @@ function initWorld() {
   gun.visible = false; // phòng chờ / máy bay / đang nhảy dù: tay không, chỉ cầm súng sau khi tiếp đất
   camera.add(gun);
   scene.add(camera);
-  scheduleWeather(forest);
+  weatherActive = false; // vào map trời quang; server sẽ báo khi nào thời tiết thật sự bắt đầu
   planeObject = buildPlane();
   planeObject.visible = false;
   scene.add(planeObject);
@@ -2958,8 +2967,7 @@ function cleanupGame() {
   stopLoop("plane", 0.05);
   stopLoop("wind", 0.05);
   stopLoop("weather", 0.12);
-  clearTimeout(weatherTimer);
-  weatherTimer = null;
+  weatherActive = false;
   if (weatherFx?.mesh) {
     scene?.remove(weatherFx.mesh);
     weatherFx.geometry.dispose();
@@ -3410,16 +3418,15 @@ function scheduleWeather(forest) {
   );
 }
 
+// Bản đồ vào trận luôn quang đãng; server quyết định lúc nào thời tiết (mưa
+// rừng / bão cát sa mạc) bắt đầu và kết thúc, gửi qua cờ weatherActive trong
+// state để mọi người trong phòng cùng thấy — không còn mỗi máy tự hẹn giờ
+// riêng gây lệch nhau giữa các người chơi.
 function beginWeather(forest) {
-  if (!scene) return; // đã rời map trước khi hẹn giờ kịp chạy
+  if (!scene) return; // đã rời map trước khi state kịp tới
   createWeather(forest);
   startWeatherSound(forest ? "rain" : "sandstorm");
   applyBaseFog(forest, true);
-  clearTimeout(weatherTimer);
-  weatherTimer = setTimeout(
-    () => endWeather(forest),
-    randomBetween(WEATHER_DURATION_RANGE) * 1000,
-  );
 }
 
 function endWeather(forest) {
