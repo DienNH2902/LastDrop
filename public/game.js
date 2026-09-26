@@ -3192,7 +3192,15 @@ function nearestCrate() {
 }
 // Chỉ chọn vật thể mà tia giữa màn hình chạm trúng, thay vì vật gần nhất.
 function aimedInteractable() {
-  if (!camera || !scene || local.state !== "ground" || local.swimming)
+  if (
+    !camera ||
+    !scene ||
+    local.hp <= 0 ||
+    deathView ||
+    $("#result")?.classList.contains("active") ||
+    local.state !== "ground" ||
+    local.swimming
+  )
     return null;
   const roots = [];
   for (const item of lootItems.values()) if (item.mesh) roots.push(item.mesh);
@@ -3221,6 +3229,9 @@ function aimedInteractable() {
 function nearestVehicle() {
   if (
     !gameState?.vehicles ||
+    local.hp <= 0 ||
+    deathView ||
+    $("#result")?.classList.contains("active") ||
     local.state !== "ground" ||
     local.swimming ||
     local.vehicleId
@@ -3247,6 +3258,9 @@ function onInteract() {
     closeBackpack();
     return;
   }
+  // Người đã bị hạ hoặc đang xem bảng kết quả không thể loot/vào xe.
+  if (local.hp <= 0 || deathView || $("#result")?.classList.contains("active"))
+    return;
   if (local.state !== "ground") return; // chưa tiếp đất thì chưa nhặt được gì
   if (local.vehicleId) {
     send({ type: "vehicleInteract" });
@@ -3541,6 +3555,15 @@ function updateLootHud(dt) {
   const prompt = $("#lootHud .lh-prompt");
   const heal = $("#lootHud .lh-heal");
   if (!prompt || !heal) return;
+  if (
+    local.hp <= 0 ||
+    deathView ||
+    $("#result")?.classList.contains("active")
+  ) {
+    heal.classList.add("hidden");
+    prompt.classList.add("hidden");
+    return;
+  }
   if (local.healing) {
     const left = Math.max(0, local.healEndsAt - performance.now());
     heal.querySelector("span").textContent =
