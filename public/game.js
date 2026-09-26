@@ -2770,6 +2770,7 @@ function beginGame() {
   installReloadHud();
   installLootUi();
   installZoneHud();
+  installZoneGrayOverlay();
   $("#resumeBtn").onclick = resumeGame;
   $("#openPauseSettings").onclick = openPauseSettings;
   $("#closePauseSettings").onclick = closePauseSettings;
@@ -2848,12 +2849,32 @@ function installZoneHud() {
   });
   $("#game").append(tint);
 }
+function installZoneGrayOverlay() {
+  if ($("#zoneGrayOverlay")) return;
+
+  const overlay = document.createElement("div");
+  overlay.id = "zoneGrayOverlay";
+
+  Object.assign(overlay.style, {
+    position: "fixed",
+    inset: "0",
+    background: "rgba(90, 90, 90, 0.48)",
+    pointerEvents: "none",
+    opacity: "0",
+    transition: "opacity 0.2s ease",
+    zIndex: "4",
+  });
+
+  document.body.appendChild(overlay);
+}
 function updateZoneHud() {
   const hud = $("#zoneHud");
   const tint = $("#zoneDangerTint");
+  const grayOverlay = $("#zoneGrayOverlay");
   if (!hud) return;
   const zone = gameState?.zone;
   if (!zone || local.state === "lobby") {
+    if (grayOverlay) grayOverlay.style.opacity = "0";
     hud.textContent = "";
     if (tint) tint.style.opacity = "0";
     return;
@@ -2875,12 +2896,18 @@ function updateZoneHud() {
       ? Math.hypot(local.x - circle.x, local.z - circle.z) - circle.radius
       : -1;
   if (distOutside > 0) {
+    if (grayOverlay) grayOverlay.style.opacity = "1";
+
     hud.textContent = `NGOÀI VÒNG AN TOÀN · CÒN ${Math.round(distOutside)}M · -${zone.damage}HP/S`;
     hud.style.color = "#ff5252";
+
     if (tint) tint.style.opacity = "1";
   } else {
+    if (grayOverlay) grayOverlay.style.opacity = "0";
+
     hud.textContent = statusText;
     hud.style.color = "#8fd4ff";
+
     if (tint) tint.style.opacity = "0";
   }
 }
