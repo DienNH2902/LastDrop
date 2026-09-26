@@ -1963,8 +1963,17 @@ wss.on("connection", (ws) => {
         }
       }
       for (const q of room.players.values())
-        if (q !== p && q.alive && q.state === "ground") {
-          const targetBaseY = q.swimming ? q.swimY || 0 : q.groundY || 0;
+        if (
+          q !== p &&
+          q.alive &&
+          ["ground", "freefall", "parachute"].includes(q.state)
+        ) {
+          const airborne = q.state === "freefall" || q.state === "parachute";
+          const targetBaseY = airborne
+            ? Number(q.y) || 0
+            : q.swimming
+              ? q.swimY || 0
+              : q.groundY || 0;
           if (q.vehicleId) {
             const bodyDistance = rayBox(
               { x: q.x, y: targetBaseY + 1.03, z: q.z }, q.yaw,
@@ -1977,6 +1986,39 @@ wss.on("connection", (ws) => {
               struckVehicle = null;
               target = q;
               targetPart = headDistance !== null && headDistance <= distance ? "head" : "body";
+            }
+            continue;
+          }
+          if (q.state === "freefall") {
+            // Freefall avatars lie face-down at a -1.35 rad X rotation.
+            // Match their visible horizontal body and forward-positioned head.
+            const front = (distance) => ({
+              x: q.x - Math.sin(q.yaw) * distance,
+              y: targetBaseY + 0.5 + Math.cos(1.35) * distance,
+              z: q.z - Math.cos(q.yaw) * distance,
+            });
+            const bodyDistances = [
+              rayBox(front(1.05), q.yaw, { x: 0.325, y: 0.22, z: 0.5 }),
+              rayBox(front(0.4), q.yaw, { x: 0.24, y: 0.2, z: 0.34 }),
+            ].filter((distance) => distance !== null);
+            const bodyDistance = bodyDistances.length
+              ? Math.min(...bodyDistances)
+              : null;
+            const headDistance = raySphere(front(1.72), 0.24);
+            const distance =
+              headDistance === null
+                ? bodyDistance
+                : bodyDistance === null
+                  ? headDistance
+                  : Math.min(headDistance, bodyDistance);
+            if (distance !== null && distance < nearest) {
+              nearest = distance;
+              struckVehicle = null;
+              target = q;
+              targetPart =
+                headDistance !== null && headDistance <= distance
+                  ? "head"
+                  : "body";
             }
             continue;
           }

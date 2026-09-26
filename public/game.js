@@ -64,6 +64,7 @@ let keys = {},
   startedAt = 0,
   audioCtx = null,
   noiseBuffer = null,
+  gunshotReverbBuffer = null,
   soundOn = true,
   lastMove = 0,
   paused = false,
@@ -352,7 +353,7 @@ function spatialAudio(
   tail.connect(master);
   master.connect(audioCtx.destination);
   ensureNoiseBuffer(audioCtx);
-  return { t0: now + delay, input, noiseBuffer };
+  return { t0: now + delay, input, noiseBuffer, master };
 }
 function ensureNoiseBuffer(ctx = ensureAudio()) {
   if (noiseBuffer) return noiseBuffer;
@@ -365,9 +366,83 @@ function ensureNoiseBuffer(ctx = ensureAudio()) {
   for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
   return noiseBuffer;
 }
+// Đường cong méo tiếng (soft-clip) — tạo "grit" như tiếng súng thật ghi âm gần,
+// vốn luôn hơi vỡ tiếng chứ không "sạch" như âm tổng hợp thuần.
+function makeDistortionCurve(amount = 20) {
+  const n = 256;
+  const curve = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    curve[i] = ((Math.PI + amount) * x) / (Math.PI + amount * Math.abs(x));
+  }
+  return curve;
+}
+// Impulse response giả lập tiếng vọng ngoài trời (nhiễu trắng suy giảm dần) —
+// đây mới là phần tạo ra "tiếng vang" thật sự, khác với tiếng dội trầm (chỉ là
+// một nốt trầm tắt dần chứ không phải phản xạ âm thanh).
+function ensureGunshotReverb(ctx = ensureAudio()) {
+  if (gunshotReverbBuffer) return gunshotReverbBuffer;
+  const duration = 1.7;
+  const length = Math.ceil(ctx.sampleRate * duration);
+  gunshotReverbBuffer = ctx.createBuffer(2, length, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = gunshotReverbBuffer.getChannelData(ch);
+    for (let i = 0; i < length; i++) {
+      const decay = Math.pow(1 - i / length, 2.6);
+      data[i] = (Math.random() * 2 - 1) * decay;
+    }
+  }
+  return gunshotReverbBuffer;
+}
+// Gửi một phần tiếng súng qua bộ vọng âm rồi trộn vào đường ra cuối (a.master).
+// Convolver rất tốn để khởi tạo (gán buffer = phải tính lại FFT của impulse
+// response). Súng auto bắn nhiều phát/giây nên KHÔNG được tạo mới mỗi phát —
+// chỉ tạo 1 lần duy nhất rồi dùng lại mãi mãi cho mọi tiếng súng.
+let gunshotConvolver = null;
+function ensureGunshotConvolver(ctx = ensureAudio()) {
+  if (gunshotConvolver) return gunshotConvolver;
+  gunshotConvolver = ctx.createConvolver();
+  gunshotConvolver.buffer = ensureGunshotReverb(ctx); // chỉ gán 1 lần trong cả trận
+  const output = ctx.createGain();
+  output.gain.value = 1;
+  gunshotConvolver.connect(output);
+  output.connect(ctx.destination);
+  return gunshotConvolver;
+}
+// Gửi một phần tiếng súng qua bộ vọng âm (dùng lại 1 convolver chung) rồi trộn
+// ra loa — các node ở đây (delay/lọc/gain) đều rẻ, tạo mới mỗi phát không sao.
+function gunshotReverbTail(
+  a,
+  { wet = 0.3, tone = 1400, predelay = 0.01 } = {},
+) {
+  if (!a.master) return;
+  const convolver = ensureGunshotConvolver(audioCtx);
+  const delayNode = audioCtx.createDelay(0.05);
+  delayNode.delayTime.value = predelay;
+  const tiltFilter = audioCtx.createBiquadFilter();
+  tiltFilter.type = "lowpass";
+  tiltFilter.frequency.value = tone;
+  const wetGain = audioCtx.createGain();
+  // Nhân thêm âm lượng thực tế của phát súng đó (đã tính suy giảm theo khoảng
+  // cách) để tiếng vang cũng nhỏ dần theo khoảng cách như tiếng súng gốc.
+  const masterLevel = a.master.gain.value || 0;
+  wetGain.gain.value = wet * masterLevel;
+  a.input.connect(delayNode);
+  delayNode.connect(tiltFilter);
+  tiltFilter.connect(wetGain);
+  wetGain.connect(convolver);
+}
 function noiseBurst(
   a,
-  { at = 0, duration = 0.1, filter = "lowpass", freq = 1000, q = 1, gain = 1 },
+  {
+    at = 0,
+    duration = 0.1,
+    filter = "lowpass",
+    freq = 1000,
+    q = 1,
+    gain = 1,
+    drive = 0, // >0 = thêm méo tiếng (grit), dùng cho tiếng súng cho "đã tai" hơn
+  },
 ) {
   const t = a.t0 + at;
   const src = audioCtx.createBufferSource();
@@ -380,7 +455,15 @@ function noiseBurst(
   g.gain.setValueAtTime(gain, t);
   g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
   src.connect(f);
-  f.connect(g);
+  let tail = f;
+  if (drive > 0) {
+    const shaper = audioCtx.createWaveShaper();
+    shaper.curve = makeDistortionCurve(drive);
+    shaper.oversample = "2x";
+    f.connect(shaper);
+    tail = shaper;
+  }
+  tail.connect(g);
   g.connect(a.input);
   src.start(t, Math.random() * 0.1);
   src.stop(t + duration + 0.02);
@@ -403,12 +486,118 @@ function toneBurst(
   o.stop(t + duration + 0.02);
 }
 // position: {x, y, z} của họng súng; null = súng của chính mình.
-function playSpatialGunshot(position, volume = 0.7, delay = 0) {
-  const a = spatialAudio(position, { volume, ...AUDIO_RANGE.gunshot, delay });
+// Đặc tính âm bắn theo từng loại súng, mô phỏng theo tiếng nổ thật:
+// - "rifle" (RANGER-9, súng tự động): dựa theo AUG — tiếng "tách" sắc, gọn,
+//   dội trầm ngắn, đanh và nhanh, đúng chất súng trường tự động 5.56mm.
+// - "sniper" (bắn tỉa): dựa theo Kar98k — tiếng nổ trầm, vang, boom sâu và kéo
+//   dài hơn hẳn, kèm tiếng vọng đuôi, đúng chất bolt-action cỡ đạn lớn 7.92mm.
+const GUNSHOT_PROFILES = {
+  rifle: {
+    crackDuration: 0.022,
+    crackFreq: 3200,
+    crackGain: 0.85,
+    blastDuration: 0.14,
+    blastFreq: 2800,
+    blastGain: 0.95,
+    boomFrom: 120,
+    boomTo: 55,
+    boomDuration: 0.11,
+    boomGain: 0.7,
+    tailGain: 0,
+  },
+  sniper: {
+    crackDuration: 0.03,
+    crackFreq: 2400,
+    crackGain: 0.9,
+    blastDuration: 0.26,
+    blastFreq: 1500,
+    blastGain: 1.15,
+    boomFrom: 78,
+    boomTo: 28,
+    boomDuration: 0.32,
+    boomGain: 1.1,
+    tailGain: 0.4,
+  },
+};
+// position: {x, y, z} của họng súng; null = súng của chính mình.
+// weapon: "rifle" (mặc định, AUG) hoặc "sniper" (Kar98k).
+// AUG (súng tự động RANGER-9): tách nhanh-sắc kiểu bullpup nòng ngắn, có grit,
+// dội trầm gọn — to và đanh nhưng không kéo dài/vang xa bằng súng bolt-action.
+function playAugShot(a) {
+  noiseBurst(a, {
+    duration: 0.018,
+    filter: "highpass",
+    freq: 3400,
+    gain: 1.1,
+    drive: 18,
+  }); // tách đầu nòng
+  noiseBurst(a, {
+    at: 0.006,
+    duration: 0.16,
+    filter: "lowpass",
+    freq: 3000,
+    gain: 1.3,
+    drive: 10,
+  }); // tiếng nổ chính, có grit
+  noiseBurst(a, {
+    at: 0.05,
+    duration: 0.09,
+    filter: "bandpass",
+    freq: 1200,
+    q: 1.4,
+    gain: 0.55,
+  }); // dư âm ngắn kiểu bullpup
+  toneBurst(a, { duration: 0.1, from: 150, to: 60, gain: 0.9 }); // đấm trầm
+  toneBurst(a, { duration: 0.14, from: 80, to: 34, gain: 0.6 }); // lớp sub bổ sung độ "nặng"
+  gunshotReverbTail(a, { wet: 0.22, tone: 2200, predelay: 0.006 });
+}
+// Kar98k (súng sniper): một phát boom cực trầm, cực to, kéo dài, kèm tiếng
+// vọng dội đặc trưng của đạn cỡ lớn bắn ngoài trời (bolt-action).
+function playKarShot(a) {
+  noiseBurst(a, {
+    duration: 0.032,
+    filter: "highpass",
+    freq: 2200,
+    gain: 1.15,
+    drive: 14,
+  }); // tách đầu nòng
+  noiseBurst(a, {
+    at: 0.008,
+    duration: 0.3,
+    filter: "lowpass",
+    freq: 1400,
+    gain: 1.5,
+    drive: 22,
+  }); // tiếng nổ chính, rất to và vỡ tiếng
+  toneBurst(a, { duration: 0.34, from: 85, to: 26, gain: 1.3 }); // boom trầm chính
+  toneBurst(a, { at: 0.02, duration: 0.4, from: 46, to: 16, gain: 0.85 }); // lớp sub cực trầm
+  noiseBurst(a, {
+    at: 0.09,
+    duration: 0.5,
+    filter: "lowpass",
+    freq: 650,
+    gain: 0.55,
+  }); // đuôi vọng
+  gunshotReverbTail(a, { wet: 0.55, tone: 1100, predelay: 0.015 });
+}
+// position: {x, y, z} của họng súng; null = súng của chính mình.
+// weapon: "rifle" (mặc định, AUG) hoặc "sniper" (Kar98k).
+function playSpatialGunshot(
+  position,
+  volume = 0.7,
+  delay = 0,
+  weapon = "rifle",
+) {
+  const isSniper = weapon === "sniper";
+  const a = spatialAudio(position, {
+    volume: volume * (isSniper ? 1.5 : 1.15),
+    ...AUDIO_RANGE.gunshot,
+    max: AUDIO_RANGE.gunshot.max * (isSniper ? 1.8 : 1.2),
+    delay,
+  });
   if (!a) return;
-  noiseBurst(a, { duration: 0.03, filter: "highpass", freq: 1800, gain: 0.7 }); // tiếng "tách" đầu nòng
-  noiseBurst(a, { duration: 0.19, filter: "lowpass", freq: 2600, gain: 1 }); // tiếng nổ
-  toneBurst(a, { duration: 0.14, from: 105, to: 48, gain: 0.75 }); // tiếng dội trầm
+  if (isSniper) playKarShot(a);
+  else playAugShot(a);
 }
 function playSpatialFootstep(x, y, z, intensity = 1, ownPlayer = false) {
   if (ownPlayer && local.vehicleId) return;
@@ -2697,7 +2886,17 @@ function renderPlayers(state) {
       const muzzleY = soundBaseY + (p.prone ? 0.55 : p.crouching ? 0.9 : 1.3);
       // Nếu một gói tin gộp nhiều phát thì phát lần lượt, cách nhau 120 ms.
       for (let i = 0; i < Math.min(shotCount, 4); i++) {
-        playSpatialGunshot({ x: p.x, y: muzzleY, z: p.z }, 0.78, i * 0.12);
+                playSpatialGunshot(
+                  { x: p.x, y: muzzleY, z: p.z },
+                  0.78,
+                  i * 0.12,
+                  p.weapon === "sniper" ? "sniper" : "rifle",
+                );        playSpatialGunshot(
+                  { x: p.x, y: muzzleY, z: p.z },
+                  0.78,
+                  i * 0.12,
+                  p.weapon === "sniper" ? "sniper" : "rifle",
+                );
       }
     }
     mesh.userData.muzzleFlash.visible = Date.now() < mesh.userData.flashUntil;
@@ -3982,8 +4181,13 @@ function shootOnce() {
     stopFiring();
     return;
   }
-  lastClientShotAt = now;
-  playSpatialGunshot(null, 0.65);
+    lastClientShotAt = now;
+    playSpatialGunshot(
+      null,
+      0.65,
+      0,
+      local.weapon === "sniper" ? "sniper" : "rifle",
+    );
   const flash = new THREE.PointLight(0xffc66b, 2, 3);
   flash.position.set(0.28, -0.22, -1);
   camera.add(flash);
