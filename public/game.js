@@ -1624,14 +1624,24 @@ sideLeftTex.center.set(0.5, 0.5); // Đặt tâm xoay/lật vào giữa ảnh
 sideLeftTex.repeat.x = -1; // Lật ngược chiều ngang (Horizontal Flip)
 sideLeftTex.needsUpdate = true;
 
+const topTex = loadHeadTex("top");
+topTex.center.set(0.5, 0.5);
+topTex.rotation = Math.PI; // Xoay 180° để mặt trước quay về phía trước
+
 // Thứ tự material của THREE.BoxGeometry: [+X phải, -X trái, +Y trên, -Y dưới, +Z sau, -Z trước]
 const catHeadMaterials = [
   new THREE.MeshStandardMaterial({ map: sideRightTex, roughness: 1 }), // +X: Bên phải
   new THREE.MeshStandardMaterial({ map: sideLeftTex, roughness: 1 }), // -X: Bên trái (đã lật)
-  new THREE.MeshStandardMaterial({ map: loadHeadTex("top"), roughness: 1 }),
+  new THREE.MeshStandardMaterial({ map: topTex, roughness: 1 }),
   new THREE.MeshStandardMaterial({ map: loadHeadTex("bottom"), roughness: 1 }),
-  new THREE.MeshStandardMaterial({ map: loadHeadTex("back"), roughness: 1 }),
-  new THREE.MeshStandardMaterial({ map: loadHeadTex("face-zoom"), roughness: 1 }),
+  new THREE.MeshStandardMaterial({
+    map: loadHeadTex("back-zoom"),
+    roughness: 1,
+  }),
+  new THREE.MeshStandardMaterial({
+    map: loadHeadTex("face-zoom"),
+    roughness: 1,
+  }),
 ];
 const catEarMat = makeMat("#8a8175");
 
