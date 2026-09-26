@@ -1024,7 +1024,7 @@ function detachFromVehicle(room, player) {
   player.vehicleId = null;
   player.vehicleSeat = -1;
 }
-function vehicleFootprintBlocked(room, vehicle, x, z, yaw, driver) {
+function vehicleFootprintBlocked(room, vehicle, x, z, yaw) {
   // Unbridged water stalls and sinks cars; flagged road crossings are bridges.
   if (waterAt(room, x, z) && !isOnBridge(room.obstacles, x, z, 1.2)) return false;
   const halfX = 1.03, halfZ = 1.84;
@@ -1039,7 +1039,9 @@ function vehicleFootprintBlocked(room, vehicle, x, z, yaw, driver) {
       });
     }
   }
-  return samples.some((point) => blockedPosition(room, point.x, point.z, driver.id, vehicle.id, true));
+  // Xe không cần phép thử bề mặt mái/đá dành cho người đi bộ; bỏ mover để
+  // tránh quét lại toàn bộ địa hình tìm bề mặt hỗ trợ cho từng góc xe.
+  return samples.some((point) => blockedPosition(room, point.x, point.z, null, vehicle.id, true));
 }
 function tickVehicles(room, now) {
   let changed = false;
@@ -1085,7 +1087,9 @@ function tickVehicles(room, now) {
     const distance = vehicle.speed * dt;
     const dx = -Math.sin(vehicle.yaw) * distance;
     const dz = -Math.cos(vehicle.yaw) * distance;
-    const steps = Math.max(1, Math.ceil(Math.abs(distance) / 0.25));
+    // Mỗi tick xe đi tối đa ~1.1 m; bước 0.45 m vẫn bắt được chướng ngại vật
+    // nhưng giảm gần một nửa số lần quét collider so với bước 0.25 m.
+    const steps = Math.max(1, Math.ceil(Math.abs(distance) / 0.45));
     let moved = false;
     for (let i = 0; i < steps; i++) {
       const nx = vehicle.x + dx / steps, nz = vehicle.z + dz / steps;
@@ -1098,7 +1102,7 @@ function tickVehicles(room, now) {
         changed = true;
         break;
       }
-      if (vehicleFootprintBlocked(room, vehicle, nx, nz, vehicle.yaw, driver || { id: "" })) {
+      if (vehicleFootprintBlocked(room, vehicle, nx, nz, vehicle.yaw)) {
         vehicle.speed *= -0.12;
         break;
       }
@@ -1458,7 +1462,7 @@ wss.on("connection", (ws) => {
           const damage = speed >= 19.5 ? p.hp : Math.max(0, (speed - 9) * 5);
           if (damage > 0) {
             p.hp = Math.max(0, p.hp - damage);
-            send(ws, { type: "toast", text: damage >= 100 ? "BẠN BỊ HẠ KHI NHẢY KHỎI XE ĐANG CHẠY" : `RA XE KHI ĐANG CHẠY · -${Math.round(damage)} HP` });
+            send(ws, { type: "toast", text: damage >= 100 ? "BẠN ĐÃ BỊ NGU KHI NHẢY KHỎI XE ĐANG CHẠY QUÁ NHANH" : `RA XE KHI ĐANG CHẠY · -${Math.round(damage)} HP` });
             if (p.hp <= 0) killByVehicle(room, p, vehicle);
           }
           broadcast(room);

@@ -915,6 +915,8 @@ function connect(message) {
       local.groundY = Number(m.groundY) || 0;
     }
     if (m.type === "state") {
+      const receivedAt = performance.now();
+      for (const vehicle of m.vehicles || []) vehicle.receivedAt = receivedAt;
       gameState = m;
       syncLootCrates(m.crates || []);
       // Đồng bộ đồng hồ với server để máy bay / đếm ngược khớp giữa các máy.
@@ -1938,16 +1940,46 @@ function updateVehicleMeshes(dt) {
       scene.add(mesh);
       vehicleMeshes.set(vehicle.id, mesh);
     }
+    let targetX = vehicle.x;
+    let targetZ = vehicle.z;
+    let targetYaw = vehicle.yaw;
+    const localDriver =
+      local.vehicleId === vehicle.id && local.vehicleSeat === 0 &&
+      !vehicle.destroyed && !vehicle.submerged;
+    if (localDriver) {
+      // Predict the server car for at most 120 ms so the driver's camera does
+      // not wait for each 20 Hz WebSocket snapshot. Server snapshots still
+      // correct the prediction continuously, including when collision stops it.
+      const age = Math.min(
+        0.12,
+        Math.max(0, (performance.now() - (vehicle.receivedAt || performance.now())) / 1000) + 0.025,
+      );
+      const throttle = keys.KeyW ? 1 : keys.KeyS ? -1 : 0;
+      const steer = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
+      let predictedSpeed = vehicle.speed;
+      if (keys.Space) predictedSpeed *= Math.max(0, 1 - 7 * age);
+      else if (throttle)
+        predictedSpeed = Math.max(-7, Math.min(22, predictedSpeed + throttle * 8 * age));
+      else predictedSpeed *= Math.max(0, 1 - 0.8 * age);
+      const direction = predictedSpeed < 0 ? -1 : 1;
+      const yawRate = steer * 1.35 * Math.min(1, Math.abs(predictedSpeed) / 4) * direction;
+      targetYaw = vehicle.yaw + yawRate * age;
+      const middleYaw = vehicle.yaw + yawRate * age * 0.5;
+      const averageSpeed = (vehicle.speed + predictedSpeed) * 0.5;
+      targetX -= Math.sin(middleYaw) * averageSpeed * age;
+      targetZ -= Math.cos(middleYaw) * averageSpeed * age;
+    }
     const targetY =
-      groundHeightAt(vehicle.x, vehicle.z) - (vehicle.sinkDepth || 0);
-    mesh.position.x += (vehicle.x - mesh.position.x) * Math.min(12 * dt, 1);
-    mesh.position.z += (vehicle.z - mesh.position.z) * Math.min(12 * dt, 1);
+      groundHeightAt(targetX, targetZ) - (vehicle.sinkDepth || 0);
+    const positionBlend = Math.min((localDriver ? 28 : 12) * dt, 1);
+    mesh.position.x += (targetX - mesh.position.x) * positionBlend;
+    mesh.position.z += (targetZ - mesh.position.z) * positionBlend;
     mesh.position.y += (targetY - mesh.position.y) * Math.min(12 * dt, 1);
     const yawDelta = Math.atan2(
-      Math.sin(vehicle.yaw - mesh.rotation.y),
-      Math.cos(vehicle.yaw - mesh.rotation.y),
+      Math.sin(targetYaw - mesh.rotation.y),
+      Math.cos(targetYaw - mesh.rotation.y),
     );
-    mesh.rotation.y += yawDelta * Math.min(12 * dt, 1);
+    mesh.rotation.y += yawDelta * positionBlend;
     const ud = mesh.userData;
     ud.steering.rotation.z =
       local.vehicleId === vehicle.id && local.vehicleSeat === 0
@@ -6572,7 +6604,7 @@ function showResult() {
     local.hp > 0
       ? "Bạn là người sống sót cuối cùng!"
       : localEliminationMessage ||
-        "Bạn đã bị hạ. Hãy xem lại chiến thuật và thử thêm lần nữa.";
+        "Bạn đã bị chịch. Hãy xem lại chiến thuật và thử thêm lần nữa.";
   resultEndsAt = Date.now() + 20000;
   const updateCountdown = () => {
     const secondsLeft = Math.max(
