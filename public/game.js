@@ -155,9 +155,9 @@ let inMatch = false, // đã vào màn hình trận (phòng chờ trong map, má
   localLegLeft = null,
   localLegRight = null,
   airState = { vx: 0, vz: 0, fall: 0, time: 0 };
-const audioLoops = { plane: null, wind: null, weather: null };
-let weatherFx = null;
-let weatherActive = false; // đồng bộ theo weatherActive server gửi trong state, không tự hẹn giờ nữa
+const audioLoops = { plane: null, wind: null /* weather loop temporarily disabled */ };
+// let weatherFx = null; // weather particles disabled for performance profiling
+// let weatherActive = false; // weather synchronization disabled for profiling
 
 // Track nguồn MP3, tự lặp ở các màn menu và dừng khi vào trận.
 const homeMusic = new Audio(
@@ -932,15 +932,12 @@ function connect(message) {
         mapId = m.mapId;
         renderMapChoice(mapId);
       }
-      if (
-        typeof m.weatherActive === "boolean" &&
-        m.weatherActive !== weatherActive
-      ) {
-        weatherActive = m.weatherActive;
-        const forest = mapId === "forest";
-        if (weatherActive) beginWeather(forest);
-        else endWeather(forest);
-      }
+      // Weather state handling is disabled for performance profiling.
+      // if (typeof m.weatherActive === "boolean" && m.weatherActive !== weatherActive) {
+      //   weatherActive = m.weatherActive;
+      //   const forest = mapId === "forest";
+      //   if (weatherActive) beginWeather(forest); else endWeather(forest);
+      // }
       renderLobby();
       // staging: vào map chờ · countdown: đếm ngược · plane: trên máy bay · playing: đã nhảy hết
       if (["staging", "countdown", "plane", "playing"].includes(m.phase)) {
@@ -1781,17 +1778,12 @@ function isBlockedAt(x, z) {
   return false;
 }
 
-// Rừng khô hoàn toàn không có sương mù; khi mưa mới dùng lớp sương nhìn gần.
-// Sa mạc vẫn có tầm nhìn xa khi trời quang và bị che mạnh trong bão cát.
-// Trời quang: giữ vùng chơi rõ, làm mờ dần phần nền ngoài rìa map.
+// Clear-weather fog only: fade the area outside the map while testing without weather.
 const FOG_CLEAR = { forest: [140, 360], desert: [140, 360] };
-const FOG_STORM = { forest: [32, 125], desert: [8, 40] };
 let fogBaseNear = 32,
   fogBaseFar = 125;
-function applyBaseFog(forest, stormy) {
-  const [near, far] = (stormy ? FOG_STORM : FOG_CLEAR)[
-    forest ? "forest" : "desert"
-  ];
+function applyBaseFog(forest) {
+  const [near, far] = FOG_CLEAR[forest ? "forest" : "desert"];
   fogBaseNear = near;
   fogBaseFar = far;
   if (scene?.fog) {
@@ -2092,7 +2084,7 @@ function initWorld() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(forest ? "#879c88" : "#ad9367");
   scene.fog = new THREE.Fog(forest ? "#879c88" : "#ad9367", 1, 1);
-  applyBaseFog(forest, false); // vào map luôn trời quang trước
+  applyBaseFog(forest); // weather disabled; retain clear map-edge fog only
   baseFov = 76;
   const viewport = host.getBoundingClientRect();
   camera = new THREE.PerspectiveCamera(
@@ -2277,7 +2269,7 @@ function initWorld() {
   steeringWheel.visible = false;
   camera.add(steeringWheel);
   scene.add(camera);
-  weatherActive = false; // vào map trời quang; server sẽ báo khi nào thời tiết thật sự bắt đầu
+  // weatherActive = false; // weather sync disabled for performance profiling
   planeObject = buildPlane();
   planeObject.visible = false;
   scene.add(planeObject);
@@ -4198,16 +4190,16 @@ function cleanupGame() {
   crateOpenId = null;
   stopLoop("plane", 0.05);
   stopLoop("wind", 0.05);
-  stopLoop("weather", 0.12);
+  // stopLoop("weather", 0.12); // weather loop disabled for performance profiling
   stopVehicleEngineAudio(0.03);
   stopVehicleFireAudio(0.03);
-  weatherActive = false;
-  if (weatherFx?.mesh) {
-    scene?.remove(weatherFx.mesh);
-    weatherFx.geometry.dispose();
-    weatherFx.material.dispose();
-  }
-  weatherFx = null;
+  // weatherActive = false;
+  // if (weatherFx?.mesh) {
+  //   scene?.remove(weatherFx.mesh);
+  //   weatherFx.geometry.dispose();
+  //   weatherFx.material.dispose();
+  // }
+  // weatherFx = null;
   inMatch = false;
   plane = null;
   planeObject = null;
@@ -4740,6 +4732,7 @@ function updateRemoteMotion(dt) {
   }
 }
 
+/* WEATHER EFFECTS TEMPORARILY COMMENTED OUT FOR PERFORMANCE TESTING.
 // Bản đồ vào trận luôn quang đãng; thời tiết (mưa rừng / bão cát sa mạc) chỉ
 // xuất hiện sau một khoảng chờ ngẫu nhiên, kéo dài một khoảng ngẫu nhiên rồi
 // tắt hẳn — không lặp lại — để mỗi trận là một mốc thời gian khác nhau.
@@ -4879,6 +4872,7 @@ function updateWeather(dt) {
   }
   geometry.attributes.position.needsUpdate = true;
 }
+*/
 function updateEnvironment(dt) {
   if (!scene || !camera) return;
   let target = 0;
@@ -5985,12 +5979,7 @@ const sfxLevel = () =>
 function applyAudioSettings() {
   syncHomeMusic();
   setLoopGain(audioLoops.plane, 0.55 * sfxLevel(), 0.1);
-  if (audioLoops.weather)
-    setLoopGain(
-      audioLoops.weather,
-      (audioLoops.weather.kind === "rain" ? 0.2 : 0.25) * sfxLevel(),
-      0.12,
-    );
+  // if (audioLoops.weather) setLoopGain(audioLoops.weather, ...); // weather audio disabled
   if (audioLoops.wind) updateWind(local.state === "parachute");
 }
 syncPauseSettings();
@@ -6049,6 +6038,7 @@ function stopLoop(name, fade = 1) {
     fade * 1000 + 250,
   );
 }
+/* WEATHER AUDIO TEMPORARILY COMMENTED OUT FOR PERFORMANCE TESTING.
 function startWeatherSound(kind) {
   if (audioLoops.weather?.kind === kind) return;
   if (audioLoops.weather) stopLoop("weather", 0.08);
@@ -6106,6 +6096,7 @@ function startWeatherSound(kind) {
     0.8,
   );
 }
+*/
 // Tiếng máy bay: tiếng ù trầm (brown noise) + hai dao động lệch tần số bị "băm" nhịp cánh quạt.
 function startPlaneSound() {
   if (audioLoops.plane) return;
@@ -6354,7 +6345,7 @@ function frame() {
   else if (local.state === "freefall" || local.state === "parachute")
     updateAir(dt);
   updateEnvironment(dt);
-  updateWeather(dt);
+  // updateWeather(dt); // weather particle update disabled for performance testing
   updateFlightHud();
   updateMatchClock();
   updateZoneHud();

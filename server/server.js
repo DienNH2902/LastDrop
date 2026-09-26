@@ -19,12 +19,11 @@ const rooms = new Map();
 const MAP_HALF = 200; // map 400 × 400 m: gấp 4 lần diện tích hiện tại (200 × 200)
 const MAP_SCALE = MAP_HALF / 50;
 const COUNTDOWN_MS = 5000;
-// Thời tiết (mưa rừng / bão cát sa mạc): server tự chọn mốc bắt đầu/kết thúc
-// ngẫu nhiên cho MỖI TRẬN rồi gửi cho tất cả người chơi trong phòng cùng lúc,
-// để ai cũng thấy thời tiết đến/đi ở đúng một thời điểm — không lệch nhau.
+/* WEATHER SCHEDULING TEMPORARILY COMMENTED OUT FOR PERFORMANCE TESTING.
 const WEATHER_START_DELAY_MS = [25000, 75000]; // chờ ngẫu nhiên trước khi thời tiết bắt đầu
 const WEATHER_DURATION_MS = [30000, 70000]; // thời tiết kéo dài ngẫu nhiên trước khi kết thúc
 const randomBetween = ([min, max]) => min + Math.random() * (max - min);
+*/
 // Trận không kết thúc ngay khi hạ người chơi cuối cùng — cho người thắng vài
 // giây để nhặt hòm tiếp tế vừa rơi ra trước khi chuyển sang màn kết quả.
 const MATCH_END_DELAY_MS = 20000;
@@ -127,7 +126,7 @@ const snapshot = (room) => ({
   plane: room.plane || null,
   mapSeed: room.mapSeed,
   mapId: room.mapId,
-  weatherActive: Boolean(room.weather?.active),
+  // weatherActive: Boolean(room.weather?.active), // weather sync disabled
   vehicles: (room.vehicles || []).map((v) => ({ ...v })),
   zone: room.zone || null,
   hostId: [...room.players.keys()][0] || null,
@@ -1156,6 +1155,7 @@ function tickRoom(room) {
   const now = Date.now();
   if (room.phase === "playing" || room.phase === "plane") tickVehicles(room, now);
   const players = [...room.players.values()];
+  /* Weather start/end polling disabled for performance testing.
   const w = room.weather;
   if (w && room.phase !== "waiting" && room.phase !== "finished") {
     if (!w.active && now >= w.startAt && now < w.endAt) {
@@ -1166,6 +1166,7 @@ function tickRoom(room) {
       broadcast(room);
     }
   }
+  */
   if (room.phase === "plane" || room.phase === "playing") tickZone(room, now);
   if (room.phase === "staging") {
     if (
@@ -1318,6 +1319,7 @@ wss.on("connection", (ws) => {
       room.loot = [];
       room.crates = [];
       room.stagingStartedAt = Date.now();
+      /* Weather scheduling disabled for performance testing.
       const weatherStartAt =
         room.stagingStartedAt + randomBetween(WEATHER_START_DELAY_MS);
       room.weather = {
@@ -1325,6 +1327,7 @@ wss.on("connection", (ws) => {
         endAt: weatherStartAt + randomBetween(WEATHER_DURATION_MS),
         active: false,
       };
+      */
       for (const q of room.players.values()) {
         q.state = "lobby";
         q.ready = false;
