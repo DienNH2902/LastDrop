@@ -88,6 +88,10 @@ let keys = {},
   resultTimeout = null,
   resultCountdown = null,
   resultEndsAt = 0,
+  deathResultTimer = null,
+  deathView = null,
+  recoilPitch = 0,
+  recoilYaw = 0,
   lastEliminationId = 0,
   localEliminationMessage = "",
   killFeedTimers = [],
@@ -753,7 +757,8 @@ function connect(message) {
       ) {
         if (!inMatch) beginGame();
         renderPlayers(m);
-        showResult();
+        if (local.hp <= 0) beginDeathView(local);
+        else showResult();
       }
     }
   };
@@ -2080,6 +2085,30 @@ function placeRemote(mesh, p) {
   );
   mesh.scale.set(1, p.crouching && !p.prone ? 0.68 : 1, 1);
 }
+function beginDeathView(position = local) {
+  if (deathView || !renderer) return;
+  stopFiring();
+  if (scoped) setScope(false);
+  if (gun) gun.visible = false;
+  document.exitPointerLock?.();
+  deathView = {
+    x: Number(position.x) || 0,
+    y: Number(position.groundY) || 0,
+    z: Number(position.z) || 0,
+    startedAt: performance.now(),
+  };
+  // Lock the camera vertically above the elimination point for a fixed top-down view.
+  camera.up.set(0, 0, -1);
+  renderer.domElement.style.filter = "grayscale(1)";
+  $("#deathViewOverlay")?.classList.remove("hidden");
+  if (deathResultTimer) clearTimeout(deathResultTimer);
+  // Give the eliminated player time to see the battlefield from above.
+  deathResultTimer = setTimeout(() => {
+    deathResultTimer = null;
+    showResult();
+  }, 6000);
+}
+
 function renderPlayers(state) {
   $("#aliveCount").textContent = state.alive;
   $("#totalCount").textContent = state.total;
@@ -2127,6 +2156,7 @@ function renderPlayers(state) {
       local.kills = p.kills;
       local.placement = p.placement || 0;
       local.groundY = Number(p.groundY) || 0;
+      if (local.hp <= 0 && !deathView) beginDeathView(p);
       const previousVehicleId = local.vehicleId;
       local.vehicleId = p.vehicleId || null;
       local.vehicleSeat = Number.isInteger(p.vehicleSeat) ? p.vehicleSeat : -1;
@@ -2149,10 +2179,8 @@ function renderPlayers(state) {
       const acknowledgedShots = Math.max(0, serverShotId - lastLocalShotAckId);
       if (acknowledgedShots) pendingLocalShots.splice(0, acknowledgedShots);
       lastLocalShotAckId = Math.max(lastLocalShotAckId, serverShotId);
-      const pendingCutoff = Date.now() - 800;
-      while (pendingLocalShots.length && pendingLocalShots[0] < pendingCutoff)
-        pendingLocalShots.shift();
-      // Preserve the locally predicted magazine count between server updates.
+      // Keep predicted shots until the server acknowledges them. Expiring them
+      // on a timer can restore stale bullets during packet jitter.
       ammo = Math.max(0, p.ammo - pendingLocalShots.length);
       local.reserveAmmo = p.reserveAmmo;
       local.medkits = p.medkits || 0;
@@ -2206,7 +2234,52 @@ function renderPlayers(state) {
       earRight.position.set(0.17, 0.32, -0.02);
       head.add(earRight);
       head.position.y = 1.72;
+      // Cosmetic helmet, deliberately oversized to read clearly at game distance.
+      const helmetMat = makeMat("#66734a");
+      const helmet = new THREE.Group();
+      const helmetDome = new THREE.Mesh(
+        new THREE.SphereGeometry(0.34, 12, 8),
+        helmetMat,
+      );
+      helmetDome.scale.y = 0.72;
+      helmetDome.position.y = 0.24;
+      helmet.add(helmetDome);
+      const helmetBrim = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.37, 0.37, 0.07, 12),
+        makeMat("#3f4b32"),
+      );
+      helmetBrim.position.y = 0.16;
+      helmet.add(helmetBrim);
+      const helmetStripe = new THREE.Mesh(
+        new THREE.BoxGeometry(0.09, 0.035, 0.48),
+        makeMat("#d6b34a"),
+      );
+      helmetStripe.position.set(0, 0.39, -0.01);
+      helmet.add(helmetStripe);
+      head.add(helmet);
       mesh.add(head);
+      // Oversized vest and shoulder plates are visual only; hitboxes stay unchanged.
+      const armor = new THREE.Group();
+      const armorMat = makeMat("#36463c");
+      const vest = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.98, 0.48), armorMat);
+      vest.position.y = 1.08;
+      armor.add(vest);
+      for (const side of [-1, 1]) {
+        const pad = new THREE.Mesh(
+          new THREE.SphereGeometry(0.23, 8, 6),
+          makeMat("#58654b"),
+        );
+        pad.scale.set(1.2, 0.75, 1);
+        pad.position.set(side * 0.38, 1.46, 0);
+        armor.add(pad);
+      }
+      const chestPlate = new THREE.Mesh(
+        new THREE.BoxGeometry(0.47, 0.45, 0.08),
+        makeMat("#74714e"),
+      );
+      chestPlate.position.set(0, 1.2, -0.255);
+      armor.add(chestPlate);
+      mesh.add(armor);
       const legMaterial = makeMat("#313b34");
       const legGeo = new THREE.BoxGeometry(0.2, 0.48, 0.25);
       const legs = new THREE.Group();
@@ -2333,6 +2406,7 @@ function renderPlayers(state) {
         inAir: false,
         torso,
         head,
+        armor,
         legs,
         legLeft,
         legRight,
@@ -2463,7 +2537,7 @@ function renderPlayers(state) {
       showDamageDirection(shooter);
     }
   }
-  if (local.hp <= 0) showResult();
+  if (local.hp <= 0 && !deathView) beginDeathView(local);
 }
 // ---------------------------------------------------------------------------
 // VẬT PHẨM RƠI TRÊN MAP (đạn, bịch máu) · BALO (Tab) · HỒI MÁU
@@ -3115,6 +3189,13 @@ function beginGame() {
   local.placement = 0;
   $("#killFeed").replaceChildren();
   local.hp = 100;
+  deathView = null;
+  recoilPitch = 0;
+  recoilYaw = 0;
+  camera?.up.set(0, 1, 0);
+  if (deathResultTimer) clearTimeout(deathResultTimer);
+  deathResultTimer = null;
+  $("#deathViewOverlay")?.classList.add("hidden");
   local.kills = 0;
   verticalSpeed = 0;
   grounded = true;
@@ -3507,6 +3588,11 @@ function leaveMatch() {
   show("menu");
 }
 function cleanupGame() {
+  if (deathResultTimer) clearTimeout(deathResultTimer);
+  deathResultTimer = null;
+  deathView = null;
+  camera?.up.set(0, 1, 0);
+  $("#deathViewOverlay")?.classList.add("hidden");
   const grayOverlay = $("#zoneGrayOverlay");
   if (grayOverlay) {
     grayOverlay.style.opacity = "0";
@@ -3555,7 +3641,7 @@ function onMouse(e) {
     : 1;
   local.yaw -= e.movementX * (Number($("#sensitivity").value) || 50) * 0.000055 * sniperZoomScale;
   camera.rotation.order = "YXZ";
-  camera.rotation.y = local.yaw;
+  camera.rotation.y = local.yaw + recoilYaw;
   camera.rotation.x = Math.max(
     -1.35,
     Math.min(1.35, camera.rotation.x - e.movementY * 0.0018),
@@ -3657,6 +3743,16 @@ function shootOnce() {
     z: local.z,
     eyeY: eye.y,
   });
+  // This shot follows the current reticle exactly; recoil is applied just
+  // afterward so it moves the aim for the next shot instead of deflecting this one.
+  const recoilScale = scoped ? 0.72 : 1;
+  const pitchKick = (local.weapon === "sniper" ? 0.105 : 0.07) * recoilScale;
+  const yawKick = (Math.random() - 0.5) *
+    (local.weapon === "sniper" ? 0.018 : 0.04) * recoilScale;
+  camera.rotation.x = clamp(camera.rotation.x + pitchKick, -1.35, 1.35);
+  recoilPitch += pitchKick;
+  recoilYaw += yawKick;
+  camera.rotation.y = local.yaw + recoilYaw;
 }
 function setScope(enabled) {
   scoped = enabled;
@@ -5569,12 +5665,37 @@ function frame() {
       lastMove = Date.now();
     }
   }
+  if (recoilPitch > 0) {
+    const recover = Math.min(recoilPitch, dt * 0.15);
+    camera.rotation.x = Math.max(-1.35, camera.rotation.x - recover);
+    recoilPitch -= recover;
+  }
+  if (Math.abs(recoilYaw) > 0.0001) {
+    const recoverYaw = Math.sign(recoilYaw) * Math.min(Math.abs(recoilYaw), dt * 0.06);
+    recoilYaw -= recoverYaw;
+    camera.rotation.y = local.yaw + recoilYaw;
+  }
+  if (deathView) {
+    const focus = new THREE.Vector3(deathView.x, deathView.y, deathView.z);
+    camera.position.set(
+      deathView.x,
+      deathView.y + 45,
+      deathView.z,
+    );
+    camera.lookAt(focus);
+  }
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
 function showResult() {
   if (!$("#game").classList.contains("active")) return;
   if ($("#result").classList.contains("active")) return;
+  if (deathResultTimer) clearTimeout(deathResultTimer);
+  deathResultTimer = null;
+  deathView = null;
+  camera?.up.set(0, 1, 0);
+  if (renderer?.domElement) renderer.domElement.style.filter = "";
+  $("#deathViewOverlay")?.classList.add("hidden");
   closeBackpack(false);
   // Tắt scope và đóng menu ESC ngay khi trận kết thúc — không mang trạng thái
   // này sang trận sau.
