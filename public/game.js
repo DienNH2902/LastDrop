@@ -4052,6 +4052,51 @@ function drawFlightMap() {
     local.state === "plane" && plane
       ? planePosAt(planeTime())
       : { x: local.x, z: local.z };
+
+  // Cone thể hiện vùng nhìn của người chơi trên minimap.
+  if (local.state === "ground") {
+    const viewDistance = 18; // độ dài vùng nhìn, mét
+    const viewAngle = Math.PI / 3; // góc nhìn tổng cộng = 60°
+
+    // local.yaw = 0 nhìn về -Z.
+    // Trên canvas minimap: X -> ngang, Z -> dọc.
+    const forwardX = -Math.sin(local.yaw);
+    const forwardZ = -Math.cos(local.yaw);
+
+    // Góc hướng nhìn trên canvas.
+    const centerAngle = Math.atan2(forwardZ, forwardX);
+
+    const startAngle = centerAngle - viewAngle / 2;
+    const endAngle = centerAngle + viewAngle / 2;
+
+    const px = X(me.x);
+    const py = Y(me.z);
+    const radius = viewDistance * k;
+
+    ctx.save();
+
+    // Vùng nhìn
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.arc(px, py, radius, startAngle, endAngle);
+    ctx.closePath();
+
+    ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+    ctx.fill();
+
+    // Viền cone nhẹ
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.arc(px, py, radius, startAngle, endAngle);
+    ctx.closePath();
+
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.65)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
   dot(me.x, me.z, 3.5, "#ffffff");
   ctx.restore();
 }
