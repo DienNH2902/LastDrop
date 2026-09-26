@@ -1409,7 +1409,10 @@ function isBlockedAt(x, z) {
       const rockTop =
         support?.type === "rock" &&
         support.obstacle === o &&
-        local.groundY > support.base + o.h * 0.62;
+        // Rock collision is suspended while leaving its upper surface. The
+        // visible crown falls to ~42% of rock height at the rim, so using a
+        // higher threshold traps players against the side during the step down.
+        local.groundY > support.base + o.h * 0.35;
       if (rockTop) continue;
       if (Math.hypot(x - o.x, z - o.z) < footprint + obstacleRadius)
         return true;

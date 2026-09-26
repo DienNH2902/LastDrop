@@ -495,7 +495,10 @@ function blockedPosition(room, x, z, ignoreId) {
         o.type === "rock" &&
         support?.type === "rock" &&
         support.obstacle === o &&
-        mover.groundY > support.base + o.h * 0.62;
+        // The drawn top surface is only ~42% of rock height at its rim.
+        // Keep the rock passable from above there so walking off the edge
+        // does not turn into a collision with the vertical side.
+        mover.groundY > support.base + o.h * 0.35;
       if (rockTop) continue;
       if (Math.hypot(x - o.x, z - o.z) < footprint + obstacleRadius)
         return true;
