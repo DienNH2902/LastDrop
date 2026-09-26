@@ -830,6 +830,13 @@ function escapeHtml(s) {
 function makeMat(color, roughness = 1) {
   return new THREE.MeshStandardMaterial({ color, roughness });
 }
+function updateAmmoHud() {
+  const capacity = local.weapon === "sniper" ? 5 : 30;
+  const reserve = local.reserveAmmo ?? 90;
+  const hud = $("#ammo");
+  if (hud)
+    hud.innerHTML = `${ammo} <i>/ ${capacity} · DỰ TRỮ ${reserve}</i>`;
+}
 function terrainHeightForHill(hill, x, z) {
   const radiusX = hill.w / 2;
   const radiusZ = (hill.length || hill.w) / 2;
@@ -2175,13 +2182,8 @@ function renderPlayers(state) {
         localFootstepDistance = 0;
         if (steeringWheel) steeringWheel.visible = false;
       }
-      const serverShotId = Number(p.shotId) || 0;
-      const acknowledgedShots = Math.max(0, serverShotId - lastLocalShotAckId);
-      if (acknowledgedShots) pendingLocalShots.splice(0, acknowledgedShots);
-      lastLocalShotAckId = Math.max(lastLocalShotAckId, serverShotId);
-      // Keep predicted shots until the server acknowledges them. Expiring them
-      // on a timer can restore stale bullets during packet jitter.
-      ammo = Math.max(0, p.ammo - pendingLocalShots.length);
+      const serverReloading = Boolean(p.reloading);
+      ammo = Math.max(0, Number(p.ammo) || 0);
       local.reserveAmmo = p.reserveAmmo;
       local.medkits = p.medkits || 0;
       local.healing = Boolean(p.healing);
@@ -2196,7 +2198,7 @@ function renderPlayers(state) {
         startReloadSounds(null);
       }
       if (!local.reloading) local.reloadStartedAt = 0;
-      $("#ammo").innerHTML = `${ammo} <i>/ ${local.reserveAmmo}</i>`;
+      updateAmmoHud();
       $("#feed").textContent = local.reloading ? "⟳ ĐANG NẠP ĐẠN · R" : "";
       const reloadHud = $("#reloadHud");
       if (reloadHud)
@@ -3111,14 +3113,14 @@ function updateGunPose(dt) {
       : 0;
   const reloadDip = local.reloading ? Math.sin(reloadProgress * Math.PI) : 0;
   gun.rotation.set(
-    0.15 * gunBusy + 0.12 * reloadDip,
-    1.35 * gunBusy - 0.18 * reloadDip,
-    -0.12 * gunBusy + 0.34 * reloadDip,
+    0.15 * gunBusy,
+    1.35 * gunBusy,
+    -0.12 * gunBusy,
   );
   gun.position.set(
     0.3 * gunBusy - 0.28 * gunAimBlend,
-    -0.14 * gunBusy - 0.2 * reloadDip + 0.075 * gunAimBlend,
-    0.05 * gunBusy + 0.06 * reloadDip,
+    -0.14 * gunBusy + 0.075 * gunAimBlend,
+    0.05 * gunBusy,
   );
   const magazine = gun.userData.magazine;
   if (magazine) {
@@ -3221,7 +3223,7 @@ function beginGame() {
   scoped = false;
   ammo = 30;
   startedAt = Date.now();
-  $("#ammo").innerHTML = `${ammo} <i>/ 90</i>`;
+  updateAmmoHud();
   show("game");
   initWorld();
   // Phòng hờ thêm: đảm bảo trận mới luôn sạch, không còn scope/ESC từ trận trước.
@@ -3505,7 +3507,10 @@ function onKeyDown(e) {
     $("#game").classList.contains("active")
   ) {
     e.preventDefault();
-    if (!local.healing) send({ type: "reload" });
+    if (!local.healing) {
+      stopFiring();
+      send({ type: "reload" });
+    }
     return;
   }
 
@@ -3727,9 +3732,6 @@ function shootOnce() {
     return;
   }
   lastClientShotAt = now;
-  ammo--;
-  pendingLocalShots.push(now);
-  $("#ammo").innerHTML = `${ammo} <i>/ ${local.reserveAmmo ?? 90}</i>`;
   playSpatialGunshot(null, 0.65);
   const flash = new THREE.PointLight(0xffc66b, 2, 3);
   flash.position.set(0.28, -0.22, -1);
@@ -5706,11 +5708,11 @@ function frame() {
       lastMove = Date.now();
     }
   }
-  if (recoilPitch > 0) {
-    const recover = Math.min(recoilPitch, dt * 0.15);
-    camera.rotation.x = Math.max(-1.35, camera.rotation.x - recover);
-    recoilPitch -= recover;
-  }
+  // if (recoilPitch > 0) {
+  //   const recover = Math.min(recoilPitch, dt * 0.15);
+  //   camera.rotation.x = Math.max(-1.35, camera.rotation.x - recover);
+  //   recoilPitch -= recover;
+  // }
   if (Math.abs(recoilYaw) > 0.0001) {
     const recoverYaw = Math.sign(recoilYaw) * Math.min(Math.abs(recoilYaw), dt * 0.06);
     recoilYaw -= recoverYaw;

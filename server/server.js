@@ -1513,6 +1513,9 @@ wss.on("connection", (ws) => {
       const best = (room.loot || []).find((item) => item.id === m.itemId);
       if (!best || Math.hypot(best.x - p.x, best.z - p.z) > PICKUP_RADIUS)
         return;
+      // Keep the active magazine size stable for the duration of a reload.
+      if (best.type === "weapon" && p.reloadingUntil > Date.now())
+        return send(ws, { type: "toast", text: "CHỜ NẠP ĐẠN XONG ĐỂ ĐỔI SÚNG" });
       if (best.type === "ammo") {
         const space = MAX_RESERVE_AMMO - p.reserveAmmo;
         if (space <= 0)
@@ -1709,13 +1712,14 @@ wss.on("connection", (ws) => {
         broadcast(room);
         return;
       }
+      const reloadCapacity = magazineSize(p);
       p.reloadingUntil = now + 1800;
       const reloadFinishesAt = p.reloadingUntil;
       broadcast(room);
       setTimeout(() => {
         if (!room.players.has(p.id) || p.reloadingUntil !== reloadFinishesAt)
           return;
-        const amount = Math.min(magazineSize(p) - p.ammo, p.reserveAmmo);
+        const amount = Math.min(reloadCapacity - p.ammo, p.reserveAmmo);
         p.ammo += amount;
         p.reserveAmmo -= amount;
         p.reloadingUntil = 0;
