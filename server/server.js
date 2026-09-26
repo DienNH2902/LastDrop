@@ -27,8 +27,26 @@ const WEATHER_DURATION_MS = [30000, 70000]; // thời tiết kéo dài ngẫu nh
 const randomBetween = ([min, max]) => min + Math.random() * (max - min);
 // Trận không kết thúc ngay khi hạ người chơi cuối cùng — cho người thắng vài
 // giây để nhặt hòm tiếp tế vừa rơi ra trước khi chuyển sang màn kết quả.
-const MATCH_END_DELAY_MS = 3000;
+const MATCH_END_DELAY_MS = 20000;
 const STAGING_TIMEOUT_MS = 20000; // chờ tối đa bấy nhiêu ms cho máy chậm dựng map
+
+// ---- Vòng bo (an toàn thu hẹp dần theo thời gian, giống PUBG) ----
+// Vòng đầu tiên phủ hết bản đồ (không gây sát thương). Cứ hết một lượt "chờ"
+// là vòng lại thu hẹp về một vòng tròn nhỏ hơn, nằm ngẫu nhiên bên trong vòng
+// cũ; càng về sau vòng càng nhỏ và sát thương mỗi giây cho người đứng ngoài
+// càng cao.
+const ZONE_STAGES = [
+  { radiusRatio: 0.62, waitMs: 35000, shrinkMs: 26000, damage: 2 },
+  { radiusRatio: 0.55, waitMs: 28000, shrinkMs: 22000, damage: 4 },
+  { radiusRatio: 0.5, waitMs: 24000, shrinkMs: 18000, damage: 6 },
+  { radiusRatio: 0.45, waitMs: 20000, shrinkMs: 15000, damage: 9 },
+  { radiusRatio: 0.4, waitMs: 16000, shrinkMs: 12000, damage: 13 },
+  { radiusRatio: 0.35, waitMs: 14000, shrinkMs: 10000, damage: 18 },
+  { radiusRatio: 0.3, waitMs: 12000, shrinkMs: 8000, damage: 25 },
+];
+const ZONE_FULL_RADIUS = MAP_HALF * Math.SQRT2; // đủ phủ hết bản đồ hình vuông
+const ZONE_TICK_SECONDS = 0.1; // tickRoom chạy mỗi 100ms
+
 const PLANE_ALT = 200; // độ cao máy bay (m)
 const PLANE_SPEED = 12; // m/s
 const PLANE_LEAD = 65; // máy bay xuất phát cách góc xa nhất của zone ít nhất bấy nhiêu m
@@ -110,6 +128,7 @@ const snapshot = (room) => ({
   mapSeed: room.mapSeed,
   mapId: room.mapId,
   weatherActive: Boolean(room.weather?.active),
+  zone: room.zone || null,
   hostId: [...room.players.keys()][0] || null,
   lastElimination: room.lastElimination || null,
   crates: room.crates || [],
@@ -549,6 +568,127 @@ function seatWorldPosition(plane, seat, t) {
 }
 const clampToMap = (v) =>
   Math.max(-MAP_HALF + 0.5, Math.min(MAP_HALF - 0.5, v));
+function initZone(room) {
+  const now = Date.now();
+  const full = { x: 0, z: 0 };
+  room.zone = {
+    stageIndex: -1, // -1 = còn nguyên bản đồ, chưa vòng nào hình thành
+    phase: "wait", // "wait" (đang chờ thu hẹp) | "shrink" (đang thu hẹp) | "done" (đã tới vòng cuối)
+    fromCenter: full,
+    fromRadius: ZONE_FULL_RADIUS,
+    toCenter: full,
+    toRadius: ZONE_FULL_RADIUS,
+    shrinkStartAt: now,
+    shrinkEndsAt: now,
+    waitEndsAt: now + ZONE_STAGES[0].waitMs,
+    damage: 0,
+  };
+}
+// Chọn vòng kế tiếp: bán kính nhỏ hơn theo tỉ lệ, tâm ngẫu nhiên sao cho vòng
+// mới luôn nằm trọn bên trong vòng hiện tại.
+function pickNextZoneCircle(fromCircle, ratio) {
+  const nextRadius = Math.max(6, fromCircle.radius * ratio);
+  const maxOffset = Math.max(0, fromCircle.radius - nextRadius);
+  const angle = Math.random() * Math.PI * 2;
+  const dist = Math.random() * maxOffset;
+  return {
+    center: {
+      x: clampToMap(fromCircle.center.x + Math.cos(angle) * dist),
+      z: clampToMap(fromCircle.center.z + Math.sin(angle) * dist),
+    },
+    radius: nextRadius,
+  };
+}
+// Vòng tại đúng thời điểm "now": nếu đang thu hẹp thì nội suy giữa vòng cũ và
+// vòng đích; nếu không thì đứng yên ở vòng đích (đã hình thành xong).
+function currentZoneCircle(zone, now) {
+  if (zone.phase !== "shrink")
+    return { center: zone.toCenter, radius: zone.toRadius };
+  const span = Math.max(1, zone.shrinkEndsAt - zone.shrinkStartAt);
+  const t = Math.min(1, Math.max(0, (now - zone.shrinkStartAt) / span));
+  return {
+    center: {
+      x: zone.fromCenter.x + (zone.toCenter.x - zone.fromCenter.x) * t,
+      z: zone.fromCenter.z + (zone.toCenter.z - zone.fromCenter.z) * t,
+    },
+    radius: zone.fromRadius + (zone.toRadius - zone.fromRadius) * t,
+  };
+}
+function tickZone(room, now) {
+  const zone = room.zone;
+  if (!zone) return;
+  let changed = false;
+  if (zone.phase === "wait" && now >= zone.waitEndsAt) {
+    const nextIndex = zone.stageIndex + 1;
+    const stage = ZONE_STAGES[nextIndex];
+    if (stage) {
+      const from = currentZoneCircle(zone, now);
+      const next = pickNextZoneCircle(from, stage.radiusRatio);
+      zone.fromCenter = from.center;
+      zone.fromRadius = from.radius;
+      zone.toCenter = next.center;
+      zone.toRadius = next.radius;
+      zone.shrinkStartAt = now;
+      zone.shrinkEndsAt = now + stage.shrinkMs;
+      zone.damage = stage.damage;
+      zone.stageIndex = nextIndex;
+      zone.phase = "shrink";
+    } else {
+      zone.phase = "done"; // hết danh sách vòng — giữ nguyên vòng cuối
+    }
+    changed = true;
+  } else if (zone.phase === "shrink" && now >= zone.shrinkEndsAt) {
+    zone.phase = "wait";
+    zone.waitEndsAt = now + (ZONE_STAGES[zone.stageIndex + 1]?.waitMs ?? 20000);
+    changed = true;
+  }
+  // Sát thương cho người đứng ngoài vòng an toàn hiện tại (chỉ tính người đã tiếp đất).
+  if (zone.damage > 0) {
+    const circle = currentZoneCircle(zone, now);
+    for (const p of room.players.values()) {
+      if (!p.alive || p.state !== "ground") continue;
+      if (
+        Math.hypot(p.x - circle.center.x, p.z - circle.center.z) <=
+        circle.radius
+      )
+        continue;
+      p.hp = Math.max(0, p.hp - zone.damage * ZONE_TICK_SECONDS);
+      changed = true;
+      if (p.hp) continue;
+      p.alive = false;
+      p.placement =
+        [...room.players.values()].filter((pl) => pl.alive).length + 1;
+      room.eliminationSequence = (room.eliminationSequence || 0) + 1;
+      room.lastElimination = {
+        id: room.eliminationSequence,
+        victimId: p.id,
+        victimName: p.name,
+        killerId: null,
+        killerName: "Vòng bo",
+      };
+      room.crates ||= [];
+      room.crates.push({
+        id: `crate-${room.nextCrateId++}`,
+        x: p.x,
+        z: p.z,
+        contents: {
+          ammo: (p.reserveAmmo || 0) + (p.ammo || 0),
+          medkit: p.medkits || 0,
+        },
+      });
+      const remaining = [...room.players.values()].filter((pl) => pl.alive);
+      if (remaining.length <= 1 && !room.finishAt) {
+        room.finishAt = now + MATCH_END_DELAY_MS;
+        if (remaining[0])
+          send(remaining[0].ws, {
+            type: "toast",
+            text: `CHIẾN THẮNG! TRANH THỦ NHẶT HÒM ĐỒ — VỀ SẢNH SAU ${Math.round(MATCH_END_DELAY_MS / 1000)}S`,
+          });
+      }
+    }
+  }
+  if (changed) broadcast(room);
+}
 function startPlane(room) {
   room.phase = "plane";
   room.plane = { ...createFlight(), startedAt: Date.now() };
@@ -613,6 +753,7 @@ function tickRoom(room) {
       broadcast(room);
     }
   }
+  if (room.phase === "plane" || room.phase === "playing") tickZone(room, now);
   if (room.phase === "staging") {
     if (
       players.every((p) => p.ready) ||
@@ -642,6 +783,7 @@ function tickRoom(room) {
     }
     if (players.every((p) => p.state !== "plane")) {
       room.phase = "playing";
+      initZone(room); // vòng bo chỉ bắt đầu tính giờ từ lúc này (máy bay đã bay hết map)
       changed = true;
     }
     if (changed) broadcast(room);

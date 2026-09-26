@@ -76,6 +76,8 @@ let keys = {},
   lastHitEventId = 0,
   lastFlightMapDraw = 0,
   bloodParticles = [],
+  zoneWallMesh = null,
+  zoneTargetLine = null,
   resultTimeout = null,
   resultCountdown = null,
   resultEndsAt = 0,
@@ -1513,6 +1515,7 @@ function initWorld() {
   createGroundMesh(forest);
   addOutskirts(forest);
   addZoneBorder();
+  addSafeZoneWall();
   if (forest) addForestGrass(gameState?.mapSeed ?? 305419896);
   for (const obstacle of mapObstacles) drawMapObject(obstacle, forest);
   // First-person weapon silhouette attached to the camera.
@@ -2766,6 +2769,7 @@ function beginGame() {
   document.addEventListener("keyup", onKeyUp);
   installReloadHud();
   installLootUi();
+  installZoneHud();
   $("#resumeBtn").onclick = resumeGame;
   $("#openPauseSettings").onclick = openPauseSettings;
   $("#closePauseSettings").onclick = closePauseSettings;
@@ -2806,6 +2810,113 @@ function installReloadHud() {
   });
   reloadHud.append(spinner, document.createTextNode("ĐANG NẠP ĐẠN"));
   $(".weapon").insertBefore(reloadHud, $("#ammo"));
+}
+function installZoneHud() {
+  document.querySelector("#zoneHud")?.remove();
+  document.querySelector("#zoneDangerTint")?.remove();
+  const hud = document.createElement("div");
+  hud.id = "zoneHud";
+  Object.assign(hud.style, {
+    position: "absolute",
+    left: "50%",
+    top: "44px",
+    transform: "translateX(-50%)",
+    padding: "6px 16px",
+    // borderRadius: "8px",
+    // background: "rgba(10,14,10,.55)",
+    color: "#8fd4ff",
+    font: "bold 13px 'DM Mono', monospace",
+    letterSpacing: ".5px",
+    textShadow: "0 1px 4px #000",
+    textAlign: "center",
+    pointerEvents: "none",
+    zIndex: 5,
+    whiteSpace: "nowrap",
+  });
+  $("#game").append(hud);
+  const tint = document.createElement("div");
+  tint.id = "zoneDangerTint";
+  Object.assign(tint.style, {
+    position: "absolute",
+    inset: "0",
+    pointerEvents: "none",
+    background:
+      "radial-gradient(ellipse at center, transparent 55%, rgba(200,10,10,.55) 100%)",
+    opacity: "0",
+    transition: "opacity .3s",
+    zIndex: 4,
+  });
+  $("#game").append(tint);
+}
+function updateZoneHud() {
+  const hud = $("#zoneHud");
+  const tint = $("#zoneDangerTint");
+  if (!hud) return;
+  const zone = gameState?.zone;
+  if (!zone || local.state === "lobby") {
+    hud.textContent = "";
+    if (tint) tint.style.opacity = "0";
+    return;
+  }
+  const circle = zoneCircleNow();
+  let statusText = "VÒNG BO CUỐI CÙNG";
+  if (zone.phase === "wait") {
+    const secs = Math.max(0, Math.ceil((zone.waitEndsAt - serverNow()) / 1000));
+    statusText = `VÒNG AN TOÀN · THU HẸP SAU ${secs}S`;
+  } else if (zone.phase === "shrink") {
+    const secs = Math.max(
+      0,
+      Math.ceil((zone.shrinkEndsAt - serverNow()) / 1000),
+    );
+    statusText = `VÒNG ĐANG THU HẸP · ${secs}S`;
+  }
+  const distOutside =
+    circle && local.state === "ground"
+      ? Math.hypot(local.x - circle.x, local.z - circle.z) - circle.radius
+      : -1;
+  if (distOutside > 0) {
+    hud.textContent = `NGOÀI VÒNG AN TOÀN · CÒN ${Math.round(distOutside)}M · -${zone.damage}HP/S`;
+    hud.style.color = "#ff5252";
+    if (tint) tint.style.opacity = "1";
+  } else {
+    hud.textContent = statusText;
+    hud.style.color = "#8fd4ff";
+    if (tint) tint.style.opacity = "0";
+  }
+}
+function updateZoneWorld() {
+  if (!zoneWallMesh) return;
+  const edgeLine = zoneWallMesh.userData.edgeLine;
+  const circle = zoneCircleNow();
+  if (!circle || local.state === "lobby") {
+    zoneWallMesh.visible = false;
+    if (edgeLine) edgeLine.visible = false;
+    if (zoneTargetLine) zoneTargetLine.visible = false;
+    return;
+  }
+  const isOutside =
+    Math.hypot(local.x - circle.x, local.z - circle.z) > circle.radius;
+  zoneWallMesh.visible = true;
+  zoneWallMesh.position.set(circle.x, 35, circle.z);
+  zoneWallMesh.scale.set(circle.radius, 1, circle.radius);
+  zoneWallMesh.material.color.set(isOutside ? 0xff5252 : 0x66ccff);
+  zoneWallMesh.material.opacity = isOutside ? 0.3 : 0.16;
+  if (edgeLine) {
+    edgeLine.visible = true;
+    edgeLine.position.set(circle.x, 0.18, circle.z);
+    edgeLine.scale.set(circle.radius, 1, circle.radius);
+    edgeLine.material.color.set(isOutside ? 0xff8f6f : 0x8fe0ff);
+  }
+  const zone = gameState?.zone;
+  if (zoneTargetLine) {
+    if (zone?.phase === "shrink") {
+      zoneTargetLine.visible = true;
+      zoneTargetLine.position.set(zone.toCenter.x, 0.2, zone.toCenter.z);
+      zoneTargetLine.scale.set(zone.toRadius, 1, zone.toRadius);
+    } else {
+      zoneTargetLine.visible = false;
+    }
+  }
 }
 function blockContextMenu(e) {
   if ($("#game").classList.contains("active")) e.preventDefault();
@@ -3177,6 +3288,20 @@ function planePosAt(t) {
   return {
     x: plane.sx + plane.dx * plane.speed * t,
     z: plane.sz + plane.dz * plane.speed * t,
+  };
+}
+// Vòng bo hiện tại (nội suy nếu đang thu hẹp) — dùng chung cho minimap và HUD.
+function zoneCircleNow() {
+  const zone = gameState?.zone;
+  if (!zone) return null;
+  if (zone.phase !== "shrink")
+    return { x: zone.toCenter.x, z: zone.toCenter.z, radius: zone.toRadius };
+  const span = Math.max(1, zone.shrinkEndsAt - zone.shrinkStartAt);
+  const t = clamp((serverNow() - zone.shrinkStartAt) / span, 0, 1);
+  return {
+    x: zone.fromCenter.x + (zone.toCenter.x - zone.fromCenter.x) * t,
+    z: zone.fromCenter.z + (zone.toCenter.z - zone.fromCenter.z) * t,
+    radius: zone.fromRadius + (zone.toRadius - zone.fromRadius) * t,
   };
 }
 // Vị trí (thế giới) của một chỗ đứng trong khoang máy bay tại thời điểm t.
@@ -3853,6 +3978,40 @@ function drawFlightMap() {
   ctx.strokeStyle = forest ? "#c8f27a" : "#f3d38c";
   ctx.lineWidth = 2;
   ctx.strokeRect(1, 1, S - 2, S - 2);
+  const zoneCircle = zoneCircleNow();
+  if (zoneCircle) {
+    const zx = X(zoneCircle.x),
+      zy = Y(zoneCircle.z),
+      zr = Math.max(0, zoneCircle.radius * k);
+    // Vùng ngoài vòng an toàn tô đỏ mờ.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, S, S);
+    ctx.moveTo(zx + zr, zy);
+    ctx.arc(zx, zy, zr, 0, Math.PI * 2, true);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(150,20,20,.38)";
+    ctx.fill("evenodd");
+    ctx.restore();
+    ctx.beginPath();
+    ctx.arc(zx, zy, zr, 0, Math.PI * 2);
+    ctx.strokeStyle = "#6fd8ff";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Đang thu hẹp: vẽ thêm viền vòng đích (nét đứt) để biết sắp thu về đâu.
+    if (gameState.zone?.phase === "shrink") {
+      const tx = X(gameState.zone.toCenter.x),
+        ty = Y(gameState.zone.toCenter.z),
+        tr = Math.max(0, gameState.zone.toRadius * k);
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(tx, ty, tr, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
   const dot = (x, z, radius, color) => {
     ctx.fillStyle = color;
     ctx.beginPath();
@@ -4113,6 +4272,51 @@ function addZoneBorder() {
       new THREE.LineBasicMaterial({ color: 0x8fe0ff }),
     ),
   );
+}
+// Vòng bo an toàn: tường trụ trong suốt đặt đúng vị trí/bán kính thật của vòng
+// (không chỉ trên minimap), cùng viền sáng sát đất cho dễ thấy khi tới gần.
+// Vị trí/kích thước được chỉnh lại mỗi khung hình trong updateZoneWorld().
+function addSafeZoneWall() {
+  zoneWallMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(1, 1, 70, 96, 1, true),
+    new THREE.MeshBasicMaterial({
+      color: 0x66ccff,
+      transparent: true,
+      opacity: 0.16,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  zoneWallMesh.position.y = 35;
+  zoneWallMesh.visible = false;
+  scene.add(zoneWallMesh);
+  const ringPoints = [];
+  for (let i = 0; i <= 96; i++) {
+    const a = (i / 96) * Math.PI * 2;
+    ringPoints.push(new THREE.Vector3(Math.cos(a), 0, Math.sin(a)));
+  }
+  const ringGeometry = new THREE.BufferGeometry().setFromPoints(ringPoints);
+  const edgeLine = new THREE.LineLoop(
+    ringGeometry,
+    new THREE.LineBasicMaterial({ color: 0x8fe0ff }),
+  );
+  edgeLine.position.y = 0.18;
+  edgeLine.visible = false;
+  scene.add(edgeLine);
+  zoneWallMesh.userData.edgeLine = edgeLine;
+  // Viền vòng đích (đang thu hẹp tới đâu) — nét đứt trắng, nằm sát mặt đất.
+  zoneTargetLine = new THREE.LineLoop(
+    ringGeometry,
+    new THREE.LineDashedMaterial({
+      color: 0xffffff,
+      dashSize: 2,
+      gapSize: 1.4,
+    }),
+  );
+  zoneTargetLine.computeLineDistances();
+  zoneTargetLine.position.y = 0.2;
+  zoneTargetLine.visible = false;
+  scene.add(zoneTargetLine);
 }
 // ---------------------------------------------------------------------------
 // ÂM THANH TRÊN KHÔNG: tiếng máy bay, gió, bung dù, tiếp đất
@@ -4452,6 +4656,8 @@ function frame() {
   updateWeather(dt);
   updateFlightHud();
   updateMatchClock();
+  updateZoneHud();
+  updateZoneWorld();
   if (!paused && (local.state === "ground" || local.state === "lobby")) {
     const currentlyInWater = Boolean(waterAt(local.x, local.z));
     const isProne = !currentlyInWater && Boolean(local.prone);
