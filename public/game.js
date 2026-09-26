@@ -2090,14 +2090,14 @@ function renderPlayers(state) {
     row.className = "kill-feed-row";
     row.textContent = event.killerName === "Nổ xe"
       ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn`
-      : `${event.killerName} đã hạ ${event.victimName}`;
+      : `${event.killerName} đã chịch ${event.victimName} đến chết`;
     $("#killFeed")?.prepend(row);
     const timer = setTimeout(() => row.remove(), 20000);
     killFeedTimers.push(timer);
     if (event.victimId === playerId) {
       localEliminationMessage = event.killerName === "Nổ xe"
         ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn.`
-        : `Bạn đã bị hạ bởi ${event.killerName}.`;
+        : `Bạn đã bị chịch đến chết bởi ${event.killerName}.`;
       $("#resultDetail").textContent = localEliminationMessage;
     }
     if (event.killerId === playerId && event.killerName !== "Nổ xe") {
