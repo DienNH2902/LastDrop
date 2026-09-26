@@ -1438,10 +1438,10 @@ function isBlockedAt(x, z) {
   return false;
 }
 
-// Sương mù nền: lúc trời quang nhìn xa thoải mái, chỉ khi có bão cát (desert)
-// mới kéo gần lại để mô phỏng tầm nhìn bị che. Rừng giữ nguyên như cũ vì mưa
-// rừng không cần đổi tầm nhìn.
-const FOG_CLEAR = { forest: [32, 125], desert: [140, 360] };
+// Rừng khô hoàn toàn không có sương mù; khi mưa mới dùng lớp sương nhìn gần.
+// Sa mạc vẫn có tầm nhìn xa khi trời quang và bị che mạnh trong bão cát.
+// Trời quang: giữ vùng chơi rõ, làm mờ dần phần nền ngoài rìa map.
+const FOG_CLEAR = { forest: [140, 360], desert: [140, 360] };
 const FOG_STORM = { forest: [32, 125], desert: [8, 40] };
 let fogBaseNear = 32,
   fogBaseFar = 125;
@@ -2673,7 +2673,7 @@ function showLootToast(text) {
   el.textContent = text;
   el.classList.remove("hidden");
   clearTimeout(lootToastTimer);
-  lootToastTimer = setTimeout(() => el.classList.add("hidden"), 1800);
+  lootToastTimer = setTimeout(() => el.classList.add("hidden"), 10000);
 }
 // Súng hạ/gập khi hồi máu và có động tác tháo lắp băng đạn khi nạp.
 function updateGunPose(dt) {
@@ -3325,9 +3325,15 @@ function makeTracer() {
   const eye = new THREE.Vector3();
   camera.getWorldPosition(eye);
   const muzzle = new THREE.Vector3();
-  camera.localToWorld(
-    muzzle.set(0.28, -0.2, local.weapon === "sniper" ? -1.65 : -1),
-  );
+  if (scoped) {
+    // While aiming, start the visible tracer on the camera's center ray so it
+    // stays aligned with the reticle instead of streaking in from the hip-fire muzzle.
+    muzzle.copy(eye).addScaledVector(direction, 0.25);
+  } else {
+    camera.localToWorld(
+      muzzle.set(0.28, -0.2, local.weapon === "sniper" ? -1.65 : -1),
+    );
+  }
   // End the tracer on the exact same camera-center ray sent to the server.
   const end = eye.addScaledVector(direction, 140);
   const geometry = new THREE.BufferGeometry().setFromPoints([muzzle, end]);
