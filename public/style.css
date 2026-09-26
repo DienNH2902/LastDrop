@@ -52,3 +52,30 @@ body:has(#game.active) #game {
   max-width: none;
   border-radius: 0;
 }
+/* Home: compact room/map controls on the left; forest key art owns the right. */
+#menu{position:relative;isolation:isolate;overflow:hidden;align-items:stretch}
+#menu .hero{z-index:1;width:46%;padding:4vh 2.5vw 3vh 6vw;}
+#menu .hero:before{background:linear-gradient(90deg,#11130f 0%,#11130ff2 62%,#11130f66 100%);z-index:-1}
+#menu h1{font-size:clamp(52px,6.3vw,90px);margin:14px 0 17px}
+#menu .hero p{font-size:15px;margin:0;max-width:480px}
+#menu .home-player-name{max-width:420px;margin-top:17px}
+#menu .actions{margin-top:13px;gap:8px}
+#menu .actions .primary{padding:0 15px;min-height:46px;font-size:13px}
+#menu .actions .primary b{margin-left:10px}
+#menu .join input{width:115px;font-size:10px}
+#menu .join button{padding:0 9px}
+#menu .map-card{margin-top:16px;width:min(440px,100%);padding:11px;background:#191c17eF;backdrop-filter:blur(8px)}
+#menu .map-art{height:clamp(100px,15vh,155px);margin:8px 0}
+#menu .map-info{gap:10px;font-size:7px}
+#menu .map-info b{font-size:8px}
+#menu .map-select{margin-top:7px}
+#menu .map-select button{padding:7px;font-size:9px}
+#menu .stats{margin-top:15px;padding-top:11px;gap:18px;font-size:8px}
+#menu .home-backdrop{position:absolute;z-index:-2;inset:0 0 0 auto;width:69%;overflow:hidden;clip-path:polygon(18% 0,100% 0,100% 100%,0 100%)}
+#menu .home-backdrop:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,#11130f 0%,#11130f66 26%,transparent 63%),linear-gradient(0deg,#11130f70,transparent 42%)}
+#menu .home-backdrop img{width:100%;height:100%;object-fit:cover;object-position:64% center;display:block;filter:saturate(.9) brightness(.82)}
+#menu .home-tip{position:absolute;z-index:2;right:4vw;bottom:24px;margin:0;color:#d6ff45;text-shadow:0 2px 8px #000}
+.header-settings{font-size:21px;line-height:1;color:#c4c8bb;transition:transform .2s,color .2s}
+.header-settings:hover{color:var(--acid);transform:rotate(30deg)}
+@media(max-width:900px){#menu .hero{width:54%;padding-left:4vw}#menu .home-backdrop{width:62%}#menu h1{font-size:clamp(48px,7vw,68px)}#menu .actions{flex-wrap:wrap}.map-info span:last-child{display:none}}
+@media(max-width:620px){#menu{overflow:visible}#menu .hero{width:100%;padding:28px 6vw 80px}#menu .home-backdrop{position:absolute;inset:auto 0 0;height:43%;width:100%;clip-path:none;opacity:.35}#menu .home-backdrop:after{background:linear-gradient(180deg,#11130f,transparent 75%)}#menu .map-card{max-width:none}#menu .map-art{height:125px}#menu .stats{gap:10px;flex-wrap:wrap}#menu .home-tip{bottom:14px;right:6vw}}

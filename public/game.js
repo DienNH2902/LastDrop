@@ -609,19 +609,7 @@ function renderMapChoice(id) {
   $("#mapArt").classList.toggle("forest-preview", forest);
   $("#mapArt").classList.toggle("desert-preview", !forest);
 }
-const mapCard = $(".map-card");
-mapCard.querySelector(".map-title").innerHTML =
-  'KHU VỰC TÁC CHIẾN <b id="mapCount">01 / 02</b>';
-$(".map-art").id = "mapArt";
-$(".map-label").id = "mapName";
-mapCard.querySelector(".map-info").innerHTML =
-  '<span>HỆ SINH THÁI <b id="mapDescription"></b></span><span>QUY MÔ <b>200 × 200 M</b></span>';
-const mapPicker = document.createElement("div");
-mapPicker.className = "map-select";
-mapPicker.innerHTML =
-  '<button type="button" data-map-choice="forest">RỪNG</button><button type="button" data-map-choice="desert">SA MẠC</button>';
-mapCard.querySelector(".map-title").after(mapPicker);
-mapPicker.querySelectorAll("[data-map-choice]").forEach((button) => {
+document.querySelectorAll("[data-map-choice]").forEach((button) => {
   button.addEventListener("click", () =>
     renderMapChoice(button.dataset.mapChoice),
   );

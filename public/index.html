@@ -39,8 +39,9 @@
   <div id="app" class="hidden">
     <header>
       <div class="brand"><img src="/logo.svg"><span>LAST DROP<small>ARENA / SEASON 01</small></span></div>
-      <div id="status" class="status">● ONLINE</div><button class="icon-btn" id="soundToggle"
-        title="Bật/tắt âm thanh">♫</button>
+      <div id="status" class="status">● ONLINE</div>
+      <button class="icon-btn header-settings" data-screen="settings" aria-label="Cài đặt" title="Cài đặt">⚙</button>
+      <button class="icon-btn" id="soundToggle" aria-label="Bật/tắt âm thanh" title="Bật/tắt âm thanh">♫</button>
     </header>
     <main>
       <section id="menu" class="screen active">
@@ -54,23 +55,20 @@
             <div class="join"><input id="codeInput" maxlength="6" inputmode="numeric"
                 placeholder="MÃ PHÒNG 6 SỐ"><button id="joinBtn">THAM GIA</button></div>
           </div>
+          <div class="map-card">
+            <div class="map-title">KHU VỰC TÁC CHIẾN <b id="mapCount">01 / 02</b></div>
+            <div class="map-art" id="mapArt">
+              <div class="grid"></div><div class="ring"></div><div class="pin">✦</div>
+              <span class="map-label" id="mapName">VERDANT WILDS</span>
+            </div>
+            <div class="map-info"><span>HỆ SINH THÁI <b id="mapDescription">CỎ XANH · HỒ · SÔNG · ĐỒI</b></span><span>QUY MÔ <b>200 × 200 M</b></span></div>
+            <div class="map-select"><button type="button" data-map-choice="forest">RỪNG</button><button type="button" data-map-choice="desert">SA MẠC</button></div>
+          </div>
           <div class="stats"><span><b>05</b> NGƯỜI TỐI ĐA</span><span><b>01</b> ĐẤU TRƯỜNG</span><span><b>FPP</b> GÓC
               NHÌN</span></div>
         </div>
-        <div class="menu-side">
-          <div class="map-card">
-            <div class="map-title">KHU VỰC TÁC CHIẾN <b>01 / 01</b></div>
-            <div class="map-art">
-              <div class="grid"></div>
-              <div class="ring"></div>
-              <div class="pin">✦</div><span class="map-label">DUSTY BASIN</span>
-            </div>
-            <div class="map-info"><span>ĐỊA HÌNH <b>ĐỒI / SA MẠC</b></span><span>QUY MÔ <b>1.2 × 1.2 KM</b></span></div>
-          </div><button class="secondary" data-screen="settings">⚙ &nbsp; CÀI ĐẶT</button>
-          <!-- <button class="secondary"
-            data-screen="inventory">▣ &nbsp; KHO TRANG BỊ</button> -->
-          <div class="tip">W A S D <span>DI CHUYỂN</span> &nbsp; • &nbsp; CHUỘT <span>NGẮM / BẮN</span></div>
-        </div>
+        <div class="home-backdrop" aria-hidden="true"><img src="/forest-home-hero.svg" alt=""></div>
+        <div class="tip home-tip">W A S D <span>DI CHUYỂN</span> &nbsp; • &nbsp; CHUỘT <span>NGẮM / BẮN</span></div>
       </section>
       <section id="lobby" class="screen">
         <div class="panel">
