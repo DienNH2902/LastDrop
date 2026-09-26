@@ -171,6 +171,7 @@ let backpackOpen = false,
   crateOpenId = null,
   lootToastTimer = null,
   gunBusy = 0, // 0 = cầm súng bình thường, 1 = súng gập ngang (đang hồi máu)
+  gunAimBlend = 0,
   packLimits = { ammo: 210, medkits: 5 }; // sức chứa balo, server gửi lại khi bắt đầu trận
 
 // Movement
@@ -1541,6 +1542,32 @@ function initWorld() {
   magazine.position.set(0.28, -0.36, -0.55);
   gun.add(magazine);
   const rangerParts = [body, barrel, stock, magazine];
+  // Open holographic sight on the Ranger-9 (clearly visible in first person).
+  const sightBase = new THREE.Mesh(
+    new THREE.BoxGeometry(0.13, 0.045, 0.18),
+    makeMat("#161a16"),
+  );
+  sightBase.position.set(0.28, -0.145, -0.56);
+  gun.add(sightBase);
+  const holoFrame = new THREE.Mesh(
+    new THREE.TorusGeometry(0.095, 0.012, 7, 24),
+    makeMat("#111511"),
+  );
+  holoFrame.position.set(0.28, -0.075, -0.59);
+  gun.add(holoFrame);
+  const holoLens = new THREE.Mesh(
+    new THREE.CircleGeometry(0.078, 20),
+    new THREE.MeshBasicMaterial({ color: 0x82abb0, transparent: true, opacity: 0.28, side: THREE.DoubleSide }),
+  );
+  holoLens.position.set(0.28, -0.075, -0.594);
+  gun.add(holoLens);
+  const holoDot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.0022, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xff2929, toneMapped: false }),
+  );
+  holoDot.position.set(0.28, -0.075, -0.61);
+  gun.add(holoDot);
+  rangerParts.push(sightBase, holoFrame, holoLens, holoDot);
   const sniper = new THREE.Group();
   const sniperBody = new THREE.Mesh(
     new THREE.BoxGeometry(0.15, 0.15, 0.82),
@@ -2650,6 +2677,9 @@ function showLootToast(text) {
 // Súng hạ/gập khi hồi máu và có động tác tháo lắp băng đạn khi nạp.
 function updateGunPose(dt) {
   if (!gun) return;
+  const aimTarget = scoped && local.weapon !== "sniper" && local.state === "ground" ? 1 : 0;
+  gunAimBlend += (aimTarget - gunAimBlend) * Math.min(12 * dt, 1);
+  if (Math.abs(aimTarget - gunAimBlend) < 0.002) gunAimBlend = aimTarget;
   const target = local.healing ? 1 : 0;
   gunBusy += (target - gunBusy) * Math.min(10 * dt, 1);
   if (Math.abs(target - gunBusy) < 0.002) gunBusy = target;
@@ -2664,8 +2694,8 @@ function updateGunPose(dt) {
     -0.12 * gunBusy + 0.34 * reloadDip,
   );
   gun.position.set(
-    0.3 * gunBusy,
-    -0.14 * gunBusy - 0.2 * reloadDip,
+    0.3 * gunBusy - 0.28 * gunAimBlend,
+    -0.14 * gunBusy - 0.2 * reloadDip + 0.075 * gunAimBlend,
     0.05 * gunBusy + 0.06 * reloadDip,
   );
   const magazine = gun.userData.magazine;
@@ -3251,12 +3281,18 @@ function setScope(enabled) {
   camera.fov = scoped
     ? local.weapon === "sniper"
       ? sniperZoomFov
-      : 30
+      : 58
     : baseFov;
   camera.updateProjectionMatrix();
-  gun.visible = !scoped && local.state === "ground";
+  gun.visible = local.state === "ground" && (!scoped || local.weapon !== "sniper");
   $(".crosshair").classList.toggle("scope-hidden", scoped);
-  $("#scopeOverlay").classList.toggle("hidden", !scoped);
+  const overlay = $("#scopeOverlay");
+  overlay.classList.toggle("hidden", !scoped);
+  overlay.classList.toggle("reflex", scoped && local.weapon !== "sniper");
+  overlay.classList.toggle("sniper", scoped && local.weapon === "sniper");
+  overlay.querySelector("small").textContent = scoped && local.weapon !== "sniper"
+    ? "RED DOT / HOLO · RIGHT CLICK ĐỂ THOÁT"
+    : "ỐNG NGẮM SNIPER · RIGHT CLICK ĐỂ THOÁT";
 }
 function onScopeWheel(event) {
   if (!scoped || local.weapon !== "sniper") return;
@@ -3353,7 +3389,7 @@ function setMode(state) {
   local.state = state;
   $("#game").dataset.mode = state;
   if (scoped) setScope(false);
-  if (gun) gun.visible = state === "ground" && !scoped;
+  if (gun) gun.visible = state === "ground" && (!scoped || local.weapon !== "sniper");
   $("#chuteOverlay").classList.toggle("hidden", state !== "parachute");
   // Keep the top-down minimap visible after landing; flight instructions are contextual.
   $("#flightHud").classList.remove("hidden");

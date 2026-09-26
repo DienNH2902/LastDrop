@@ -79,3 +79,10 @@ body:has(#game.active) #game {
 .header-settings:hover{color:var(--acid);transform:rotate(30deg)}
 @media(max-width:900px){#menu .hero{width:54%;padding-left:4vw}#menu .home-backdrop{width:62%}#menu h1{font-size:clamp(48px,7vw,68px)}#menu .actions{flex-wrap:wrap}.map-info span:last-child{display:none}}
 @media(max-width:620px){#menu{overflow:visible}#menu .hero{width:100%;padding:28px 6vw 80px}#menu .home-backdrop{position:absolute;inset:auto 0 0;height:43%;width:100%;clip-path:none;opacity:.35}#menu .home-backdrop:after{background:linear-gradient(180deg,#11130f,transparent 75%)}#menu .map-card{max-width:none}#menu .map-art{height:125px}#menu .stats{gap:10px;flex-wrap:wrap}#menu .home-tip{bottom:14px;right:6vw}}
+/* Ranger-9 uses an open reflex window; only the sniper gets the dark circular scope mask. */
+.scope-overlay.reflex{background:transparent}
+.scope-overlay.reflex:before{display:none}
+.scope-overlay.reflex:after{display:none}
+.scope-overlay.reflex .scope-reticle{width:2px;height:2px;padding:0;border:0;border-radius:50%;background:#ff2929;font-size:0;box-shadow:none}
+.scope-overlay.reflex .scope-reticle:after{display:none}
+.scope-overlay.reflex small{bottom:12%;color:#e3e6dc;text-shadow:0 1px 3px #000}
