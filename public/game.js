@@ -831,7 +831,13 @@ function raisedSurfaceAt(x, z) {
         s = Math.sin(o.yaw || 0);
       const lx = c * dx - s * dz,
         lz = s * dx + c * dz;
-      if (Math.abs(lx) > o.w * 0.53 || Math.abs(lz) > o.w / 2 + 0.27) continue;
+      // Vùng "trên mái" phải rộng bằng hoặc hơn vùng va chạm của tường nhà
+      // (blockedByBuilding dùng half + obstacleRadius) — nếu không sẽ có một
+      // dải hẹp nơi người chơi vừa rời mái (mất độ cao) nhưng vẫn còn nằm
+      // trong vùng chặn của tường -> bị kẹt cứng ở mép mái.
+      const halfX = Math.max(o.w * 0.53, o.w / 2 + 0.6);
+      const halfZ = o.w / 2 + 0.6;
+      if (Math.abs(lx) > halfX || Math.abs(lz) > halfZ) continue;
       const wallH = o.h * 0.72;
       const height =
         base +
@@ -842,10 +848,16 @@ function raisedSurfaceAt(x, z) {
       if (!best || height > best.height)
         best = { height, base, type: "roof", obstacle: o };
     } else if (o.type === "rock") {
-      const nx = (x - o.x) / (o.w * 0.48);
-      const nz = (z - o.z) / (o.w * 0.4);
-      const r2 = nx * nx + nz * nz;
-      if (r2 > 0.64) continue;
+      const dx = x - o.x,
+        dz = z - o.z;
+      const dist = Math.hypot(dx, dz);
+      // Tương tự: vùng "trên đá" phải rộng bằng hoặc hơn bán kính va chạm
+      // (o.w * 0.46) của chính khối đá đó, để tránh dải kẹt ở mép đá.
+      const topRadius = o.w * 0.46 + 0.6;
+      if (dist > topRadius) continue;
+      const nx = dx / (o.w * 0.48),
+        nz = dz / (o.w * 0.4);
+      const r2 = Math.min(1, nx * nx + nz * nz);
       const height = base + o.h * (0.42 + 0.5 * Math.sqrt(1 - r2));
       if (!best || height > best.height)
         best = { height, base, type: "rock", obstacle: o };
@@ -1382,7 +1394,11 @@ function isBlockedAt(x, z) {
     return true;
   const selfRadius = local.prone ? 1.15 : PLAYER_RADIUS;
   const obstacleRadius = local.prone ? 0.55 : PLAYER_RADIUS;
-  const support = local.groundY > 0.45 ? raisedSurfaceAt(x, z) : null;
+  // Dùng vị trí HIỆN TẠI (không phải điểm sắp tới) để biết người chơi đang
+  // đứng trên mái nhà/đá nào — nhờ vậy khi bước qua mép để đi xuống, họ
+  // không bị chặn lại như thể đang đi xuyên tường/đá từ bên ngoài.
+  const support =
+    local.groundY > 0.45 ? raisedSurfaceAt(local.x, local.z) : null;
   for (const o of mapObstacles) {
     if (o.solid === false) continue;
     if (o.type === "house" || o.type === "hut") {
@@ -2727,6 +2743,11 @@ function beginGame() {
   $("#ammo").innerHTML = `${ammo} <i>/ 90</i>`;
   show("game");
   initWorld();
+  // Phòng hờ thêm: đảm bảo trận mới luôn sạch, không còn scope/ESC từ trận trước.
+  setScope(false);
+  $("#gameMessage").classList.add("hidden");
+  $("#pauseSettings").classList.add("hidden");
+  $("#pauseMain").classList.remove("hidden");
   if (!$("#chuteOverlay").innerHTML)
     $("#chuteOverlay").innerHTML = buildChuteOverlay();
   setMode("lobby"); // vào map chờ: tay không, không vật phẩm
@@ -4551,6 +4572,15 @@ function showResult() {
   if (!$("#game").classList.contains("active")) return;
   if ($("#result").classList.contains("active")) return;
   closeBackpack(false);
+  // Tắt scope và đóng menu ESC ngay khi trận kết thúc — không mang trạng thái
+  // này sang trận sau.
+  if (scoped) setScope(false);
+  if (paused) {
+    paused = false;
+    $("#pauseSettings").classList.add("hidden");
+    $("#pauseMain").classList.remove("hidden");
+  }
+  $("#gameMessage").classList.add("hidden");
   document.exitPointerLock?.();
   $("#killsResult").textContent = local.kills;
   const finalPlace = local.placement || (local.hp > 0 ? 1 : 0);

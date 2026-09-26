@@ -352,7 +352,11 @@ function raisedSurfaceAt(room, x, z) {
         s = Math.sin(o.yaw || 0);
       const lx = c * dx - s * dz,
         lz = s * dx + c * dz;
-      if (Math.abs(lx) > o.w * 0.53 || Math.abs(lz) > o.w / 2 + 0.27) continue;
+      // Vùng "trên mái" phải rộng bằng hoặc hơn vùng va chạm của tường nhà
+      // (blockedByBuilding dùng half + obstacleRadius) để tránh dải kẹt ở mép mái.
+      const halfX = Math.max(o.w * 0.53, o.w / 2 + 0.6);
+      const halfZ = o.w / 2 + 0.6;
+      if (Math.abs(lx) > halfX || Math.abs(lz) > halfZ) continue;
       const wallH = o.h * 0.72;
       const height =
         base +
@@ -363,10 +367,14 @@ function raisedSurfaceAt(room, x, z) {
       if (!best || height > best.height)
         best = { height, base, type: "roof", obstacle: o };
     } else if (o.type === "rock") {
-      const nx = (x - o.x) / (o.w * 0.48);
-      const nz = (z - o.z) / (o.w * 0.4);
-      const r2 = nx * nx + nz * nz;
-      if (r2 > 0.64) continue;
+      const dx = x - o.x,
+        dz = z - o.z;
+      const dist = Math.hypot(dx, dz);
+      const topRadius = o.w * 0.46 + 0.6;
+      if (dist > topRadius) continue;
+      const nx = dx / (o.w * 0.48),
+        nz = dz / (o.w * 0.4);
+      const r2 = Math.min(1, nx * nx + nz * nz);
       const height = base + o.h * (0.42 + 0.5 * Math.sqrt(1 - r2));
       if (!best || height > best.height)
         best = { height, base, type: "rock", obstacle: o };
@@ -446,7 +454,10 @@ function blockedPosition(room, x, z, ignoreId) {
   const mover = room.players.get(ignoreId);
   const moverRadius = mover?.prone ? 1.15 : PLAYER_RADIUS;
   const obstacleRadius = mover?.prone ? 0.55 : PLAYER_RADIUS;
-  const support = mover?.groundY > 0.45 ? raisedSurfaceAt(room, x, z) : null;
+  // Tương tự client: dùng vị trí hiện tại của người chơi để biết họ đang đứng
+  // trên mái/đá nào, không dùng điểm đến — tránh chặn nhầm khi đi xuống.
+  const support =
+    mover?.groundY > 0.45 ? raisedSurfaceAt(room, mover.x, mover.z) : null;
   for (const o of room.obstacles) {
     if (o.solid === false) continue;
     if (o.type === "house" || o.type === "hut") {
