@@ -380,16 +380,73 @@ function createVehicles(obstacles) {
   const colors = ["#426846", "#a4763e", "#596c83", "#8b4e43"]
     .sort(() => Math.random() - 0.5);
   const usedPositions = [];
+  const carClearance = 2.8; // bán kính thân xe + khoảng hở an toàn
+  const isClear = (x, z, selectedRoad) => {
+    if (Math.abs(x) > MAP_HALF - carClearance || Math.abs(z) > MAP_HALF - carClearance) return false;
+    // Tránh đặt xe lên làn đường khác, nhất là tại giao lộ.
+    for (const road of roads) {
+      if (road === selectedRoad) continue;
+      const dx = Math.sin(road.yaw || 0) * road.length / 2;
+      const dz = Math.cos(road.yaw || 0) * road.length / 2;
+      const ax = road.x - dx, az = road.z - dz;
+      const vx = dx * 2, vz = dz * 2;
+      const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz || 1)));
+      if (Math.hypot(x - (ax + t * vx), z - (az + t * vz)) < road.w / 2 + 2.2) return false;
+    }
+    for (const o of obstacles) {
+      if (o.type === "road") continue;
+      const dx = x - o.x, dz = z - o.z;
+      const c = Math.cos(o.yaw || 0), s = Math.sin(o.yaw || 0);
+      const lx = c * dx - s * dz, lz = s * dx + c * dz;
+      if (o.type === "hill") {
+        // Dù đồi không phải collider đặc, không spawn xe trên dốc/đỉnh.
+        const rx = o.w / 2 + carClearance;
+        const rz = (o.length || o.w) / 2 + carClearance;
+        if ((lx / rx) ** 2 + (lz / rz) ** 2 < 1) return false;
+      } else if (o.type === "river" || o.type === "lake") {
+        const rx = (o.type === "lake" ? o.w : o.w / 2) + carClearance;
+        const rz = (o.type === "lake" ? o.length : o.length / 2) + carClearance;
+        if ((lx / rx) ** 2 + (lz / rz) ** 2 < 1) return false;
+      } else if (o.type === "house" || o.type === "hut") {
+        // Nhà/chòi dùng vùng vuông mở rộng để tính cả thân xe và khoảng lùi.
+        const half = o.w / 2 + carClearance;
+        if (Math.abs(lx) < half && Math.abs(lz) < half) return false;
+      } else {
+        const obstacleRadius = o.type === "rock" ? o.w * 0.5 : o.type === "tree" ? o.w * 0.3 : o.type === "cactus" ? o.w * 0.5 : o.w * 0.35;
+        if (Math.hypot(dx, dz) < obstacleRadius + carClearance) return false;
+      }
+    }
+    // Không đặt xe sát các điểm bắt đầu ở khu chờ.
+    if ([[-3, 8], [0, 8], [3, 8], [-3, -8], [0, -8]].some(([sx, sz]) => Math.hypot(x - sx, z - sz) < 8)) return false;
+    return usedPositions.every((point) => Math.hypot(point.x - x, point.z - z) > 55);
+  };
   return [0, 1].map((index) => {
-    let road, x, z;
-    for (let attempt = 0; attempt < 50; attempt++) {
+    let road = roads[0], x = 0, z = 0, found = false;
+    for (let attempt = 0; attempt < 600 && !found; attempt++) {
       road = roads[Math.floor(Math.random() * roads.length)];
       const side = Math.random() < 0.5 ? -1 : 1;
       const offsetX = side * (road.w / 2 + 4.2);
-      const offsetZ = (Math.random() - 0.5) * road.length * 0.55;
+      const offsetZ = (Math.random() - 0.5) * road.length * 0.8;
       x = road.x + Math.cos(road.yaw) * offsetX + Math.sin(road.yaw) * offsetZ;
       z = road.z - Math.sin(road.yaw) * offsetX + Math.cos(road.yaw) * offsetZ;
-      if (Math.abs(x) < MAP_HALF - 5 && Math.abs(z) < MAP_HALF - 5 && usedPositions.every((point) => Math.hypot(point.x - x, point.z - z) > 55)) break;
+      found = isClear(x, z, road);
+    }
+    // Không sinh xe trong đá/nhà nếu seed hiện tại quá dày: fallback tiếp tục
+    // quét các làn đường cho tới khi tìm được điểm hợp lệ.
+    if (!found) {
+      outer: for (const candidateRoad of roads) {
+        for (const side of [-1, 1]) {
+          for (let t = -0.4; t <= 0.4; t += 0.1) {
+            const offsetX = side * (candidateRoad.w / 2 + 4.2);
+            const offsetZ = t * candidateRoad.length;
+            const cx = candidateRoad.x + Math.cos(candidateRoad.yaw) * offsetX + Math.sin(candidateRoad.yaw) * offsetZ;
+            const cz = candidateRoad.z - Math.sin(candidateRoad.yaw) * offsetX + Math.cos(candidateRoad.yaw) * offsetZ;
+            if (isClear(cx, cz, candidateRoad)) {
+              road = candidateRoad; x = cx; z = cz; found = true; break outer;
+            }
+          }
+        }
+      }
     }
     usedPositions.push({ x, z });
     return {
@@ -1065,7 +1122,26 @@ function tickVehicles(room, now) {
         const dx = victim.x - vehicle.x, dz = victim.z - vehicle.z;
         const c = Math.cos(vehicle.yaw), s = Math.sin(vehicle.yaw);
         const lx = c * dx - s * dz, lz = s * dx + c * dz;
-        if (Math.abs(lx) < 1.42 && Math.abs(lz) < 2.22) killByVehicle(room, victim, vehicle, now);
+        const touching = Math.abs(lx) < 1.42 && Math.abs(lz) < 2.22;
+        victim.vehicleContacts ||= new Set();
+        if (!touching) {
+          victim.vehicleContacts.delete(vehicle.id);
+          continue;
+        }
+        // Chỉ tính một lần cho mỗi lần va chạm; giữ chạm liên tục không gây
+        // sát thương 30 HP lặp lại mỗi tick mạng.
+        if (victim.vehicleContacts.has(vehicle.id)) continue;
+        victim.vehicleContacts.add(vehicle.id);
+        if (Math.abs(vehicle.speed) >= 12) {
+          killByVehicle(room, victim, vehicle, now);
+        } else {
+          victim.hp = Math.max(0, victim.hp - 30);
+          if (victim.hp <= 0) killByVehicle(room, victim, vehicle, now);
+          else {
+            send(victim.ws, { type: "toast", text: "VA CHẠM XE · -30 HP" });
+            changed = true;
+          }
+        }
       }
     }
     changed ||= moved || Math.abs(oldSpeed - vehicle.speed) > 0.2;
