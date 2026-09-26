@@ -145,6 +145,7 @@ let inMatch = false, // đã vào màn hình trận (phòng chờ trong map, má
   jumpRequestedAt = 0,
   jumpCuePlayed = false,
   planeObject = null,
+  planeCloudField = null,
   envBlend = 0,
   localFootstepDistance = 0,
   localGaitPhase = 0,
@@ -2057,6 +2058,8 @@ function initWorld() {
   planeObject = buildPlane();
   planeObject.visible = false;
   scene.add(planeObject);
+  planeCloudField = buildPlaneCloudField();
+  scene.add(planeCloudField);
   for (const item of lootItems.values()) {
     item.mesh = null;
     addLootMesh(item);
@@ -4290,6 +4293,7 @@ function updateAir(dt) {
 }
 // Máy bay bay thẳng theo đường server đã chốt; cánh quạt quay, đèn nhảy đổi xanh khi vào zone.
 function updatePlaneObject(dt) {
+  if (planeCloudField) planeCloudField.visible = local.state === "plane";
   if (!planeObject) return;
   if (!plane) {
     planeObject.visible = false;
@@ -4305,6 +4309,11 @@ function updatePlaneObject(dt) {
   const pos = planePosAt(t);
   planeObject.position.set(pos.x, plane.alt, pos.z);
   planeObject.rotation.y = planeYaw();
+  if (planeCloudField) {
+    // Keep a dense cloud bank centered around the moving aircraft so every
+    // direction outside the open cabin remains inside the cloud layer.
+    planeCloudField.position.set(pos.x, plane.alt, pos.z);
+  }
   for (const prop of planeObject.userData.props) prop.rotation.z += dt * 40;
   const canJump = t >= plane.tEnter && t < plane.tExit;
   const color = canJump ? 0x39ff6a : 0xff3028;
@@ -4500,6 +4509,14 @@ function updateEnvironment(dt) {
   scene.fog.near = fogBaseNear + (forest ? 260 : 170) * envBlend;
   scene.fog.far = fogBaseFar + (forest ? 700 : 430) * envBlend;
   const far = envBlend > 0.02 ? 1300 : 400;
+  if (local.state === "plane") {
+    // At 200 m altitude, a short pale fog range hides the terrain beneath the
+    // aircraft while leaving nearby cabin details and nearby players visible.
+    scene.background.set("#dce5e9");
+    scene.fog.color.set("#dce5e9");
+    scene.fog.near = 7;
+    scene.fog.far = 86;
+  }
   if (camera.far !== far) {
     camera.far = far;
     camera.updateProjectionMatrix();
@@ -5066,6 +5083,52 @@ function buildChute() {
   return g;
 }
 // Máy bay vận tải đơn giản: khoang hở hai bên (thấp) để nhìn ra map, cánh cao, hai cánh quạt.
+function buildPlaneCloudField() {
+  const field = new THREE.Group();
+  const count = 168;
+  const puffs = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(1, 10, 7),
+    new THREE.MeshStandardMaterial({
+      color: "#f1f5f6",
+      roughness: 1,
+      transparent: true,
+      opacity: 0.94,
+      depthWrite: false,
+      fog: true,
+    }),
+    count,
+  );
+  const dummy = new THREE.Object3D();
+  // Fixed seeded placement avoids rebuilding random clouds every frame.
+  let seed = 0x51f15e;
+  const random = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let i = 0; i < count; i++) {
+    const angle = random() * Math.PI * 2;
+    // Leave an aircraft-sized opening around the center so cloud geometry
+    // stays outside the open cabin instead of clipping through its floor.
+    const radius = 55 + Math.sqrt(random()) * 100;
+    dummy.position.set(
+      Math.cos(angle) * radius,
+      -23 + random() * 58,
+      Math.sin(angle) * radius,
+    );
+    dummy.rotation.set(0, random() * Math.PI, 0);
+    const broad = 17 + random() * 23;
+    dummy.scale.set(broad, 7 + random() * 8, 15 + random() * 22);
+    dummy.updateMatrix();
+    puffs.setMatrixAt(i, dummy.matrix);
+  }
+  puffs.instanceMatrix.needsUpdate = true;
+  puffs.computeBoundingSphere();
+  puffs.renderOrder = 2;
+  field.add(puffs);
+  field.visible = false;
+  return field;
+}
+
 function buildPlane() {
   const g = new THREE.Group();
   const hull = makeMat("#c9cdc4"),
