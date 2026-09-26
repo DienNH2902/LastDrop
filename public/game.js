@@ -125,6 +125,10 @@ let inMatch = false, // đã vào màn hình trận (phòng chờ trong map, má
   jumpRequestedAt = 0,
   planeObject = null,
   envBlend = 0,
+  localFootstepDistance = 0,
+  localGaitPhase = 0,
+  localLegLeft = null,
+  localLegRight = null,
   airState = { vx: 0, vz: 0, fall: 0, time: 0 };
 const audioLoops = { plane: null, wind: null, weather: null };
 let weatherFx = null;
@@ -378,13 +382,13 @@ function playSpatialGunshot(position, volume = 0.7, delay = 0) {
   noiseBurst(a, { duration: 0.19, filter: "lowpass", freq: 2600, gain: 1 }); // tiếng nổ
   toneBurst(a, { duration: 0.14, from: 105, to: 48, gain: 0.75 }); // tiếng dội trầm
 }
-function playSpatialFootstep(x, y, z, intensity = 1) {
+function playSpatialFootstep(x, y, z, intensity = 1, ownPlayer = false) {
   // Đi chậm / khom người có tầm nghe ngắn hơn chạy.
   const max = AUDIO_RANGE.footstep.max * intensity;
   const ref = Math.min(AUDIO_RANGE.footstep.ref, max * 0.3);
   const a = spatialAudio(
     { x, y, z },
-    { volume: 0.55 * (0.5 + 0.5 * intensity), ref, max },
+    { volume: (ownPlayer ? 0.2 : 0.55) * (0.5 + 0.5 * intensity), ref, max },
   );
   if (!a) return;
   noiseBurst(a, {
@@ -1859,11 +1863,14 @@ function renderPlayers(state) {
       head.add(earRight);
       head.position.y = 1.72;
       mesh.add(head);
-      const legs = new THREE.Mesh(
-        new THREE.BoxGeometry(0.48, 0.65, 0.34),
-        makeMat("#313b34"),
-      );
-      legs.position.y = 0.4;
+      const legMaterial = makeMat("#313b34");
+      const legGeo = new THREE.BoxGeometry(0.2, 0.48, 0.25);
+      const legs = new THREE.Group();
+      const legLeft = new THREE.Mesh(legGeo, legMaterial);
+      const legRight = new THREE.Mesh(legGeo, legMaterial);
+      legLeft.position.set(-0.14, 0.35, 0);
+      legRight.position.set(0.14, 0.35, 0);
+      legs.add(legLeft, legRight);
       mesh.add(legs);
       // Simple third-person rifle model, visible to every other player.
       const weapon = new THREE.Group();
@@ -1983,6 +1990,8 @@ function renderPlayers(state) {
         torso,
         head,
         legs,
+        legLeft,
+        legRight,
         weapon,
         sniperWeapon,
         muzzleFlash,
@@ -1995,6 +2004,7 @@ function renderPlayers(state) {
         lastMotionX: p.x,
         lastMotionZ: p.z,
         footstepDistance: 0,
+        gaitPhase: 0,
       };
       scene.add(mesh);
       remoteMeshes.set(p.id, mesh);
@@ -2021,6 +2031,8 @@ function renderPlayers(state) {
       curState === "ground" && p.weapon === "sniper";
     mesh.userData.chute.visible = curState === "parachute";
     mesh.userData.slowWalking = Boolean(p.slowWalking);
+    mesh.userData.crouching = Boolean(p.crouching);
+    mesh.userData.prone = Boolean(p.prone);
     const wasReloading = Boolean(mesh.userData.reloading);
     mesh.userData.reloading = Boolean(p.reloading);
     if (mesh.userData.reloading && !wasReloading && p.alive)
@@ -2051,15 +2063,17 @@ function renderPlayers(state) {
       // Accumulate replicated movement distance so unrelated state packets
       // (such as firing/reloading) cannot break footstep timing.
       mesh.userData.footstepDistance += motionDistance;
-      const strideDistance = p.slowWalking ? 1.3 : p.crouching ? 1.5 : 1.85;
-      const intensity = p.slowWalking ? 0.42 : p.crouching ? 0.62 : 1;
+      mesh.userData.gaitDistance = motionDistance > 0.0004 ? 1 : 0;
+      const strideDistance = p.slowWalking ? 1.75 : p.crouching ? 1.9 : 1.85;
+      const intensity = p.slowWalking ? 0.24 : p.crouching ? 0.38 : 1;
       while (mesh.userData.footstepDistance >= strideDistance) {
         const soundY = p.groundY || 0;
-        playSpatialFootstep(p.x, soundY + 0.08, p.z, intensity);
+        playSpatialFootstep(p.x, soundY + 0.08, p.z, intensity, false);
         mesh.userData.footstepDistance -= strideDistance;
       }
     } else if (!canStep || motionDistance >= 1.5) {
       mesh.userData.footstepDistance = 0;
+      mesh.userData.gaitDistance = 0;
     }
     mesh.userData.lastMotionX = p.x;
     mesh.userData.lastMotionZ = p.z;
@@ -4693,6 +4707,13 @@ function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
   for (const mesh of remoteMeshes.values()) {
     const animTime = performance.now() / 1000;
+    const ud = mesh.userData;
+    const moving = ud.gaitDistance > 0.001;
+    const gaitRate = ud.prone ? 0 : ud.crouching ? 5 : ud.slowWalking ? 5.2 : 9.5;
+    if (moving) ud.gaitPhase = (ud.gaitPhase || 0) + dt * gaitRate;
+    const legSwing = moving ? Math.sin(ud.gaitPhase) * (ud.crouching ? 0.28 : 0.56) : 0;
+    if (ud.legLeft) ud.legLeft.rotation.x += (legSwing - ud.legLeft.rotation.x) * Math.min(12 * dt, 1);
+    if (ud.legRight) ud.legRight.rotation.x += (-legSwing - ud.legRight.rotation.x) * Math.min(12 * dt, 1);
     if (mesh.userData.reloading) {
       // Spin in the upright ring's plane rather than around the player's head.
       mesh.userData.reloadIndicator.rotation.z += dt * 7;
@@ -4755,6 +4776,8 @@ function frame() {
     }
 
     const speed = moveSpeed * dt;
+    const previousX = local.x;
+    const previousZ = local.z;
     let dx = 0,
       dz = 0;
     // Forward vector already points toward -Z when yaw is zero. Keep W positive
@@ -4777,6 +4800,25 @@ function frame() {
       !isBlockedAt(x, z) && (!stayInWaterWhileSubmerged || waterAt(x, z));
     if (canMoveTo(local.x + moveX, local.z)) local.x += moveX;
     if (canMoveTo(local.x, local.z + moveZ)) local.z += moveZ;
+    const traveled = Math.hypot(local.x - previousX, local.z - previousZ);
+    const isMoving = traveled > 0.0005;
+    const crouchWalking = isCrouching;
+    const gaitRate = isProne ? 0 : crouchWalking ? 5 : isSlowWalking ? 5.2 : 9.5;
+    localGaitPhase = (localGaitPhase + dt * gaitRate * (isMoving ? 1 : 0)) % (Math.PI * 2);
+    const swingAmount = isMoving ? (crouchWalking ? 0.25 : 0.52) : 0;
+    if (localLegLeft) localLegLeft.rotation.x += (Math.sin(localGaitPhase) * swingAmount - localLegLeft.rotation.x) * Math.min(12 * dt, 1);
+    if (localLegRight) localLegRight.rotation.x += (-Math.sin(localGaitPhase) * swingAmount - localLegRight.rotation.x) * Math.min(12 * dt, 1);
+    if (isMoving && !currentlyInWater && !local.jumping) {
+      localFootstepDistance += traveled;
+      const stride = isProne ? 99 : crouchWalking ? 1.8 : isSlowWalking ? 2.1 : 1.65;
+      const intensity = crouchWalking ? 0.34 : isSlowWalking ? 0.22 : 0.82;
+      while (localFootstepDistance >= stride) {
+        playSpatialFootstep(local.x, local.groundY + 0.08, local.z, intensity, true);
+        localFootstepDistance -= stride;
+      }
+    } else if (!isMoving || currentlyInWater || local.jumping) {
+      if (!isMoving) localFootstepDistance = Math.min(localFootstepDistance, 0.4);
+    }
     const water = waterAt(local.x, local.z);
     $("#swimHint")?.classList.toggle("hidden", !water);
     if (water) {
