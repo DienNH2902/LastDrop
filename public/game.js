@@ -6,7 +6,9 @@ const $ = (s) => document.querySelector(s),
 let settingsReturnScreen = "menu";
 const show = (id) => {
   if (id === "settings")
-    settingsReturnScreen = screens.find((screen) => screen.classList.contains("active"))?.id || "menu";
+    settingsReturnScreen =
+      screens.find((screen) => screen.classList.contains("active"))?.id ||
+      "menu";
   screens.forEach((x) => x.classList.toggle("active", x.id === id));
   syncHomeMusic(id);
 };
@@ -351,7 +353,11 @@ function spatialAudio(
 }
 function ensureNoiseBuffer(ctx = ensureAudio()) {
   if (noiseBuffer) return noiseBuffer;
-  noiseBuffer = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.45), ctx.sampleRate);
+  noiseBuffer = ctx.createBuffer(
+    1,
+    Math.ceil(ctx.sampleRate * 0.45),
+    ctx.sampleRate,
+  );
   const samples = noiseBuffer.getChannelData(0);
   for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
   return noiseBuffer;
@@ -522,7 +528,12 @@ document.querySelectorAll(".back").forEach(
   (b) =>
     (b.onclick = () => {
       saveSettings();
-      show(settingsReturnScreen === "lobby" && socket?.readyState === WebSocket.OPEN ? "lobby" : "menu");
+      show(
+        settingsReturnScreen === "lobby" &&
+          socket?.readyState === WebSocket.OPEN
+          ? "lobby"
+          : "menu",
+      );
     }),
 );
 const settingsBindings = {
@@ -834,8 +845,7 @@ function updateAmmoHud() {
   const capacity = local.weapon === "sniper" ? 5 : 30;
   const reserve = local.reserveAmmo ?? 90;
   const hud = $("#ammo");
-  if (hud)
-    hud.innerHTML = `${ammo} <i>/ ${capacity} · DỰ TRỮ ${reserve}</i>`;
+  if (hud) hud.innerHTML = `${ammo} <i>/ ${capacity} · DỰ TRỮ ${reserve}</i>`;
 }
 function terrainHeightForHill(hill, x, z) {
   const radiusX = hill.w / 2;
@@ -853,13 +863,21 @@ function groundHeightAt(x, z) {
 function isOnBridgeAt(x, z, clearance = 0) {
   return mapObstacles.some((road) => {
     if (road.type !== "road" || !road.bridge) return false;
-    const dx = Math.sin(road.yaw || 0) * road.length / 2;
-    const dz = Math.cos(road.yaw || 0) * road.length / 2;
-    const ax = road.x - dx, az = road.z - dz;
-    const bx = road.x + dx, bz = road.z + dz;
-    const vx = bx - ax, vz = bz - az;
-    const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)));
-    return Math.hypot(x - (ax + t * vx), z - (az + t * vz)) <= road.w / 2 + clearance;
+    const dx = (Math.sin(road.yaw || 0) * road.length) / 2;
+    const dz = (Math.cos(road.yaw || 0) * road.length) / 2;
+    const ax = road.x - dx,
+      az = road.z - dz;
+    const bx = road.x + dx,
+      bz = road.z + dz;
+    const vx = bx - ax,
+      vz = bz - az;
+    const t = Math.max(
+      0,
+      Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)),
+    );
+    return (
+      Math.hypot(x - (ax + t * vx), z - (az + t * vz)) <= road.w / 2 + clearance
+    );
   });
 }
 // Return the walkable top of a roof or large rock, if the point is on it.
@@ -1032,11 +1050,17 @@ function drawMapObject(o, forest) {
       if (o.bridge) {
         const rail = makeMat("#685d49");
         for (const side of [-1, 1]) {
-          const beam = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.78, o.length), rail);
+          const beam = new THREE.Mesh(
+            new THREE.BoxGeometry(0.22, 0.78, o.length),
+            rail,
+          );
           beam.position.set(side * (o.w / 2 - 0.15), deckY + 0.43, 0);
           road.add(beam);
           for (let z = -o.length / 2 + 1; z < o.length / 2; z += 3) {
-            const post = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.82, 0.25), rail);
+            const post = new THREE.Mesh(
+              new THREE.BoxGeometry(0.25, 0.82, 0.25),
+              rail,
+            );
             post.position.set(side * (o.w / 2 - 0.15), deckY + 0.43, z);
             road.add(post);
           }
@@ -1468,13 +1492,21 @@ function addForestGrass(seed) {
 function isNearRoad(x, z, clearance = 0) {
   return mapObstacles.some((road) => {
     if (road.type !== "road") return false;
-    const dx = Math.sin(road.yaw || 0) * road.length / 2;
-    const dz = Math.cos(road.yaw || 0) * road.length / 2;
-    const ax = road.x - dx, az = road.z - dz;
-    const bx = road.x + dx, bz = road.z + dz;
-    const vx = bx - ax, vz = bz - az;
-    const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)));
-    return Math.hypot(x - (ax + t * vx), z - (az + t * vz)) < road.w / 2 + clearance;
+    const dx = (Math.sin(road.yaw || 0) * road.length) / 2;
+    const dz = (Math.cos(road.yaw || 0) * road.length) / 2;
+    const ax = road.x - dx,
+      az = road.z - dz;
+    const bx = road.x + dx,
+      bz = road.z + dz;
+    const vx = bx - ax,
+      vz = bz - az;
+    const t = Math.max(
+      0,
+      Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)),
+    );
+    return (
+      Math.hypot(x - (ax + t * vx), z - (az + t * vz)) < road.w / 2 + clearance
+    );
   });
 }
 const PLAYER_RADIUS = 0.38;
@@ -1542,9 +1574,14 @@ function isBlockedAt(x, z) {
       return true;
   }
   for (const vehicle of gameState?.vehicles || []) {
-    const dx = x - vehicle.x, dz = z - vehicle.z;
-    const c = Math.cos(vehicle.yaw), s = Math.sin(vehicle.yaw);
-    if (Math.abs(c * dx - s * dz) < 1.03 + obstacleRadius && Math.abs(s * dx + c * dz) < 1.84 + obstacleRadius)
+    const dx = x - vehicle.x,
+      dz = z - vehicle.z;
+    const c = Math.cos(vehicle.yaw),
+      s = Math.sin(vehicle.yaw);
+    if (
+      Math.abs(c * dx - s * dz) < 1.03 + obstacleRadius &&
+      Math.abs(s * dx + c * dz) < 1.84 + obstacleRadius
+    )
       return true;
   }
   return false;
@@ -1571,51 +1608,126 @@ function applyBaseFog(forest, stormy) {
 
 function buildCarMesh(vehicle, forest) {
   const root = new THREE.Group();
-  const paint = new THREE.MeshStandardMaterial({ color: vehicle.color || (forest ? "#426846" : "#a4763e"), roughness: 0.62, metalness: 0.22 });
-  const trim = makeMat("#252923"), glass = new THREE.MeshStandardMaterial({ color: "#9fc4c3", transparent: true, opacity: 0.38, roughness: 0.16 });
-  const wheelMat = makeMat("#171916"), lampMat = new THREE.MeshBasicMaterial({ color: 0xffe2a1 });
+  const paint = new THREE.MeshStandardMaterial({
+    color: vehicle.color || (forest ? "#426846" : "#a4763e"),
+    roughness: 0.62,
+    metalness: 0.22,
+  });
+  const trim = makeMat("#252923"),
+    glass = new THREE.MeshStandardMaterial({
+      color: "#9fc4c3",
+      transparent: true,
+      opacity: 0.38,
+      roughness: 0.16,
+    });
+  const wheelMat = makeMat("#171916"),
+    lampMat = new THREE.MeshBasicMaterial({ color: 0xffe2a1 });
   const addBox = (w, h, l, x, y, z, material, parent = root) => {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, l), material);
-    mesh.position.set(x, y, z); parent.add(mesh); return mesh;
+    mesh.position.set(x, y, z);
+    parent.add(mesh);
+    return mesh;
   };
   addBox(1.72, 0.43, 3.25, 0, 0.53, 0, paint);
   addBox(1.56, 0.33, 1.08, 0, 0.78, -1.02, paint); // hood
   addBox(1.48, 0.27, 0.62, 0, 0.66, 1.25, paint); // trunk
   addBox(1.48, 0.12, 0.16, 0, 0.93, -0.35, trim); // windshield base
   const windshield = new THREE.Mesh(new THREE.PlaneGeometry(1.38, 0.44), glass);
-  windshield.position.set(0, 1.02, -0.48); windshield.rotation.x = -0.22; windshield.rotation.y = Math.PI; root.add(windshield);
+  windshield.position.set(0, 1.02, -0.48);
+  windshield.rotation.x = -0.22;
+  windshield.rotation.y = Math.PI;
+  root.add(windshield);
   // Open cabin keeps both seated players visible and targetable.
   for (const side of [-1, 1]) {
     addBox(0.14, 0.34, 1.42, side * 0.84, 0.63, 0.05, paint);
-    const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.2, 12), wheelMat);
-    wheel.rotation.z = Math.PI / 2; wheel.position.set(side * 0.91, 0.34, -1.08); root.add(wheel);
-    const rearWheel = wheel.clone(); rearWheel.position.z = 1.08; root.add(rearWheel);
+    const wheel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.32, 0.32, 0.2, 12),
+      wheelMat,
+    );
+    wheel.rotation.z = Math.PI / 2;
+    wheel.position.set(side * 0.91, 0.34, -1.08);
+    root.add(wheel);
+    const rearWheel = wheel.clone();
+    rearWheel.position.z = 1.08;
+    root.add(rearWheel);
   }
   for (const x of [-0.45, 0.45]) {
     addBox(0.72, 0.18, 0.72, x, 0.5, 0.2, trim);
     addBox(0.72, 0.5, 0.13, x, 0.83, 0.47, trim);
   }
   addBox(1.35, 0.09, 0.12, 0, 0.9, -1.58, trim);
-  for (const x of [-0.58, 0.58]) addBox(0.28, 0.14, 0.06, x, 0.78, -1.58, lampMat);
-  const steering = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.035, 8, 20), trim);
-  steering.position.set(-0.43, 1.03, -0.26); steering.rotation.y = Math.PI; root.add(steering);
+  for (const x of [-0.58, 0.58])
+    addBox(0.28, 0.14, 0.06, x, 0.78, -1.58, lampMat);
+  const steering = new THREE.Mesh(
+    new THREE.TorusGeometry(0.22, 0.035, 8, 20),
+    trim,
+  );
+  steering.position.set(-0.43, 1.03, -0.26);
+  steering.rotation.y = Math.PI;
+  root.add(steering);
   const smokeGroup = new THREE.Group();
   for (let i = 0; i < 4; i++) {
-    const puff = new THREE.Mesh(new THREE.SphereGeometry(0.28 + i * 0.055, 8, 7), new THREE.MeshBasicMaterial({ color: 0x343832, transparent: true, opacity: 0.4, depthWrite: false }));
-    puff.position.set((i % 2) * 0.2 - 0.1, 1.2 + i * 0.34, -0.82 + (i % 2) * 0.2);
+    const puff = new THREE.Mesh(
+      new THREE.SphereGeometry(0.28 + i * 0.055, 8, 7),
+      new THREE.MeshBasicMaterial({
+        color: 0x343832,
+        transparent: true,
+        opacity: 0.4,
+        depthWrite: false,
+      }),
+    );
+    puff.position.set(
+      (i % 2) * 0.2 - 0.1,
+      1.2 + i * 0.34,
+      -0.82 + (i % 2) * 0.2,
+    );
     smokeGroup.add(puff);
   }
   root.add(smokeGroup);
   const fireGroup = new THREE.Group();
   for (let i = 0; i < 7; i++) {
-    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.22 + (i % 3) * 0.04, 0.75 + (i % 2) * 0.22, 6), new THREE.MeshBasicMaterial({ color: i % 2 ? 0xff6b18 : 0xffca45, transparent: true, opacity: 0.9 }));
-    flame.position.set(Math.sin(i * 2.4) * 0.58, 0.86, Math.cos(i * 2.4) * 1.12); fireGroup.add(flame);
+    const flame = new THREE.Mesh(
+      new THREE.ConeGeometry(0.22 + (i % 3) * 0.04, 0.75 + (i % 2) * 0.22, 6),
+      new THREE.MeshBasicMaterial({
+        color: i % 2 ? 0xff6b18 : 0xffca45,
+        transparent: true,
+        opacity: 0.9,
+      }),
+    );
+    flame.position.set(
+      Math.sin(i * 2.4) * 0.58,
+      0.86,
+      Math.cos(i * 2.4) * 1.12,
+    );
+    fireGroup.add(flame);
   }
   root.add(fireGroup);
-  const explosion = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff8c26, transparent: true, opacity: 0.8, depthWrite: false }));
-  explosion.visible = false; root.add(explosion);
-  root.userData = { paint, smokeGroup, fireGroup, steering, explosion, explosionUntil: 0, destroyed: false, smoke: 0 };
-  root.position.set(vehicle.x, groundHeightAt(vehicle.x, vehicle.z) - (vehicle.sinkDepth || 0), vehicle.z);
+  const explosion = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 10, 8),
+    new THREE.MeshBasicMaterial({
+      color: 0xff8c26,
+      transparent: true,
+      opacity: 0.8,
+      depthWrite: false,
+    }),
+  );
+  explosion.visible = false;
+  root.add(explosion);
+  root.userData = {
+    paint,
+    smokeGroup,
+    fireGroup,
+    steering,
+    explosion,
+    explosionUntil: 0,
+    destroyed: false,
+    smoke: 0,
+  };
+  root.position.set(
+    vehicle.x,
+    groundHeightAt(vehicle.x, vehicle.z) - (vehicle.sinkDepth || 0),
+    vehicle.z,
+  );
   root.rotation.y = vehicle.yaw;
   smokeGroup.visible = Boolean(vehicle.smoke);
   fireGroup.visible = Boolean(vehicle.destroyed);
@@ -1631,18 +1743,28 @@ function updateVehicleMeshes(dt) {
     let mesh = vehicleMeshes.get(vehicle.id);
     if (!mesh) {
       mesh = buildCarMesh(vehicle, mapId === "forest");
-      scene.add(mesh); vehicleMeshes.set(vehicle.id, mesh);
+      scene.add(mesh);
+      vehicleMeshes.set(vehicle.id, mesh);
     }
-    const targetY = groundHeightAt(vehicle.x, vehicle.z) - (vehicle.sinkDepth || 0);
+    const targetY =
+      groundHeightAt(vehicle.x, vehicle.z) - (vehicle.sinkDepth || 0);
     mesh.position.x += (vehicle.x - mesh.position.x) * Math.min(12 * dt, 1);
     mesh.position.z += (vehicle.z - mesh.position.z) * Math.min(12 * dt, 1);
     mesh.position.y += (targetY - mesh.position.y) * Math.min(12 * dt, 1);
-    const yawDelta = Math.atan2(Math.sin(vehicle.yaw - mesh.rotation.y), Math.cos(vehicle.yaw - mesh.rotation.y));
+    const yawDelta = Math.atan2(
+      Math.sin(vehicle.yaw - mesh.rotation.y),
+      Math.cos(vehicle.yaw - mesh.rotation.y),
+    );
     mesh.rotation.y += yawDelta * Math.min(12 * dt, 1);
     const ud = mesh.userData;
-    ud.steering.rotation.z = local.vehicleId === vehicle.id && local.vehicleSeat === 0
-      ? (keys.KeyA ? 0.42 : keys.KeyD ? -0.42 : 0)
-      : 0;
+    ud.steering.rotation.z =
+      local.vehicleId === vehicle.id && local.vehicleSeat === 0
+        ? keys.KeyA
+          ? 0.42
+          : keys.KeyD
+            ? -0.42
+            : 0
+        : 0;
     ud.smokeGroup.visible = !vehicle.destroyed && vehicle.smoke > 0;
     ud.fireGroup.visible = Boolean(vehicle.destroyed);
     if (vehicle.smoke > (ud.smoke || 0)) playVehicleSmokeAudio(vehicle);
@@ -1658,15 +1780,17 @@ function updateVehicleMeshes(dt) {
     const explosionLeft = ud.explosionUntil - performance.now();
     ud.explosion.visible = explosionLeft > 0;
     if (ud.explosion.visible) {
-      const pulse = 1 + (850 - explosionLeft) / 850 * 3.5;
+      const pulse = 1 + ((850 - explosionLeft) / 850) * 3.5;
       ud.explosion.scale.setScalar(pulse);
-      ud.explosion.material.opacity = Math.max(0, explosionLeft / 850 * 0.82);
+      ud.explosion.material.opacity = Math.max(0, (explosionLeft / 850) * 0.82);
     }
     ud.smoke = vehicle.smoke || 0;
     ud.smokeGroup.children.forEach((puff, i) => {
       puff.visible = vehicle.smoke > 0;
       puff.material.opacity = vehicle.smoke >= 2 ? 0.72 : 0.32;
-      if (vehicle.smoke) puff.position.y = 1.05 + i * 0.42 + Math.sin(performance.now() / 280 + i) * 0.12;
+      if (vehicle.smoke)
+        puff.position.y =
+          1.05 + i * 0.42 + Math.sin(performance.now() / 280 + i) * 0.12;
     });
     ud.fireGroup.children.forEach((flame, i) => {
       const pulse = 0.82 + 0.18 * Math.sin(performance.now() / 95 + i * 1.8);
@@ -1676,7 +1800,8 @@ function updateVehicleMeshes(dt) {
   }
   for (const [id, mesh] of vehicleMeshes) {
     if (liveIds.has(id)) continue;
-    scene.remove(mesh); vehicleMeshes.delete(id);
+    scene.remove(mesh);
+    vehicleMeshes.delete(id);
   }
   updateLocalVehicleView();
 }
@@ -1685,7 +1810,11 @@ function updateLocalVehicleView() {
   const hud = $("#vehicleHud");
   if (!vehicle) {
     hud?.classList.add("hidden");
-    if (gun) gun.visible = local.state === "ground" && (!scoped || local.weapon !== "sniper");
+    if (gun)
+      gun.visible =
+        !deathView &&
+        local.state === "ground" &&
+        (!scoped || local.weapon !== "sniper");
     if (steeringWheel) steeringWheel.visible = false;
     return;
   }
@@ -1697,9 +1826,14 @@ function updateLocalVehicleView() {
   const seatZ = 0.18;
   const x = carX + Math.cos(yaw) * seatX + Math.sin(yaw) * seatZ;
   const z = carZ - Math.sin(yaw) * seatX + Math.cos(yaw) * seatZ;
-  local.x = x; local.z = z;
+  local.x = x;
+  local.z = z;
   local.groundY = carMesh?.position.y ?? groundHeightAt(vehicle.x, vehicle.z);
-  camera.position.set(x, local.groundY + (local.vehicleSeat === 0 ? 1.32 : 1.28), z);
+  camera.position.set(
+    x,
+    local.groundY + (local.vehicleSeat === 0 ? 1.32 : 1.28),
+    z,
+  );
   if (local.vehicleSeat === 0) local.yaw = yaw;
   camera.rotation.order = "YXZ";
   camera.rotation.y = local.yaw;
@@ -1708,13 +1842,21 @@ function updateLocalVehicleView() {
   if (steeringWheel) steeringWheel.visible = local.vehicleSeat === 0;
   if (hud) {
     hud.classList.remove("hidden");
-    $("#vehicleSpeed").textContent = String(Math.round(Math.abs(vehicle.speed) * 3.6));
+    $("#vehicleSpeed").textContent = String(
+      Math.round(Math.abs(vehicle.speed) * 3.6),
+    );
     $("#vehicleHP").textContent = vehicle.submerged
       ? "XE CHÌM · ĐỘNG CƠ ĐÃ TẮT"
-      : vehicle.destroyed ? "XE ĐÃ NỔ · CỐ ĐỊNH" : `XE ${Math.round(vehicle.hp)}/60 HP${vehicle.smoke >= 2 ? " · KHÓI DÀY" : vehicle.smoke ? " · ĐANG BỐC KHÓI" : ""}`;
+      : vehicle.destroyed
+        ? "XE ĐÃ NỔ · CỐ ĐỊNH"
+        : `XE ${Math.round(vehicle.hp)}/60 HP${vehicle.smoke >= 2 ? " · KHÓI DÀY" : vehicle.smoke ? " · ĐANG BỐC KHÓI" : ""}`;
     $("#vehicleStatus").textContent = vehicle.submerged
       ? "XE CHÌM · ĐỘNG CƠ ĐÃ TẮT"
-      : vehicle.destroyed ? "XE ĐÃ CHÁY" : local.vehicleSeat === 0 ? "TÀI XẾ · CLICK BÓP KÈN" : "HÀNH KHÁCH · F ĐỂ XUỐNG";
+      : vehicle.destroyed
+        ? "XE ĐÃ CHÁY"
+        : local.vehicleSeat === 0
+          ? "TÀI XẾ · CLICK BÓP KÈN"
+          : "HÀNH KHÁCH · F ĐỂ XUỐNG";
     $("#vehicleHud").classList.toggle("vehicle-damaged", vehicle.smoke > 0);
   }
 }
@@ -1820,7 +1962,12 @@ function initWorld() {
   gun.add(holoFrame);
   const holoLens = new THREE.Mesh(
     new THREE.CircleGeometry(0.078, 20),
-    new THREE.MeshBasicMaterial({ color: 0x82abb0, transparent: true, opacity: 0.28, side: THREE.DoubleSide }),
+    new THREE.MeshBasicMaterial({
+      color: 0x82abb0,
+      transparent: true,
+      opacity: 0.28,
+      side: THREE.DoubleSide,
+    }),
   );
   holoLens.position.set(0.28, -0.075, -0.594);
   gun.add(holoLens);
@@ -1882,13 +2029,26 @@ function initWorld() {
   gun.visible = false; // phòng chờ / máy bay / đang nhảy dù: tay không, chỉ cầm súng sau khi tiếp đất
   camera.add(gun);
   steeringWheel = new THREE.Group();
-  const wheelMesh = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.026, 8, 24), makeMat("#20231e"));
-  wheelMesh.position.set(0, -0.42, -0.72); steeringWheel.add(wheelMesh);
-  const wheelHub = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.12, 8), makeMat("#77796d"));
-  wheelHub.rotation.x = Math.PI / 2; wheelHub.position.set(0, -0.42, -0.72); steeringWheel.add(wheelHub);
+  const wheelMesh = new THREE.Mesh(
+    new THREE.TorusGeometry(0.26, 0.026, 8, 24),
+    makeMat("#20231e"),
+  );
+  wheelMesh.position.set(0, -0.42, -0.72);
+  steeringWheel.add(wheelMesh);
+  const wheelHub = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.035, 0.035, 0.12, 8),
+    makeMat("#77796d"),
+  );
+  wheelHub.rotation.x = Math.PI / 2;
+  wheelHub.position.set(0, -0.42, -0.72);
+  steeringWheel.add(wheelHub);
   for (const side of [-1, 1]) {
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 7), makeMat("#343830"));
-    hand.position.set(side * 0.22, -0.39, -0.7); steeringWheel.add(hand);
+    const hand = new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 8, 7),
+      makeMat("#343830"),
+    );
+    hand.position.set(side * 0.22, -0.39, -0.7);
+    steeringWheel.add(hand);
   }
   steeringWheel.visible = false;
   camera.add(steeringWheel);
@@ -1907,7 +2067,8 @@ function initWorld() {
   }
   for (const vehicle of gameState?.vehicles || []) {
     const mesh = buildCarMesh(vehicle, forest);
-    scene.add(mesh); vehicleMeshes.set(vehicle.id, mesh);
+    scene.add(mesh);
+    vehicleMeshes.set(vehicle.id, mesh);
   }
   addEventListener("resize", resizeWorld);
   requestAnimationFrame(frame);
@@ -2053,9 +2214,13 @@ function placeRemote(mesh, p) {
   }
   if (ud.torso) ud.torso.position.y = 1.05;
   if (ud.head) ud.head.position.y = 1.72;
-  if (ud.legs) { ud.legs.position.set(0, 0, 0); ud.legs.rotation.x = 0; }
+  if (ud.legs) {
+    ud.legs.position.set(0, 0, 0);
+    ud.legs.rotation.x = 0;
+  }
   if (ud.armNear && ud.armFar) {
-    ud.armNear.position.set(0.29, 1.19, -0.2); ud.armFar.position.set(0.49, 1.16, -0.22);
+    ud.armNear.position.set(0.29, 1.19, -0.2);
+    ud.armFar.position.set(0.49, 1.16, -0.22);
     ud.armNear.rotation.x = ud.armFar.rotation.x = -0.22;
   }
   if (st === "plane") {
@@ -2126,16 +2291,18 @@ function renderPlayers(state) {
     lastEliminationId = event.id;
     const row = document.createElement("div");
     row.className = "kill-feed-row";
-    row.textContent = event.killerName === "Nổ xe"
-      ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn`
-      : `${event.killerName} đã chịch ${event.victimName} đến chết`;
+    row.textContent =
+      event.killerName === "Nổ xe"
+        ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn`
+        : `${event.killerName} đã chịch ${event.victimName} đến chết`;
     $("#killFeed")?.prepend(row);
     const timer = setTimeout(() => row.remove(), 20000);
     killFeedTimers.push(timer);
     if (event.victimId === playerId) {
-      localEliminationMessage = event.killerName === "Nổ xe"
-        ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn.`
-        : `Bạn đã bị chịch đến chết bởi ${event.killerName}.`;
+      localEliminationMessage =
+        event.killerName === "Nổ xe"
+          ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn.`
+          : `Bạn đã bị chịch đến chết bởi ${event.killerName}.`;
       $("#resultDetail").textContent = localEliminationMessage;
     }
     if (event.killerId === playerId && event.killerName !== "Nổ xe") {
@@ -2170,7 +2337,9 @@ function renderPlayers(state) {
       local.vehicleId = p.vehicleId || null;
       local.vehicleSeat = Number.isInteger(p.vehicleSeat) ? p.vehicleSeat : -1;
       if (local.vehicleId && local.vehicleId !== previousVehicleId) {
-        const vehicle = gameState?.vehicles?.find((v) => v.id === local.vehicleId);
+        const vehicle = gameState?.vehicles?.find(
+          (v) => v.id === local.vehicleId,
+        );
         local.yaw = vehicle?.yaw ?? p.yaw;
         localFootstepDistance = 0;
         stopFiring();
@@ -2265,7 +2434,10 @@ function renderPlayers(state) {
       // Oversized vest and shoulder plates are visual only; hitboxes stay unchanged.
       const armor = new THREE.Group();
       const armorMat = makeMat("#36463c");
-      const vest = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.98, 0.48), armorMat);
+      const vest = new THREE.Mesh(
+        new THREE.BoxGeometry(0.78, 0.98, 0.48),
+        armorMat,
+      );
       vest.position.y = 1.08;
       armor.add(vest);
       for (const side of [-1, 1]) {
@@ -2836,10 +3008,27 @@ function aimedInteractable() {
   return null;
 }
 function nearestVehicle() {
-  if (!gameState?.vehicles || local.state !== "ground" || local.swimming || local.vehicleId) return null;
-  return gameState.vehicles
-    .filter((v) => !v.destroyed && !v.submerged && Math.hypot(v.x - local.x, v.z - local.z) <= 3.25)
-    .sort((a, b) => Math.hypot(a.x - local.x, a.z - local.z) - Math.hypot(b.x - local.x, b.z - local.z))[0] || null;
+  if (
+    !gameState?.vehicles ||
+    local.state !== "ground" ||
+    local.swimming ||
+    local.vehicleId
+  )
+    return null;
+  return (
+    gameState.vehicles
+      .filter(
+        (v) =>
+          !v.destroyed &&
+          !v.submerged &&
+          Math.hypot(v.x - local.x, v.z - local.z) <= 3.25,
+      )
+      .sort(
+        (a, b) =>
+          Math.hypot(a.x - local.x, a.z - local.z) -
+          Math.hypot(b.x - local.x, b.z - local.z),
+      )[0] || null
+  );
 }
 function onInteract() {
   // F is also the close key while the death crate is open.
@@ -3103,7 +3292,8 @@ function updateGunPose(dt) {
     if (steeringWheel) steeringWheel.visible = false;
     return;
   }
-  const aimTarget = scoped && local.weapon !== "sniper" && local.state === "ground" ? 1 : 0;
+  const aimTarget =
+    scoped && local.weapon !== "sniper" && local.state === "ground" ? 1 : 0;
   gunAimBlend += (aimTarget - gunAimBlend) * Math.min(12 * dt, 1);
   if (Math.abs(aimTarget - gunAimBlend) < 0.002) gunAimBlend = aimTarget;
   const target = local.healing ? 1 : 0;
@@ -3114,11 +3304,7 @@ function updateGunPose(dt) {
       ? clamp((performance.now() - local.reloadStartedAt) / 1800, 0, 1)
       : 0;
   const reloadDip = local.reloading ? Math.sin(reloadProgress * Math.PI) : 0;
-  gun.rotation.set(
-    0.15 * gunBusy,
-    1.35 * gunBusy,
-    -0.12 * gunBusy,
-  );
+  gun.rotation.set(0.15 * gunBusy, 1.35 * gunBusy, -0.12 * gunBusy);
   gun.position.set(
     0.3 * gunBusy - 0.28 * gunAimBlend,
     -0.14 * gunBusy + 0.075 * gunAimBlend,
@@ -3567,7 +3753,8 @@ function pauseGame() {
     deathView ||
     $("#result")?.classList.contains("active") ||
     !$("#game").classList.contains("active")
-  ) return;
+  )
+    return;
   closeBackpack(false);
   paused = true;
   stopFiring();
@@ -3657,10 +3844,15 @@ function onMouse(e) {
   // While driving, steering controls the car and the POV follows its heading.
   if (local.vehicleId && local.vehicleSeat === 0) return;
   if (document.pointerLockElement !== renderer?.domElement) return;
-  const sniperZoomScale = scoped && local.weapon === "sniper"
-    ? clamp(sniperZoomFov / baseFov, 0.12, 1)
-    : 1;
-  local.yaw -= e.movementX * (Number($("#sensitivity").value) || 50) * 0.000055 * sniperZoomScale;
+  const sniperZoomScale =
+    scoped && local.weapon === "sniper"
+      ? clamp(sniperZoomFov / baseFov, 0.12, 1)
+      : 1;
+  local.yaw -=
+    e.movementX *
+    (Number($("#sensitivity").value) || 50) *
+    0.000055 *
+    sniperZoomScale;
   camera.rotation.order = "YXZ";
   camera.rotation.y = local.yaw + recoilYaw;
   camera.rotation.x = Math.max(
@@ -3671,6 +3863,7 @@ function onMouse(e) {
 function onFire(e) {
   if (e.button === 2) {
     if (
+      !deathView &&
       local.state === "ground" &&
       !local.vehicleId &&
       $("#game").classList.contains("active") &&
@@ -3682,7 +3875,11 @@ function onFire(e) {
     return;
   }
   if (e.button === 0 && local.vehicleId) {
-    if (!paused && local.vehicleSeat === 0 && document.pointerLockElement === renderer?.domElement) {
+    if (
+      !paused &&
+      local.vehicleSeat === 0 &&
+      document.pointerLockElement === renderer?.domElement
+    ) {
       playCarHorn();
       send({ type: "horn" });
     }
@@ -3690,6 +3887,7 @@ function onFire(e) {
   }
   if (
     e.button !== 0 ||
+    deathView ||
     paused ||
     local.state !== "ground" ||
     !$("#game").classList.contains("active") ||
@@ -3721,6 +3919,7 @@ function stopFiring() {
 function shootOnce() {
   if (
     !triggerHeld ||
+    deathView ||
     local.vehicleId ||
     paused ||
     local.state !== "ground" ||
@@ -3766,8 +3965,10 @@ function shootOnce() {
   const stanceScale = local.prone ? 0.35 : local.crouching ? 0.65 : 1;
   const recoilScale = (scoped ? 0.72 : 1) * stanceScale;
   const pitchKick = (local.weapon === "sniper" ? 0.105 : 0.05) * recoilScale;
-  const yawKick = (Math.random() - 0.5) *
-    (local.weapon === "sniper" ? 0.018 : 0.04) * recoilScale;
+  const yawKick =
+    (Math.random() - 0.5) *
+    (local.weapon === "sniper" ? 0.018 : 0.04) *
+    recoilScale;
   camera.rotation.x = clamp(camera.rotation.x + pitchKick, -1.35, 1.35);
   recoilPitch += pitchKick;
   recoilYaw += yawKick;
@@ -3781,15 +3982,17 @@ function setScope(enabled) {
       : 58
     : baseFov;
   camera.updateProjectionMatrix();
-  gun.visible = local.state === "ground" && (!scoped || local.weapon !== "sniper");
+  gun.visible =
+    local.state === "ground" && (!scoped || local.weapon !== "sniper");
   $(".crosshair").classList.toggle("scope-hidden", scoped);
   const overlay = $("#scopeOverlay");
   overlay.classList.toggle("hidden", !scoped);
   overlay.classList.toggle("reflex", scoped && local.weapon !== "sniper");
   overlay.classList.toggle("sniper", scoped && local.weapon === "sniper");
-  overlay.querySelector("small").textContent = scoped && local.weapon !== "sniper"
-    ? "RED DOT / HOLO · RIGHT CLICK ĐỂ THOÁT"
-    : "ỐNG NGẮM SNIPER · RIGHT CLICK ĐỂ THOÁT";
+  overlay.querySelector("small").textContent =
+    scoped && local.weapon !== "sniper"
+      ? "RED DOT / HOLO · RIGHT CLICK ĐỂ THOÁT"
+      : "ỐNG NGẮM SNIPER · RIGHT CLICK ĐỂ THOÁT";
 }
 function onScopeWheel(event) {
   if (!scoped || local.weapon !== "sniper") return;
@@ -3892,7 +4095,8 @@ function setMode(state) {
   local.state = state;
   $("#game").dataset.mode = state;
   if (scoped) setScope(false);
-  if (gun) gun.visible = state === "ground" && (!scoped || local.weapon !== "sniper");
+  if (gun)
+    gun.visible = state === "ground" && (!scoped || local.weapon !== "sniper");
   $("#chuteOverlay").classList.toggle("hidden", state !== "parachute");
   // Keep the top-down minimap visible after landing; flight instructions are contextual.
   $("#flightHud").classList.remove("hidden");
@@ -4104,12 +4308,16 @@ function updatePlaneObject(dt) {
   for (const prop of planeObject.userData.props) prop.rotation.z += dt * 40;
   const canJump = t >= plane.tEnter && t < plane.tExit;
   const color = canJump ? 0x39ff6a : 0xff3028;
-  const pulse = 0.5 + 0.5 * Math.sin(performance.now() * (canJump ? 0.009 : 0.004));
-  const { jumpLight, jumpGlow, jumpRing, jumpPointLight } = planeObject.userData;
+  const pulse =
+    0.5 + 0.5 * Math.sin(performance.now() * (canJump ? 0.009 : 0.004));
+  const { jumpLight, jumpGlow, jumpRing, jumpPointLight } =
+    planeObject.userData;
   jumpLight.material.color.set(color);
   jumpLight.scale.setScalar(canJump ? 1.1 + pulse * 0.12 : 1);
   jumpGlow.material.color.set(color);
-  jumpGlow.material.opacity = canJump ? 0.3 + pulse * 0.22 : 0.12 + pulse * 0.08;
+  jumpGlow.material.opacity = canJump
+    ? 0.3 + pulse * 0.22
+    : 0.12 + pulse * 0.08;
   jumpRing.material.color.set(canJump ? 0xd9ffe2 : 0xffd6cf);
   jumpPointLight.color.set(color);
   jumpPointLight.intensity = canJump ? 22 + pulse * 18 : 7 + pulse * 5;
@@ -4485,14 +4693,17 @@ function drawFlightMap() {
   const terrain = mapObstacles || [];
   // Roads appear as continuous clean tracks on the tactical map.
   ctx.lineCap = "round";
-  for (const [color, factor] of [["#b2a98c", 1.28], ["#4f514b", 1]]) {
+  for (const [color, factor] of [
+    ["#b2a98c", 1.28],
+    ["#4f514b", 1],
+  ]) {
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.max(1, 9 * k * factor);
     ctx.beginPath();
     for (const road of terrain) {
       if (road.type !== "road") continue;
-      const dx = Math.sin(road.yaw || 0) * road.length / 2;
-      const dz = Math.cos(road.yaw || 0) * road.length / 2;
+      const dx = (Math.sin(road.yaw || 0) * road.length) / 2;
+      const dz = (Math.cos(road.yaw || 0) * road.length) / 2;
       ctx.moveTo(X(road.x - dx), Y(road.z - dz));
       ctx.lineTo(X(road.x + dx), Y(road.z + dz));
     }
@@ -4536,14 +4747,20 @@ function drawFlightMap() {
     ctx.translate(x, y);
     ctx.rotate(o.yaw || 0);
     if (o.type === "road") {
-      const coveredByHill = terrain.some((hill) => hill.type === "hill" &&
-        Array.from({ length: 9 }, (_, i) => {
-          const along = (i / 8 - 0.5) * o.length;
-          const x = o.x + Math.sin(o.yaw || 0) * along;
-          const z = o.z + Math.cos(o.yaw || 0) * along;
-          return ((x - hill.x) / (hill.w / 2)) ** 2 +
-            ((z - hill.z) / ((hill.length || hill.w) / 2)) ** 2 < 1;
-        }).some(Boolean));
+      const coveredByHill = terrain.some(
+        (hill) =>
+          hill.type === "hill" &&
+          Array.from({ length: 9 }, (_, i) => {
+            const along = (i / 8 - 0.5) * o.length;
+            const x = o.x + Math.sin(o.yaw || 0) * along;
+            const z = o.z + Math.cos(o.yaw || 0) * along;
+            return (
+              ((x - hill.x) / (hill.w / 2)) ** 2 +
+                ((z - hill.z) / ((hill.length || hill.w) / 2)) ** 2 <
+              1
+            );
+          }).some(Boolean),
+      );
       if (!coveredByHill) {
         ctx.strokeStyle = "rgba(226,216,179,.82)";
         ctx.lineWidth = Math.max(0.7, 0.8 * k);
@@ -5068,7 +5285,10 @@ function playCarHorn(position = null) {
   const audio = spatialAudio(position, { volume: 0.78, ref: 5, max: 85 });
   if (!audio) return;
   const ctx = ensureAudio();
-  for (const [frequency, detune] of [[350, 0], [440, -7]]) {
+  for (const [frequency, detune] of [
+    [350, 0],
+    [440, -7],
+  ]) {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sawtooth";
@@ -5078,8 +5298,10 @@ function playCarHorn(position = null) {
     gain.gain.linearRampToValueAtTime(0.42, audio.t0 + 0.045);
     gain.gain.setValueAtTime(0.36, audio.t0 + 0.48);
     gain.gain.exponentialRampToValueAtTime(0.0001, audio.t0 + 0.72);
-    osc.connect(gain); gain.connect(audio.input);
-    osc.start(audio.t0); osc.stop(audio.t0 + 0.74);
+    osc.connect(gain);
+    gain.connect(audio.input);
+    osc.start(audio.t0);
+    osc.stop(audio.t0 + 0.74);
   }
 }
 function updateVehicleEngineAudio(vehicle, groundY) {
@@ -5090,25 +5312,63 @@ function updateVehicleEngineAudio(vehicle, groundY) {
   if (!nodes) {
     const ctx = audioCtx;
     const panner = ctx.createPanner();
-    panner.panningModel = "HRTF"; panner.distanceModel = "linear"; panner.rolloffFactor = 0;
-    const filter = ctx.createBiquadFilter(); filter.type = "lowpass"; filter.frequency.value = 650;
-    const gain = ctx.createGain(); gain.gain.value = 0;
-    const low = ctx.createOscillator(), high = ctx.createOscillator();
-    low.type = "sawtooth"; high.type = "triangle"; low.frequency.value = 55; high.frequency.value = 83;
-    low.connect(filter); high.connect(filter); filter.connect(panner); panner.connect(gain); gain.connect(ctx.destination);
-    low.start(); high.start();
+    panner.panningModel = "HRTF";
+    panner.distanceModel = "linear";
+    panner.rolloffFactor = 0;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 650;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    const low = ctx.createOscillator(),
+      high = ctx.createOscillator();
+    low.type = "sawtooth";
+    high.type = "triangle";
+    low.frequency.value = 55;
+    high.frequency.value = 83;
+    low.connect(filter);
+    high.connect(filter);
+    filter.connect(panner);
+    panner.connect(gain);
+    gain.connect(ctx.destination);
+    low.start();
+    high.start();
     nodes = { panner, filter, gain, low, high };
     vehicleAudioNodes.set(vehicle.id, nodes);
   }
-  const cameraPosition = camera?.getWorldPosition(new THREE.Vector3()) || new THREE.Vector3();
-  const distance = Math.hypot(vehicle.x - cameraPosition.x, groundY + 0.5 - cameraPosition.y, vehicle.z - cameraPosition.z);
-  const occupied = gameState?.players?.some((player) => player.vehicleId === vehicle.id);
-  const loudness = !soundOn || vehicle.destroyed || vehicle.submerged || !occupied ? 0 : (0.34 + Math.min(0.28, Math.abs(vehicle.speed) * 0.014)) * sfxLevel() * distanceGain(distance, 5, 85);
+  const cameraPosition =
+    camera?.getWorldPosition(new THREE.Vector3()) || new THREE.Vector3();
+  const distance = Math.hypot(
+    vehicle.x - cameraPosition.x,
+    groundY + 0.5 - cameraPosition.y,
+    vehicle.z - cameraPosition.z,
+  );
+  const occupied = gameState?.players?.some(
+    (player) => player.vehicleId === vehicle.id,
+  );
+  const loudness =
+    !soundOn || vehicle.destroyed || vehicle.submerged || !occupied
+      ? 0
+      : (0.34 + Math.min(0.28, Math.abs(vehicle.speed) * 0.014)) *
+        sfxLevel() *
+        distanceGain(distance, 5, 85);
   const now = audioCtx.currentTime;
   nodes.gain.gain.setTargetAtTime(loudness, now, 0.08);
-  nodes.low.frequency.setTargetAtTime(48 + Math.abs(vehicle.speed) * 5.8, now, 0.08);
-  nodes.high.frequency.setTargetAtTime(76 + Math.abs(vehicle.speed) * 8.2, now, 0.08);
-  nodes.filter.frequency.setTargetAtTime(360 + Math.abs(vehicle.speed) * 42, now, 0.08);
+  nodes.low.frequency.setTargetAtTime(
+    48 + Math.abs(vehicle.speed) * 5.8,
+    now,
+    0.08,
+  );
+  nodes.high.frequency.setTargetAtTime(
+    76 + Math.abs(vehicle.speed) * 8.2,
+    now,
+    0.08,
+  );
+  nodes.filter.frequency.setTargetAtTime(
+    360 + Math.abs(vehicle.speed) * 42,
+    now,
+    0.08,
+  );
   if (nodes.panner.positionX) {
     nodes.panner.positionX.setTargetAtTime(vehicle.x, now, 0.08);
     nodes.panner.positionY.setTargetAtTime(groundY + 0.5, now, 0.08);
@@ -5116,19 +5376,55 @@ function updateVehicleEngineAudio(vehicle, groundY) {
   } else nodes.panner.setPosition(vehicle.x, groundY + 0.5, vehicle.z);
 }
 function playVehicleSmokeAudio(vehicle) {
-  const position = { x: vehicle.x, y: groundHeightAt(vehicle.x, vehicle.z) + 1.2, z: vehicle.z };
+  const position = {
+    x: vehicle.x,
+    y: groundHeightAt(vehicle.x, vehicle.z) + 1.2,
+    z: vehicle.z,
+  };
   const audio = spatialAudio(position, { volume: 0.55, ref: 5, max: 75 });
   if (!audio) return;
-  noiseBurst(audio, { duration: 0.62, filter: "lowpass", freq: 520, q: 0.7, gain: 0.9 });
-  toneBurst(audio, { duration: 0.42, type: "triangle", from: 78, to: 48, gain: 0.45 });
+  noiseBurst(audio, {
+    duration: 0.62,
+    filter: "lowpass",
+    freq: 520,
+    q: 0.7,
+    gain: 0.9,
+  });
+  toneBurst(audio, {
+    duration: 0.42,
+    type: "triangle",
+    from: 78,
+    to: 48,
+    gain: 0.45,
+  });
 }
 function playVehicleExplosionAudio(vehicle) {
-  const position = { x: vehicle.x, y: groundHeightAt(vehicle.x, vehicle.z) + 0.8, z: vehicle.z };
+  const position = {
+    x: vehicle.x,
+    y: groundHeightAt(vehicle.x, vehicle.z) + 0.8,
+    z: vehicle.z,
+  };
   const audio = spatialAudio(position, { volume: 1, ref: 9, max: 120 });
   if (!audio) return;
-  noiseBurst(audio, { duration: 0.78, filter: "lowpass", freq: 420, gain: 1.2 });
-  noiseBurst(audio, { duration: 0.22, filter: "highpass", freq: 1100, gain: 0.85 });
-  toneBurst(audio, { duration: 0.7, type: "sawtooth", from: 92, to: 28, gain: 0.9 });
+  noiseBurst(audio, {
+    duration: 0.78,
+    filter: "lowpass",
+    freq: 420,
+    gain: 1.2,
+  });
+  noiseBurst(audio, {
+    duration: 0.22,
+    filter: "highpass",
+    freq: 1100,
+    gain: 0.85,
+  });
+  toneBurst(audio, {
+    duration: 0.7,
+    type: "sawtooth",
+    from: 92,
+    to: 28,
+    gain: 0.9,
+  });
 }
 function updateVehicleFireAudio(vehicle, y) {
   if (gameState?.phase === "finished") return;
@@ -5158,9 +5454,16 @@ function updateVehicleFireAudio(vehicle, y) {
     nodes = { source, filter, panner, gain };
     vehicleFireAudioNodes.set(vehicle.id, nodes);
   }
-  const cameraPosition = camera?.getWorldPosition(new THREE.Vector3()) || new THREE.Vector3();
-  const distance = Math.hypot(vehicle.x - cameraPosition.x, y + 1 - cameraPosition.y, vehicle.z - cameraPosition.z);
-  const loudness = soundOn ? 0.13 * sfxLevel() * distanceGain(distance, 5, 95) : 0;
+  const cameraPosition =
+    camera?.getWorldPosition(new THREE.Vector3()) || new THREE.Vector3();
+  const distance = Math.hypot(
+    vehicle.x - cameraPosition.x,
+    y + 1 - cameraPosition.y,
+    vehicle.z - cameraPosition.z,
+  );
+  const loudness = soundOn
+    ? 0.13 * sfxLevel() * distanceGain(distance, 5, 95)
+    : 0;
   const now = ctx.currentTime;
   nodes.gain.gain.setTargetAtTime(loudness, now, 0.12);
   if (nodes.panner.positionX) {
@@ -5176,9 +5479,17 @@ function stopVehicleFireAudio(fade = 0.08) {
       nodes.gain.gain.cancelScheduledValues(now);
       nodes.gain.gain.setTargetAtTime(0, now, Math.max(0.005, fade / 4));
       nodes.source.stop(now + fade);
-      setTimeout(() => {
-        try { nodes.source.disconnect(); nodes.filter.disconnect(); nodes.panner.disconnect(); nodes.gain.disconnect(); } catch {}
-      }, Math.max(50, fade * 1000 + 30));
+      setTimeout(
+        () => {
+          try {
+            nodes.source.disconnect();
+            nodes.filter.disconnect();
+            nodes.panner.disconnect();
+            nodes.gain.disconnect();
+          } catch {}
+        },
+        Math.max(50, fade * 1000 + 30),
+      );
     } catch {}
   }
   vehicleFireAudioNodes.clear();
@@ -5198,15 +5509,18 @@ function stopVehicleEngineAudio(fade = 0.08) {
       };
       stopOscillator(nodes.low);
       stopOscillator(nodes.high);
-      setTimeout(() => {
-        try {
-          nodes.low.disconnect();
-          nodes.high.disconnect();
-          nodes.filter.disconnect();
-          nodes.panner.disconnect();
-          nodes.gain.disconnect();
-        } catch {}
-      }, Math.max(50, fade * 1000 + 30));
+      setTimeout(
+        () => {
+          try {
+            nodes.low.disconnect();
+            nodes.high.disconnect();
+            nodes.filter.disconnect();
+            nodes.panner.disconnect();
+            nodes.gain.disconnect();
+          } catch {}
+        },
+        Math.max(50, fade * 1000 + 30),
+      );
     } catch {}
   }
   vehicleAudioNodes.clear();
@@ -5500,13 +5814,20 @@ function playJumpReadyBell() {
   const ctx = ensureAudio();
   const overall = sfxLevel();
   // Three bright ascending notes announce that the door is over the map.
-  for (const [offset, frequency] of [[0, 880], [0.16, 1174], [0.34, 1568]]) {
+  for (const [offset, frequency] of [
+    [0, 880],
+    [0.16, 1174],
+    [0.34, 1568],
+  ]) {
     const start = ctx.currentTime + offset;
     const oscillator = ctx.createOscillator();
     const gain = ctx.createGain();
     oscillator.type = "sine";
     oscillator.frequency.setValueAtTime(frequency, start);
-    oscillator.frequency.exponentialRampToValueAtTime(frequency * 0.985, start + 0.65);
+    oscillator.frequency.exponentialRampToValueAtTime(
+      frequency * 0.985,
+      start + 0.65,
+    );
     gain.gain.setValueAtTime(0.0001, start);
     gain.gain.linearRampToValueAtTime(0.22 * overall, start + 0.018);
     gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.72);
@@ -5523,11 +5844,23 @@ function frame() {
     const animTime = performance.now() / 1000;
     const ud = mesh.userData;
     const moving = ud.gaitDistance > 0.001;
-    const gaitRate = ud.prone ? 0 : ud.crouching ? 5 : ud.slowWalking ? 5.2 : 9.5;
+    const gaitRate = ud.prone
+      ? 0
+      : ud.crouching
+        ? 5
+        : ud.slowWalking
+          ? 5.2
+          : 9.5;
     if (moving) ud.gaitPhase = (ud.gaitPhase || 0) + dt * gaitRate;
-    const legSwing = moving ? Math.sin(ud.gaitPhase) * (ud.crouching ? 0.28 : 0.56) : 0;
-    if (ud.legLeft) ud.legLeft.rotation.x += (legSwing - ud.legLeft.rotation.x) * Math.min(12 * dt, 1);
-    if (ud.legRight) ud.legRight.rotation.x += (-legSwing - ud.legRight.rotation.x) * Math.min(12 * dt, 1);
+    const legSwing = moving
+      ? Math.sin(ud.gaitPhase) * (ud.crouching ? 0.28 : 0.56)
+      : 0;
+    if (ud.legLeft)
+      ud.legLeft.rotation.x +=
+        (legSwing - ud.legLeft.rotation.x) * Math.min(12 * dt, 1);
+    if (ud.legRight)
+      ud.legRight.rotation.x +=
+        (-legSwing - ud.legRight.rotation.x) * Math.min(12 * dt, 1);
     if (mesh.userData.reloading) {
       // Spin in the upright ring's plane rather than around the player's head.
       mesh.userData.reloadIndicator.rotation.z += dt * 7;
@@ -5627,27 +5960,54 @@ function frame() {
     const stayInWaterWhileSubmerged =
       currentlyInWater && (local.swimDepth || 0) > 0.12;
     const canMoveTo = (x, z) =>
-      !isBlockedAt(x, z) && (!stayInWaterWhileSubmerged || waterAt(x, z) || isOnBridgeAt(x, z, 0.8));
+      !isBlockedAt(x, z) &&
+      (!stayInWaterWhileSubmerged || waterAt(x, z) || isOnBridgeAt(x, z, 0.8));
     if (canMoveTo(local.x + moveX, local.z)) local.x += moveX;
     if (canMoveTo(local.x, local.z + moveZ)) local.z += moveZ;
     const traveled = Math.hypot(local.x - previousX, local.z - previousZ);
     const isMoving = traveled > 0.0005;
     const crouchWalking = isCrouching;
-    const gaitRate = isProne ? 0 : crouchWalking ? 5 : isSlowWalking ? 5.2 : 9.5;
-    localGaitPhase = (localGaitPhase + dt * gaitRate * (isMoving ? 1 : 0)) % (Math.PI * 2);
+    const gaitRate = isProne
+      ? 0
+      : crouchWalking
+        ? 5
+        : isSlowWalking
+          ? 5.2
+          : 9.5;
+    localGaitPhase =
+      (localGaitPhase + dt * gaitRate * (isMoving ? 1 : 0)) % (Math.PI * 2);
     const swingAmount = isMoving ? (crouchWalking ? 0.25 : 0.52) : 0;
-    if (localLegLeft) localLegLeft.rotation.x += (Math.sin(localGaitPhase) * swingAmount - localLegLeft.rotation.x) * Math.min(12 * dt, 1);
-    if (localLegRight) localLegRight.rotation.x += (-Math.sin(localGaitPhase) * swingAmount - localLegRight.rotation.x) * Math.min(12 * dt, 1);
+    if (localLegLeft)
+      localLegLeft.rotation.x +=
+        (Math.sin(localGaitPhase) * swingAmount - localLegLeft.rotation.x) *
+        Math.min(12 * dt, 1);
+    if (localLegRight)
+      localLegRight.rotation.x +=
+        (-Math.sin(localGaitPhase) * swingAmount - localLegRight.rotation.x) *
+        Math.min(12 * dt, 1);
     if (isMoving && !currentlyInWater && !local.jumping) {
       localFootstepDistance += traveled;
-      const stride = isProne ? 99 : crouchWalking ? 1.8 : isSlowWalking ? 2.1 : 1.65;
+      const stride = isProne
+        ? 99
+        : crouchWalking
+          ? 1.8
+          : isSlowWalking
+            ? 2.1
+            : 1.65;
       const intensity = crouchWalking ? 0.34 : isSlowWalking ? 0.22 : 0.82;
       while (localFootstepDistance >= stride) {
-        playSpatialFootstep(local.x, local.groundY + 0.08, local.z, intensity, true);
+        playSpatialFootstep(
+          local.x,
+          local.groundY + 0.08,
+          local.z,
+          intensity,
+          true,
+        );
         localFootstepDistance -= stride;
       }
     } else if (!isMoving || currentlyInWater || local.jumping) {
-      if (!isMoving) localFootstepDistance = Math.min(localFootstepDistance, 0.4);
+      if (!isMoving)
+        localFootstepDistance = Math.min(localFootstepDistance, 0.4);
     }
     const water = waterAt(local.x, local.z);
     $("#swimHint")?.classList.toggle("hidden", !water);
@@ -5725,17 +6085,14 @@ function frame() {
   //   recoilPitch -= recover;
   // }
   if (Math.abs(recoilYaw) > 0.0001) {
-    const recoverYaw = Math.sign(recoilYaw) * Math.min(Math.abs(recoilYaw), dt * 0.06);
+    const recoverYaw =
+      Math.sign(recoilYaw) * Math.min(Math.abs(recoilYaw), dt * 0.06);
     recoilYaw -= recoverYaw;
     camera.rotation.y = local.yaw + recoilYaw;
   }
   if (deathView) {
     const focus = new THREE.Vector3(deathView.x, deathView.y, deathView.z);
-    camera.position.set(
-      deathView.x,
-      deathView.y + 45,
-      deathView.z,
-    );
+    camera.position.set(deathView.x, deathView.y + 45, deathView.z);
     camera.lookAt(focus);
   }
   renderer.render(scene, camera);
