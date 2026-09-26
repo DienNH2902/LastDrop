@@ -2106,7 +2106,7 @@ function beginDeathView(position = local) {
   deathResultTimer = setTimeout(() => {
     deathResultTimer = null;
     showResult();
-  }, 6000);
+  }, 10000);
 }
 
 function renderPlayers(state) {
@@ -3094,6 +3094,11 @@ function showLootToast(text) {
 // Súng hạ/gập khi hồi máu và có động tác tháo lắp băng đạn khi nạp.
 function updateGunPose(dt) {
   if (!gun) return;
+  if (deathView) {
+    gun.visible = false;
+    if (steeringWheel) steeringWheel.visible = false;
+    return;
+  }
   const aimTarget = scoped && local.weapon !== "sniper" && local.state === "ground" ? 1 : 0;
   gunAimBlend += (aimTarget - gunAimBlend) * Math.min(12 * dt, 1);
   if (Math.abs(aimTarget - gunAimBlend) < 0.002) gunAimBlend = aimTarget;
@@ -3745,8 +3750,9 @@ function shootOnce() {
   });
   // This shot follows the current reticle exactly; recoil is applied just
   // afterward so it moves the aim for the next shot instead of deflecting this one.
-  const recoilScale = scoped ? 0.72 : 1;
-  const pitchKick = (local.weapon === "sniper" ? 0.105 : 0.07) * recoilScale;
+  const stanceScale = local.prone ? 0.35 : local.crouching ? 0.65 : 1;
+  const recoilScale = (scoped ? 0.72 : 1) * stanceScale;
+  const pitchKick = (local.weapon === "sniper" ? 0.105 : 0.05) * recoilScale;
   const yawKick = (Math.random() - 0.5) *
     (local.weapon === "sniper" ? 0.018 : 0.04) * recoilScale;
   camera.rotation.x = clamp(camera.rotation.x + pitchKick, -1.35, 1.35);
@@ -4655,11 +4661,42 @@ function drawFlightMap() {
     ctx.stroke();
     ctx.setLineDash([]);
   };
+  const planeMarker = (x, z) => {
+    const angle = Math.atan2(plane.dx, -plane.dz);
+    ctx.save();
+    ctx.translate(clamp(X(x), 7, S - 7), clamp(Y(z), 7, S - 7));
+    ctx.rotate(angle);
+    ctx.beginPath();
+    // Aircraft silhouette points forward along local -Y.
+    ctx.moveTo(0, -8);
+    ctx.lineTo(2, -2);
+    ctx.lineTo(7, 2);
+    ctx.lineTo(7, 4);
+    ctx.lineTo(1.5, 3);
+    ctx.lineTo(1.5, 7);
+    ctx.lineTo(4, 8);
+    ctx.lineTo(4, 9);
+    ctx.lineTo(0, 8);
+    ctx.lineTo(-4, 9);
+    ctx.lineTo(-4, 8);
+    ctx.lineTo(-1.5, 7);
+    ctx.lineTo(-1.5, 3);
+    ctx.lineTo(-7, 4);
+    ctx.lineTo(-7, 2);
+    ctx.lineTo(-2, -2);
+    ctx.closePath();
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#172016";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fill();
+    ctx.restore();
+  };
   if (plane) {
     line(0, plane.tExit + 8, "rgba(255,255,255,.35)", 1, [3, 3]);
     line(plane.tEnter, plane.tExit, "#5dff8a", 2.5, []);
     const pos = planePosAt(planeTime());
-    dot(pos.x, pos.z, 4, "#ffd24a");
+    planeMarker(pos.x, pos.z);
   }
   for (const p of gameState?.players || [])
     if (
@@ -4716,7 +4753,7 @@ function drawFlightMap() {
     ctx.restore();
   }
 
-  dot(me.x, me.z, 3.5, "#ffffff");
+  if (local.state !== "plane") dot(me.x, me.z, 3.5, "#ffffff");
   ctx.restore();
 }
 // Dây dù góc nhìn thứ nhất: hai bó dây từ tay nắm (2 bên, gần) toả lên hai bên khung
@@ -5506,6 +5543,10 @@ function frame() {
   }
   updateLootHud(dt);
   updateGunPose(dt);
+  if (deathView) {
+    if (gun) gun.visible = false;
+    if (steeringWheel) steeringWheel.visible = false;
+  }
   updatePhaseOverlay();
   updatePlaneObject(dt);
   updateRemoteMotion(dt);
