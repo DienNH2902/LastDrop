@@ -3107,6 +3107,10 @@ function leaveMatch() {
   show("menu");
 }
 function cleanupGame() {
+  const grayOverlay = $("#zoneGrayOverlay");
+  if (grayOverlay) {
+    grayOverlay.style.opacity = "0";
+  }
   document.removeEventListener("mousemove", onMouse);
   document.removeEventListener("mousedown", onFire);
   document.removeEventListener("wheel", onScopeWheel);
