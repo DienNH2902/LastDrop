@@ -2097,13 +2097,15 @@ function beginDeathView(position = local) {
   stopFiring();
   if (scoped) setScope(false);
   if (gun) gun.visible = false;
-  document.exitPointerLock?.();
   deathView = {
     x: Number(position.x) || 0,
     y: Number(position.groundY) || 0,
     z: Number(position.z) || 0,
     startedAt: performance.now(),
   };
+  // Mark deathcam before releasing pointer lock: its change event must not
+  // be interpreted as the player opening the pause menu.
+  document.exitPointerLock?.();
   // Lock the camera vertically above the elimination point for a fixed top-down view.
   camera.up.set(0, 0, -1);
   renderer.domElement.style.filter = "grayscale(1)";
@@ -3430,6 +3432,7 @@ function blockContextMenu(e) {
 }
 function onPointerLockChange() {
   if (document.pointerLockElement !== renderer?.domElement) stopFiring();
+  if (deathView || $("#result")?.classList.contains("active")) return;
   if (backpackOpen) return; // đang mở balo: thả chuột là chủ ý, không tạm dừng
   if (
     document.pointerLockElement !== renderer?.domElement &&
@@ -3441,6 +3444,9 @@ function onPointerLockChange() {
 function onKeyDown(e) {
   if (e.code === "Escape") {
     e.preventDefault();
+
+    // Deathcam is a spectator state, not a playable pause state.
+    if (deathView || $("#result")?.classList.contains("active")) return;
 
     if (backpackOpen) {
       closeBackpack();
@@ -3556,7 +3562,12 @@ function onKeyUp(e) {
   keys[e.code] = false;
 }
 function pauseGame() {
-  if (paused || !$("#game").classList.contains("active")) return;
+  if (
+    paused ||
+    deathView ||
+    $("#result")?.classList.contains("active") ||
+    !$("#game").classList.contains("active")
+  ) return;
   closeBackpack(false);
   paused = true;
   stopFiring();
