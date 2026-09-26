@@ -147,6 +147,7 @@ const snapshot = (room) => ({
     swimming: Boolean(p.swimming),
     swimY: p.swimming ? p.swimY : null,
     yaw: p.yaw,
+    peek: p.peek || 0,
     hp: Math.round(p.hp),
     kills: p.kills,
     placement: p.placement || 0,
@@ -903,6 +904,7 @@ function jumpPlayer(room, p) {
   p.z = clampToMap(pos.z);
   p.y = room.plane.alt;
   p.state = "freefall";
+  p.peek = 0;
   p.lastAirAt = Date.now();
 }
 // Tìm chỗ trống gần nhất để không kẹt trong cây / đá / tường khi tiếp đất.
@@ -1183,6 +1185,7 @@ wss.on("connection", (ws) => {
         swimming: false,
         swimY: null,
         yaw: 0,
+        peek: 0,
         hp: 100,
         kills: 0,
         placement: 0,
@@ -1306,6 +1309,7 @@ wss.on("connection", (ws) => {
       // Chỉ rơi xuống, và không nhanh hơn giới hạn.
       p.y = Math.max(p.y - AIR.maxFall * elapsed - 1, Math.min(p.y, ny));
       p.yaw = Number(m.yaw) || 0;
+      p.peek = 0;
       broadcast(room);
       return;
     }
@@ -1344,6 +1348,7 @@ wss.on("connection", (ws) => {
       p.groundY = landingHeightAt(room, p.x, p.z, landingY);
       p.y = null;
       p.state = "ground";
+      p.peek = 0;
       p.jumpY = 0;
       p.swimming = false;
       p.swimY = null;
@@ -1435,6 +1440,10 @@ wss.on("connection", (ws) => {
       p.jumpY = Math.max(0, Math.min(1.7, Number(m.jumpY) || 0));
       p.jumping = p.jumpY > 0.02;
       p.yaw = Number(m.yaw) || 0;
+      p.peek =
+        p.state === "ground" && !p.prone && !p.swimming && !p.jumping
+          ? Math.max(-1, Math.min(1, Number(m.peek) || 0))
+          : 0;
       const now = Date.now();
       const elapsed = Math.max(0, Math.min(0.2, (now - p.lastMoveAt) / 1000));
       p.lastMoveAt = now;
@@ -1504,6 +1513,7 @@ wss.on("connection", (ws) => {
         p.swimming = false;
         p.swimY = null;
       }
+      if (p.swimming || p.jumping) p.peek = 0;
       broadcast(room);
       return;
     }
@@ -2006,10 +2016,18 @@ wss.on("connection", (ws) => {
           }
           const crouchScale = q.crouching ? 0.68 : 1;
           const jumpY = q.jumpY || 0;
+          // Leaning moves the shoulders/head sideways around the feet pivot.
+          const peek = Math.max(-1, Math.min(1, Number(q.peek) || 0));
+          const leanRightX = Math.cos(q.yaw) * peek;
+          const leanRightZ = -Math.sin(q.yaw) * peek;
 
           const bodyDistances = [
             rayBox(
-              { x: q.x, y: targetBaseY + 1.05 * crouchScale + jumpY, z: q.z },
+              {
+                x: q.x + leanRightX * 0.19 * crouchScale,
+                y: targetBaseY + 1.05 * crouchScale + jumpY,
+                z: q.z + leanRightZ * 0.19 * crouchScale,
+              },
               q.yaw,
               {
                 x: 0.325,
@@ -2031,7 +2049,11 @@ wss.on("connection", (ws) => {
             ? Math.min(...bodyDistances)
             : null;
           const headDistance = raySphere(
-            { x: q.x, y: targetBaseY + 1.72 * crouchScale + jumpY, z: q.z },
+            {
+              x: q.x + leanRightX * 0.31 * crouchScale,
+              y: targetBaseY + 1.72 * crouchScale + jumpY,
+              z: q.z + leanRightZ * 0.31 * crouchScale,
+            },
             0.24,
             crouchScale,
           );

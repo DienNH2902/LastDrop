@@ -47,6 +47,7 @@ let socket = null,
     weapon: "ranger",
     kills: 0,
     placement: 0,
+    peek: 0,
     crouching: false,
     jumping: false,
     swimming: false,
@@ -94,6 +95,7 @@ let keys = {},
   deathView = null,
   recoilPitch = 0,
   recoilYaw = 0,
+  peekBlend = 0,
   lastEliminationId = 0,
   localEliminationMessage = "",
   killFeedTimers = [],
@@ -2229,6 +2231,7 @@ function placeRemote(mesh, p) {
   if (st === "plane") {
     ud.airTarget = null;
     ud.inAir = false;
+    mesh.rotation.set(0, p.yaw, 0);
     mesh.scale.set(1, 1, 1);
     return;
   }
@@ -2250,7 +2253,8 @@ function placeRemote(mesh, p) {
   ud.inAir = false;
   // Negative X rotation lays local +Y toward local -Z, matching the server's
   // prone hitbox centers (head forward, legs behind).
-  mesh.rotation.set(p.prone ? -Math.PI / 2 : 0, p.yaw, 0);
+  const peekRoll = p.prone ? 0 : -(Number(p.peek) || 0) * 0.18;
+  mesh.rotation.set(p.prone ? -Math.PI / 2 : 0, p.yaw, peekRoll);
   mesh.position.set(
     p.x,
     p.swimming
@@ -2340,6 +2344,11 @@ function renderPlayers(state) {
       local.vehicleId = p.vehicleId || null;
       local.vehicleSeat = Number.isInteger(p.vehicleSeat) ? p.vehicleSeat : -1;
       if (local.vehicleId && local.vehicleId !== previousVehicleId) {
+        local.peek = 0;
+        peekBlend = 0;
+        keys.KeyQ = false;
+        keys.KeyE = false;
+        if (camera) camera.rotation.z = 0;
         const vehicle = gameState?.vehicles?.find(
           (v) => v.id === local.vehicleId,
         );
@@ -3400,6 +3409,8 @@ function beginGame() {
   jumpOffset = 0;
   local.crouching = false;
   local.prone = false;
+  local.peek = 0;
+  peekBlend = 0;
   local.jumping = false;
   local.swimming = false;
   local.swimY = null;
@@ -3434,7 +3445,7 @@ function beginGame() {
   document.addEventListener("mousedown", onFire);
   document.addEventListener("wheel", onScopeWheel, { passive: false });
   document.addEventListener("mouseup", onMouseUp);
-  window.addEventListener("blur", stopFiring);
+  window.addEventListener("blur", onGameWindowBlur);
   document.addEventListener("contextmenu", blockContextMenu);
   document.addEventListener("keydown", onKeyDown);
   document.addEventListener("keyup", onKeyUp);
@@ -3649,6 +3660,26 @@ function onKeyDown(e) {
     return;
   }
 
+  if (e.code === "KeyQ" || e.code === "KeyE") {
+    e.preventDefault();
+    if (
+      !paused &&
+      !backpackOpen &&
+      !deathView &&
+      !local.vehicleId &&
+      local.state === "ground" &&
+      grounded &&
+      !local.jumping &&
+      !local.swimming &&
+      !local.prone &&
+      $("#game").classList.contains("active")
+    ) {
+      keys[e.code] = true;
+      lastMove = 0;
+    }
+    return;
+  }
+
   if (local.vehicleId && e.code === "Space") {
     e.preventDefault();
     keys.Space = true; // phanh gấp; không dùng Space để nhảy khi đang ngồi trong xe
@@ -3749,6 +3780,13 @@ function onKeyDown(e) {
 
 function onKeyUp(e) {
   keys[e.code] = false;
+  if (e.code === "KeyQ" || e.code === "KeyE") lastMove = 0;
+}
+function onGameWindowBlur() {
+  stopFiring();
+  keys.KeyQ = false;
+  keys.KeyE = false;
+  lastMove = 0;
 }
 function pauseGame() {
   if (
@@ -3812,7 +3850,7 @@ function cleanupGame() {
   document.removeEventListener("mousedown", onFire);
   document.removeEventListener("wheel", onScopeWheel);
   document.removeEventListener("mouseup", onMouseUp);
-  window.removeEventListener("blur", stopFiring);
+  window.removeEventListener("blur", onGameWindowBlur);
   stopFiring();
   document.removeEventListener("pointerlockchange", onPointerLockChange);
   document.removeEventListener("contextmenu", blockContextMenu);
@@ -3959,8 +3997,8 @@ function shootOnce() {
   send({
     type: "shoot",
     aim: { x: aim.x, y: aim.y, z: aim.z },
-    x: local.x,
-    z: local.z,
+    x: eye.x,
+    z: eye.z,
     eyeY: eye.y,
   });
   // This shot follows the current reticle exactly; recoil is applied just
@@ -4122,6 +4160,10 @@ function syncLocalState(p) {
 function enterPlane(p) {
   if (!plane) return;
   local.seat = p.seat || 0;
+  local.peek = 0;
+  peekBlend = 0;
+  keys.KeyQ = false;
+  keys.KeyE = false;
   jumpCuePlayed = false;
   local.prone = false;
   local.crouching = false;
@@ -4143,6 +4185,11 @@ function enterPlane(p) {
   showLootToast("LÊN MÁY BAY · NHẢY KHI ĐÈN XANH");
 }
 function enterFreefall(p, state) {
+  local.peek = 0;
+  peekBlend = 0;
+  keys.KeyQ = false;
+  keys.KeyE = false;
+  camera.rotation.z = 0;
   local.x = p.x;
   local.z = p.z;
   local.y = p.y ?? (plane ? plane.alt : 200);
@@ -4196,6 +4243,9 @@ function findFreeSpotLocal(x, z, landingY = local.groundY) {
   return { x, z };
 }
 function landNow() {
+  local.peek = 0;
+  peekBlend = 0;
+  camera.rotation.z = 0;
   const spot = findFreeSpotLocal(local.x, local.z, local.groundY);
   local.x = spot.x;
   local.z = spot.z;
@@ -6125,6 +6175,29 @@ function frame() {
     }
     camera.position.x = local.x;
     camera.position.z = local.z;
+    const peekTarget =
+      !paused &&
+      !backpackOpen &&
+      !deathView &&
+      !local.vehicleId &&
+      local.state === "ground" &&
+      grounded &&
+      !local.jumping &&
+      !local.swimming &&
+      !local.prone
+        ? keys.KeyE
+          ? 1
+          : keys.KeyQ
+            ? -1
+            : 0
+        : 0;
+    peekBlend += (peekTarget - peekBlend) * Math.min(1, 12 * dt);
+    local.peek = peekBlend;
+    if (local.state === "ground" && !local.vehicleId) {
+      camera.position.x += Math.cos(local.yaw) * peekBlend * 0.28;
+      camera.position.z -= Math.sin(local.yaw) * peekBlend * 0.28;
+      camera.rotation.z = -peekBlend * 0.18;
+    }
     if (Date.now() - lastMove > 50) {
       send({
         type: "move",
@@ -6138,6 +6211,7 @@ function frame() {
         jumping: local.jumping,
         slowWalking: isSlowWalking,
         jumpY: jumpOffset,
+        peek: local.peek,
       });
       lastMove = Date.now();
     }
