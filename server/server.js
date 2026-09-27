@@ -225,24 +225,38 @@ function createObstacles(seed, mapId) {
   const roads = [];
   const roadPaths = [
     (x) => 24 * MAP_SCALE + Math.sin(x / (30 * MAP_SCALE)) * 1.5 * MAP_SCALE,
-    (x) => -29 * MAP_SCALE + Math.sin((x + 17 * MAP_SCALE) / (34 * MAP_SCALE)) * 1.5 * MAP_SCALE,
+    (x) =>
+      -29 * MAP_SCALE +
+      Math.sin((x + 17 * MAP_SCALE) / (34 * MAP_SCALE)) * 1.5 * MAP_SCALE,
   ];
   const crossRoadPaths = [
     (z) => -18 * MAP_SCALE + Math.sin(z / (28 * MAP_SCALE)) * 1.2 * MAP_SCALE,
-    (z) => 20 * MAP_SCALE + Math.sin((z + 14 * MAP_SCALE) / (31 * MAP_SCALE)) * 1.2 * MAP_SCALE,
+    (z) =>
+      20 * MAP_SCALE +
+      Math.sin((z + 14 * MAP_SCALE) / (31 * MAP_SCALE)) * 1.2 * MAP_SCALE,
   ];
   const addRoadPath = (points) => {
     for (let i = 0; i < points.length - 1; i++) {
-      const a = points[i], b = points[i + 1];
-      const dx = b.x - a.x, dz = b.z - a.z;
+      const a = points[i],
+        b = points[i + 1];
+      const dx = b.x - a.x,
+        dz = b.z - a.z;
       const segment = {
-        type: "road", x: (a.x + b.x) / 2, z: (a.z + b.z) / 2,
-        w: 9, length: Math.hypot(dx, dz), h: 0.12,
-        yaw: Math.atan2(dx, dz), solid: false,
-        bridge: forest && Array.from({ length: 5 }, (_, n) => n / 4).some((t) => {
-          const x = a.x + dx * t, z = a.z + dz * t;
-          return Math.abs(z - riverZ(x)) < 13;
-        }),
+        type: "road",
+        x: (a.x + b.x) / 2,
+        z: (a.z + b.z) / 2,
+        w: 9,
+        length: Math.hypot(dx, dz),
+        h: 0.12,
+        yaw: Math.atan2(dx, dz),
+        solid: false,
+        bridge:
+          forest &&
+          Array.from({ length: 5 }, (_, n) => n / 4).some((t) => {
+            const x = a.x + dx * t,
+              z = a.z + dz * t;
+            return Math.abs(z - riverZ(x)) < 13;
+          }),
       };
       roads.push(segment);
       obstacles.push(segment);
@@ -250,23 +264,35 @@ function createObstacles(seed, mapId) {
   };
   for (const pathZ of roadPaths) {
     const points = [];
-    for (let x = -MAP_HALF; x <= MAP_HALF; x += 20) points.push({ x, z: pathZ(x) });
+    for (let x = -MAP_HALF; x <= MAP_HALF; x += 20)
+      points.push({ x, z: pathZ(x) });
     addRoadPath(points);
   }
   for (const pathX of crossRoadPaths) {
     const points = [];
-    for (let z = -MAP_HALF; z <= MAP_HALF; z += 20) points.push({ x: pathX(z), z });
+    for (let z = -MAP_HALF; z <= MAP_HALF; z += 20)
+      points.push({ x: pathX(z), z });
     addRoadPath(points);
   }
-  const nearRoad = (x, z, clearance = 0) => roads.some((road) => {
-    const dx = Math.sin(road.yaw) * road.length / 2;
-    const dz = Math.cos(road.yaw) * road.length / 2;
-    const ax = road.x - dx, az = road.z - dz;
-    const bx = road.x + dx, bz = road.z + dz;
-    const vx = bx - ax, vz = bz - az;
-    const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)));
-    return Math.hypot(x - (ax + t * vx), z - (az + t * vz)) < road.w / 2 + clearance;
-  });
+  const nearRoad = (x, z, clearance = 0) =>
+    roads.some((road) => {
+      const dx = (Math.sin(road.yaw) * road.length) / 2;
+      const dz = (Math.cos(road.yaw) * road.length) / 2;
+      const ax = road.x - dx,
+        az = road.z - dz;
+      const bx = road.x + dx,
+        bz = road.z + dz;
+      const vx = bx - ax,
+        vz = bz - az;
+      const t = Math.max(
+        0,
+        Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)),
+      );
+      return (
+        Math.hypot(x - (ax + t * vx), z - (az + t * vz)) <
+        road.w / 2 + clearance
+      );
+    });
   if (forest) {
     // Deep water volumes follow the winding stream and can be traversed by swimmers.
     for (let i = 0; i < 10; i++) {
@@ -298,12 +324,16 @@ function createObstacles(seed, mapId) {
     // Mark bridge segments by testing the actual rotated river/lake volumes,
     // rather than approximating the stream centerline.
     const rawWaterAt = (water, x, z) => {
-      const dx = x - water.x, dz = z - water.z;
-      const c = Math.cos(water.yaw || 0), s = Math.sin(water.yaw || 0);
-      const localX = c * dx - s * dz, localZ = s * dx + c * dz;
+      const dx = x - water.x,
+        dz = z - water.z;
+      const c = Math.cos(water.yaw || 0),
+        s = Math.sin(water.yaw || 0);
+      const localX = c * dx - s * dz,
+        localZ = s * dx + c * dz;
       return water.type === "lake"
         ? (localX / water.w) ** 2 + (localZ / water.length) ** 2 <= 1
-        : Math.abs(localX) <= water.w / 2 && Math.abs(localZ) <= water.length / 2;
+        : Math.abs(localX) <= water.w / 2 &&
+            Math.abs(localZ) <= water.length / 2;
     };
     for (const road of roads) {
       road.bridge = false;
@@ -312,8 +342,11 @@ function createObstacles(seed, mapId) {
         const along = (i / steps - 0.5) * road.length;
         const x = road.x + Math.sin(road.yaw) * along;
         const z = road.z + Math.cos(road.yaw) * along;
-        road.bridge = obstacles.some((water) =>
-          (water.type === "river" || water.type === "lake") && rawWaterAt(water, x, z));
+        road.bridge = obstacles.some(
+          (water) =>
+            (water.type === "river" || water.type === "lake") &&
+            rawWaterAt(water, x, z),
+        );
       }
     }
   }
@@ -357,7 +390,10 @@ function createObstacles(seed, mapId) {
         w,
         h,
         solid: type !== "hill",
-        yaw: type === "house" || type === "hut" || type === "hill" ? 0 : random() * Math.PI * 2,
+        yaw:
+          type === "house" || type === "hut" || type === "hill"
+            ? 0
+            : random() * Math.PI * 2,
       });
       made++;
     }
@@ -370,8 +406,24 @@ function createObstacles(seed, mapId) {
   // A long elevated ridge makes the terrain read as mountains instead of
   // scattered low bumps. The two overlapping crests form a broad ridgeline.
   obstacles.push(
-    { type: "hill", x: 0, z: 124, w: 62, length: 142, h: forest ? 27 : 30, solid: false },
-    { type: "hill", x: 22, z: 126, w: 42, length: 118, h: forest ? 23 : 26, solid: false },
+    {
+      type: "hill",
+      x: 0,
+      z: 124,
+      w: 62,
+      length: 142,
+      h: forest ? 27 : 30,
+      solid: false,
+    },
+    {
+      type: "hill",
+      x: 22,
+      z: 126,
+      w: 42,
+      length: 118,
+      h: forest ? 23 : 26,
+      solid: false,
+    },
   );
   // Shelters are larger now and remain on flatter ground around the hills.
   add("house", 44, 6.5, 8.5, 4.2, 5.4, 3);
@@ -387,28 +439,47 @@ function createObstacles(seed, mapId) {
   return obstacles;
 }
 function createVehicles(obstacles) {
-  const roads = obstacles.filter((item) => item.type === "road" && Math.abs(item.x) < MAP_HALF - 20 && Math.abs(item.z) < MAP_HALF - 20);
-  const colors = ["#426846", "#a4763e", "#596c83", "#8b4e43"]
-    .sort(() => Math.random() - 0.5);
+  const roads = obstacles.filter(
+    (item) =>
+      item.type === "road" &&
+      Math.abs(item.x) < MAP_HALF - 20 &&
+      Math.abs(item.z) < MAP_HALF - 20,
+  );
+  const colors = ["#426846", "#a4763e", "#596c83", "#8b4e43"].sort(
+    () => Math.random() - 0.5,
+  );
   const usedPositions = [];
   const carClearance = 2.8; // bán kính thân xe + khoảng hở an toàn
   const isClear = (x, z, selectedRoad) => {
-    if (Math.abs(x) > MAP_HALF - carClearance || Math.abs(z) > MAP_HALF - carClearance) return false;
+    if (
+      Math.abs(x) > MAP_HALF - carClearance ||
+      Math.abs(z) > MAP_HALF - carClearance
+    )
+      return false;
     // Tránh đặt xe lên làn đường khác, nhất là tại giao lộ.
     for (const road of roads) {
       if (road === selectedRoad) continue;
-      const dx = Math.sin(road.yaw || 0) * road.length / 2;
-      const dz = Math.cos(road.yaw || 0) * road.length / 2;
-      const ax = road.x - dx, az = road.z - dz;
-      const vx = dx * 2, vz = dz * 2;
-      const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz || 1)));
-      if (Math.hypot(x - (ax + t * vx), z - (az + t * vz)) < road.w / 2 + 2.2) return false;
+      const dx = (Math.sin(road.yaw || 0) * road.length) / 2;
+      const dz = (Math.cos(road.yaw || 0) * road.length) / 2;
+      const ax = road.x - dx,
+        az = road.z - dz;
+      const vx = dx * 2,
+        vz = dz * 2;
+      const t = Math.max(
+        0,
+        Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz || 1)),
+      );
+      if (Math.hypot(x - (ax + t * vx), z - (az + t * vz)) < road.w / 2 + 2.2)
+        return false;
     }
     for (const o of obstacles) {
       if (o.type === "road") continue;
-      const dx = x - o.x, dz = z - o.z;
-      const c = Math.cos(o.yaw || 0), s = Math.sin(o.yaw || 0);
-      const lx = c * dx - s * dz, lz = s * dx + c * dz;
+      const dx = x - o.x,
+        dz = z - o.z;
+      const c = Math.cos(o.yaw || 0),
+        s = Math.sin(o.yaw || 0);
+      const lx = c * dx - s * dz,
+        lz = s * dx + c * dz;
       if (o.type === "hill") {
         // Dù đồi không phải collider đặc, không spawn xe trên dốc/đỉnh.
         const rx = o.w / 2 + carClearance;
@@ -423,16 +494,37 @@ function createVehicles(obstacles) {
         const half = o.w / 2 + carClearance;
         if (Math.abs(lx) < half && Math.abs(lz) < half) return false;
       } else {
-        const obstacleRadius = o.type === "rock" ? o.w * 0.5 : o.type === "tree" ? o.w * 0.3 : o.type === "cactus" ? o.w * 0.5 : o.w * 0.35;
+        const obstacleRadius =
+          o.type === "rock"
+            ? o.w * 0.5
+            : o.type === "tree"
+              ? o.w * 0.3
+              : o.type === "cactus"
+                ? o.w * 0.5
+                : o.w * 0.35;
         if (Math.hypot(dx, dz) < obstacleRadius + carClearance) return false;
       }
     }
     // Không đặt xe sát các điểm bắt đầu ở khu chờ.
-    if ([[-3, 8], [0, 8], [3, 8], [-3, -8], [0, -8]].some(([sx, sz]) => Math.hypot(x - sx, z - sz) < 8)) return false;
-    return usedPositions.every((point) => Math.hypot(point.x - x, point.z - z) > 55);
+    if (
+      [
+        [-3, 8],
+        [0, 8],
+        [3, 8],
+        [-3, -8],
+        [0, -8],
+      ].some(([sx, sz]) => Math.hypot(x - sx, z - sz) < 8)
+    )
+      return false;
+    return usedPositions.every(
+      (point) => Math.hypot(point.x - x, point.z - z) > 55,
+    );
   };
   return [0, 1].map((index) => {
-    let road = roads[0], x = 0, z = 0, found = false;
+    let road = roads[0],
+      x = 0,
+      z = 0,
+      found = false;
     for (let attempt = 0; attempt < 600 && !found; attempt++) {
       road = roads[Math.floor(Math.random() * roads.length)];
       const side = Math.random() < 0.5 ? -1 : 1;
@@ -450,10 +542,20 @@ function createVehicles(obstacles) {
           for (let t = -0.4; t <= 0.4; t += 0.1) {
             const offsetX = side * (candidateRoad.w / 2 + 4.2);
             const offsetZ = t * candidateRoad.length;
-            const cx = candidateRoad.x + Math.cos(candidateRoad.yaw) * offsetX + Math.sin(candidateRoad.yaw) * offsetZ;
-            const cz = candidateRoad.z - Math.sin(candidateRoad.yaw) * offsetX + Math.cos(candidateRoad.yaw) * offsetZ;
+            const cx =
+              candidateRoad.x +
+              Math.cos(candidateRoad.yaw) * offsetX +
+              Math.sin(candidateRoad.yaw) * offsetZ;
+            const cz =
+              candidateRoad.z -
+              Math.sin(candidateRoad.yaw) * offsetX +
+              Math.cos(candidateRoad.yaw) * offsetZ;
             if (isClear(cx, cz, candidateRoad)) {
-              road = candidateRoad; x = cx; z = cz; found = true; break outer;
+              road = candidateRoad;
+              x = cx;
+              z = cz;
+              found = true;
+              break outer;
             }
           }
         }
@@ -461,29 +563,35 @@ function createVehicles(obstacles) {
     }
     usedPositions.push({ x, z });
     return {
-    id: `car-${index + 1}`,
-    x,
-    z,
-    color: colors[index],
-    yaw: road.yaw,
-    speed: 0,
-    hp: 60,
-    hits: 0,
-    destroyed: false,
-    smoke: 0,
-    submerged: false,
-    sinkDepth: 0,
-    controls: { throttle: 0, steer: 0, brake: false },
-    lastTickAt: Date.now(),
-  };
+      id: `car-${index + 1}`,
+      x,
+      z,
+      color: colors[index],
+      yaw: road.yaw,
+      speed: 0,
+      hp: 60,
+      hits: 0,
+      destroyed: false,
+      smoke: 0,
+      submerged: false,
+      sinkDepth: 0,
+      controls: { throttle: 0, steer: 0, brake: false },
+      lastTickAt: Date.now(),
+    };
   });
 }
 function vehicleSeatPosition(vehicle, seat = 0) {
   const offsetX = seat === 0 ? -0.43 : 0.43;
   const offsetZ = 0.18;
   return {
-    x: vehicle.x + Math.cos(vehicle.yaw) * offsetX + Math.sin(vehicle.yaw) * offsetZ,
-    z: vehicle.z - Math.sin(vehicle.yaw) * offsetX + Math.cos(vehicle.yaw) * offsetZ,
+    x:
+      vehicle.x +
+      Math.cos(vehicle.yaw) * offsetX +
+      Math.sin(vehicle.yaw) * offsetZ,
+    z:
+      vehicle.z -
+      Math.sin(vehicle.yaw) * offsetX +
+      Math.cos(vehicle.yaw) * offsetZ,
   };
 }
 // ---- Vật phẩm rơi trên map: đạn và bịch máu ----
@@ -500,25 +608,41 @@ const MAX_MEDKITS = 5;
 function isNearRoad(obstacles, x, z, clearance = 0) {
   return obstacles.some((road) => {
     if (road.type !== "road") return false;
-    const dx = Math.sin(road.yaw || 0) * road.length / 2;
-    const dz = Math.cos(road.yaw || 0) * road.length / 2;
-    const ax = road.x - dx, az = road.z - dz;
-    const bx = road.x + dx, bz = road.z + dz;
-    const vx = bx - ax, vz = bz - az;
-    const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)));
-    return Math.hypot(x - (ax + t * vx), z - (az + t * vz)) < road.w / 2 + clearance;
+    const dx = (Math.sin(road.yaw || 0) * road.length) / 2;
+    const dz = (Math.cos(road.yaw || 0) * road.length) / 2;
+    const ax = road.x - dx,
+      az = road.z - dz;
+    const bx = road.x + dx,
+      bz = road.z + dz;
+    const vx = bx - ax,
+      vz = bz - az;
+    const t = Math.max(
+      0,
+      Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)),
+    );
+    return (
+      Math.hypot(x - (ax + t * vx), z - (az + t * vz)) < road.w / 2 + clearance
+    );
   });
 }
 function isOnBridge(obstacles, x, z, clearance = 0) {
   return obstacles.some((road) => {
     if (road.type !== "road" || !road.bridge) return false;
-    const dx = Math.sin(road.yaw || 0) * road.length / 2;
-    const dz = Math.cos(road.yaw || 0) * road.length / 2;
-    const ax = road.x - dx, az = road.z - dz;
-    const bx = road.x + dx, bz = road.z + dz;
-    const vx = bx - ax, vz = bz - az;
-    const t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)));
-    return Math.hypot(x - (ax + t * vx), z - (az + t * vz)) < road.w / 2 + clearance;
+    const dx = (Math.sin(road.yaw || 0) * road.length) / 2;
+    const dz = (Math.cos(road.yaw || 0) * road.length) / 2;
+    const ax = road.x - dx,
+      az = road.z - dz;
+    const bx = road.x + dx,
+      bz = road.z + dz;
+    const vx = bx - ax,
+      vz = bz - az;
+    const t = Math.max(
+      0,
+      Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)),
+    );
+    return (
+      Math.hypot(x - (ax + t * vx), z - (az + t * vz)) < road.w / 2 + clearance
+    );
   });
 }
 function createLoot(room) {
@@ -576,7 +700,8 @@ function groundHeightAt(room, x, z) {
     if (distanceSquared >= 1) continue;
     height = Math.max(height, hill.h * Math.pow(1 - distanceSquared, 1.4));
   }
-  if (isOnBridge(room.obstacles || [], x, z, 0.2)) height = Math.max(height, 0.3);
+  if (isOnBridge(room.obstacles || [], x, z, 0.2))
+    height = Math.max(height, 0.3);
   return height;
 }
 // Walkable upper surfaces: the pitched roof and the safe crown of large rocks.
@@ -686,7 +811,14 @@ function obstacleFootprintRadius(o) {
   if (o.type === "rock") return o.w * 0.46;
   return null;
 }
-function blockedPosition(room, x, z, ignoreId, ignoreVehicleId = null, ignorePlayers = false) {
+function blockedPosition(
+  room,
+  x,
+  z,
+  ignoreId,
+  ignoreVehicleId = null,
+  ignorePlayers = false,
+) {
   if (
     x < -MAP_HALF + 1 ||
     x > MAP_HALF - 1 ||
@@ -749,10 +881,14 @@ function blockedPosition(room, x, z, ignoreId, ignoreVehicleId = null, ignorePla
     if (vehicle.id === ignoreVehicleId) continue;
     const dx = x - vehicle.x;
     const dz = z - vehicle.z;
-    const c = Math.cos(vehicle.yaw), s = Math.sin(vehicle.yaw);
+    const c = Math.cos(vehicle.yaw),
+      s = Math.sin(vehicle.yaw);
     const lx = c * dx - s * dz;
     const lz = s * dx + c * dz;
-    if (Math.abs(lx) < 1.03 + obstacleRadius && Math.abs(lz) < 1.84 + obstacleRadius)
+    if (
+      Math.abs(lx) < 1.03 + obstacleRadius &&
+      Math.abs(lz) < 1.84 + obstacleRadius
+    )
       return true;
   }
   return false;
@@ -826,7 +962,12 @@ function initZone(room) {
   // Pick and replicate the first destination as soon as the current circle
   // starts waiting, so players can plan their rotation before the shrink.
   const firstStage = ZONE_STAGES[0];
-  const next = firstStage ? pickNextZoneCircle({ center: full, radius: ZONE_FULL_RADIUS }, firstStage.radiusRatio) : null;
+  const next = firstStage
+    ? pickNextZoneCircle(
+        { center: full, radius: ZONE_FULL_RADIUS },
+        firstStage.radiusRatio,
+      )
+    : null;
   zone.nextCenter = next?.center || null;
   zone.nextRadius = next?.radius || 0;
   room.zone = zone;
@@ -891,7 +1032,9 @@ function tickZone(room, now) {
     zone.waitEndsAt = now + (ZONE_STAGES[zone.stageIndex + 1]?.waitMs ?? 20000);
     const followingStage = ZONE_STAGES[zone.stageIndex + 1];
     const settled = { center: zone.toCenter, radius: zone.toRadius };
-    const next = followingStage ? pickNextZoneCircle(settled, followingStage.radiusRatio) : null;
+    const next = followingStage
+      ? pickNextZoneCircle(settled, followingStage.radiusRatio)
+      : null;
     zone.nextCenter = next?.center || null;
     zone.nextRadius = next?.radius || 0;
     changed = true;
@@ -996,13 +1139,20 @@ function findFreeSpot(room, x, z, id, landingY = null) {
   }
   return { x, z };
 }
-function killByVehicle(room, victim, vehicle, now = Date.now(), cause = "vehicle") {
+function killByVehicle(
+  room,
+  victim,
+  vehicle,
+  now = Date.now(),
+  cause = "vehicle",
+) {
   if (!victim.alive) return;
   victim.hp = 0;
   victim.alive = false;
   victim.vehicleId = null;
   victim.vehicleSeat = -1;
-  victim.placement = [...room.players.values()].filter((player) => player.alive).length + 1;
+  victim.placement =
+    [...room.players.values()].filter((player) => player.alive).length + 1;
   const candidateKiller = room.players.get(vehicle.lastDriverId);
   const killer = candidateKiller === victim ? null : candidateKiller;
   if (killer && killer !== victim) killer.kills++;
@@ -1012,19 +1162,30 @@ function killByVehicle(room, victim, vehicle, now = Date.now(), cause = "vehicle
     victimId: victim.id,
     victimName: victim.name,
     killerId: killer?.id || null,
-    killerName: cause === "explosion" ? "Nổ xe" : killer?.name || (candidateKiller === victim ? "Rời xe khi đang chạy" : "Xe tông"),
+    killerName:
+      cause === "explosion"
+        ? "Nổ xe"
+        : killer?.name ||
+          (candidateKiller === victim ? "Rời xe khi đang chạy" : "Xe tông"),
   };
   room.crates ||= [];
   room.crates.push({
     id: `crate-${room.nextCrateId++}`,
     x: victim.x,
     z: victim.z,
-    contents: { ammo: (victim.reserveAmmo || 0) + (victim.ammo || 0), medkit: victim.medkits || 0 },
+    contents: {
+      ammo: (victim.reserveAmmo || 0) + (victim.ammo || 0),
+      medkit: victim.medkits || 0,
+    },
   });
   const alive = [...room.players.values()].filter((player) => player.alive);
   if (alive.length <= 1 && !room.finishAt) {
     room.finishAt = now + MATCH_END_DELAY_MS;
-    if (alive[0]) send(alive[0].ws, { type: "toast", text: `CHIẾN THẮNG! TRANH THỦ NHẶT HÒM ĐỒ — VỀ SẢNH SAU ${Math.round(MATCH_END_DELAY_MS / 1000)}S` });
+    if (alive[0])
+      send(alive[0].ws, {
+        type: "toast",
+        text: `CHIẾN THẮNG! TRANH THỦ NHẶT HÒM ĐỒ — VỀ SẢNH SAU ${Math.round(MATCH_END_DELAY_MS / 1000)}S`,
+      });
   }
 }
 function detachFromVehicle(room, player) {
@@ -1037,13 +1198,16 @@ function detachFromVehicle(room, player) {
 }
 function vehicleFootprintBlocked(room, vehicle, x, z, yaw) {
   // Unbridged water stalls and sinks cars; flagged road crossings are bridges.
-  if (waterAt(room, x, z) && !isOnBridge(room.obstacles, x, z, 1.2)) return false;
-  const halfX = 1.03, halfZ = 1.84;
+  if (waterAt(room, x, z) && !isOnBridge(room.obstacles, x, z, 1.2))
+    return false;
+  const halfX = 1.03,
+    halfZ = 1.84;
   const samples = [];
   for (const side of [-1, 0, 1]) {
     for (const forward of [-1, 0, 1]) {
       if (Math.abs(side) !== 1 && Math.abs(forward) !== 1) continue;
-      const lx = side * halfX, lz = forward * halfZ;
+      const lx = side * halfX,
+        lz = forward * halfZ;
       samples.push({
         x: x + Math.cos(yaw) * lx + Math.sin(yaw) * lz,
         z: z - Math.sin(yaw) * lx + Math.cos(yaw) * lz,
@@ -1052,7 +1216,9 @@ function vehicleFootprintBlocked(room, vehicle, x, z, yaw) {
   }
   // Xe không cần phép thử bề mặt mái/đá dành cho người đi bộ; bỏ mover để
   // tránh quét lại toàn bộ địa hình tìm bề mặt hỗ trợ cho từng góc xe.
-  return samples.some((point) => blockedPosition(room, point.x, point.z, null, vehicle.id, true));
+  return samples.some((point) =>
+    blockedPosition(room, point.x, point.z, null, vehicle.id, true),
+  );
 }
 function tickVehicles(room, now) {
   let changed = false;
@@ -1060,7 +1226,10 @@ function tickVehicles(room, now) {
     if (vehicle.blastPending) {
       vehicle.blastPending = false;
       for (const victim of room.players.values()) {
-        if (victim.alive && Math.hypot(victim.x - vehicle.x, victim.z - vehicle.z) <= 8)
+        if (
+          victim.alive &&
+          Math.hypot(victim.x - vehicle.x, victim.z - vehicle.z) <= 8
+        )
           killByVehicle(room, victim, vehicle, now, "explosion");
       }
       changed = true;
@@ -1073,20 +1242,28 @@ function tickVehicles(room, now) {
       vehicle.controls = { throttle: 0, steer: 0, brake: false };
       const water = waterAt(room, vehicle.x, vehicle.z);
       const previousSinkDepth = vehicle.sinkDepth || 0;
-      vehicle.sinkDepth = Math.min(water?.depth || 4, previousSinkDepth + dt * 1.2);
+      vehicle.sinkDepth = Math.min(
+        water?.depth || 4,
+        previousSinkDepth + dt * 1.2,
+      );
       for (const occupant of room.players.values()) {
         if (occupant.vehicleId !== vehicle.id) continue;
         const seat = vehicleSeatPosition(vehicle, occupant.vehicleSeat);
         occupant.x = seat.x;
         occupant.z = seat.z;
         occupant.yaw = vehicle.yaw;
-        occupant.groundY = groundHeightAt(room, vehicle.x, vehicle.z) - vehicle.sinkDepth;
+        occupant.groundY =
+          groundHeightAt(room, vehicle.x, vehicle.z) - vehicle.sinkDepth;
       }
       changed ||= vehicle.sinkDepth > previousSinkDepth + 0.001;
       continue;
     }
-    const driver = [...room.players.values()].find((p) => p.vehicleId === vehicle.id && p.vehicleSeat === 0);
-    const controls = driver ? vehicle.controls : { throttle: 0, steer: 0, brake: false };
+    const driver = [...room.players.values()].find(
+      (p) => p.vehicleId === vehicle.id && p.vehicleSeat === 0,
+    );
+    const controls = driver
+      ? vehicle.controls
+      : { throttle: 0, steer: 0, brake: false };
     const oldSpeed = vehicle.speed;
     if (controls.brake) vehicle.speed *= Math.max(0, 1 - 7 * dt);
     else if (controls.throttle) {
@@ -1094,7 +1271,8 @@ function tickVehicles(room, now) {
       vehicle.speed = Math.max(-7, Math.min(22, vehicle.speed));
     } else vehicle.speed *= Math.max(0, 1 - 0.8 * dt);
     const speedFactor = Math.min(1, Math.abs(vehicle.speed) / 4);
-    vehicle.yaw += controls.steer * 1.35 * speedFactor * dt * (vehicle.speed < 0 ? -1 : 1);
+    vehicle.yaw +=
+      controls.steer * 1.35 * speedFactor * dt * (vehicle.speed < 0 ? -1 : 1);
     const distance = vehicle.speed * dt;
     const dx = -Math.sin(vehicle.yaw) * distance;
     const dz = -Math.cos(vehicle.yaw) * distance;
@@ -1103,7 +1281,8 @@ function tickVehicles(room, now) {
     const steps = Math.max(1, Math.ceil(Math.abs(distance) / 0.45));
     let moved = false;
     for (let i = 0; i < steps; i++) {
-      const nx = vehicle.x + dx / steps, nz = vehicle.z + dz / steps;
+      const nx = vehicle.x + dx / steps,
+        nz = vehicle.z + dz / steps;
       if (waterAt(room, nx, nz) && !isOnBridge(room.obstacles, nx, nz, 1.2)) {
         vehicle.x = nx;
         vehicle.z = nz;
@@ -1133,10 +1312,14 @@ function tickVehicles(room, now) {
     }
     if (moved && Math.abs(vehicle.speed) > 0.05) {
       for (const victim of room.players.values()) {
-        if (!victim.alive || victim.vehicleId || victim.state !== "ground") continue;
-        const dx = victim.x - vehicle.x, dz = victim.z - vehicle.z;
-        const c = Math.cos(vehicle.yaw), s = Math.sin(vehicle.yaw);
-        const lx = c * dx - s * dz, lz = s * dx + c * dz;
+        if (!victim.alive || victim.vehicleId || victim.state !== "ground")
+          continue;
+        const dx = victim.x - vehicle.x,
+          dz = victim.z - vehicle.z;
+        const c = Math.cos(vehicle.yaw),
+          s = Math.sin(vehicle.yaw);
+        const lx = c * dx - s * dz,
+          lz = s * dx + c * dz;
         const touching = Math.abs(lx) < 1.42 && Math.abs(lz) < 2.22;
         victim.vehicleContacts ||= new Set();
         if (!touching) {
@@ -1165,7 +1348,8 @@ function tickVehicles(room, now) {
 }
 function tickRoom(room) {
   const now = Date.now();
-  if (room.phase === "playing" || room.phase === "plane") tickVehicles(room, now);
+  if (room.phase === "playing" || room.phase === "plane")
+    tickVehicles(room, now);
   const players = [...room.players.values()];
   /* Weather start/end polling disabled for performance testing.
   const w = room.weather;
@@ -1460,82 +1644,126 @@ wss.on("connection", (ws) => {
       broadcast(room);
       return;
     }
-      if (m.type === "vehicleInteract" && canFight(room, p)) {
-        if (p.vehicleId) {
-          const vehicle = room.vehicles.find((v) => v.id === p.vehicleId);
-          if (!vehicle) {
-            p.vehicleId = null;
-            p.vehicleSeat = -1;
-            return;
-          }
-          const exitedSeat = p.vehicleSeat;
-          const speed = Math.abs(vehicle.speed);
-          const side = p.vehicleSeat === 0 ? -1 : 1;
-          const exitX = vehicle.x + Math.cos(vehicle.yaw) * side * 1.65;
-          const exitZ = vehicle.z - Math.sin(vehicle.yaw) * side * 1.65;
-          if (blockedPosition(room, exitX, exitZ, p.id, vehicle.id))
-            return send(ws, { type: "toast", text: "KHÔNG ĐỦ CHỖ ĐỂ RA XE" });
+    if (m.type === "vehicleInteract" && canFight(room, p)) {
+      if (p.vehicleId) {
+        const vehicle = room.vehicles.find((v) => v.id === p.vehicleId);
+        if (!vehicle) {
           p.vehicleId = null;
           p.vehicleSeat = -1;
-          p.x = exitX;
-          p.z = exitZ;
-          p.yaw = vehicle.yaw;
-          p.groundY = groundHeightAt(room, exitX, exitZ);
-          if (exitedSeat === 0) vehicle.controls = { throttle: 0, steer: 0, brake: false };
-          const damage = speed >= 19.5 ? p.hp : Math.max(0, (speed - 9) * 5);
-          if (damage > 0) {
-            p.hp = Math.max(0, p.hp - damage);
-            send(ws, { type: "toast", text: damage >= 100 ? "BẠN ĐÃ BỊ NGU KHI NHẢY KHỎI XE ĐANG CHẠY QUÁ NHANH" : `RA XE KHI ĐANG CHẠY · -${Math.round(damage)} HP` });
-            if (p.hp <= 0) killByVehicle(room, p, vehicle);
-          }
-          broadcast(room);
           return;
         }
-        if (p.state !== "ground" || p.swimming) return;
-        if (p.healingUntil > Date.now()) return send(ws, { type: "toast", text: "HÃY HỦY HỒI MÁU TRƯỚC KHI VÀO XE" });
-        const vehicle = (room.vehicles || [])
-          .filter((v) => !v.destroyed && !v.submerged && Math.hypot(v.x - p.x, v.z - p.z) <= 3.2)
-          .sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z))[0];
-        if (!vehicle) return;
-        const seat = [...room.players.values()].some((other) => other.vehicleId === vehicle.id && other.vehicleSeat === 0)
-          ? 1
-          : 0;
-        if ([...room.players.values()].some((other) => other.vehicleId === vehicle.id && other.vehicleSeat === seat))
-          return send(ws, { type: "toast", text: "XE ĐÃ ĐỦ 2 NGƯỜI" });
-        p.vehicleId = vehicle.id;
-        p.vehicleSeat = seat;
-        p.crouching = false;
-        p.prone = false;
-        p.jumping = false;
-        p.swimming = false;
-        p.reloadingUntil = 0;
-        const seatPos = vehicleSeatPosition(vehicle, seat);
-        p.x = seatPos.x;
-        p.z = seatPos.z;
+        const exitedSeat = p.vehicleSeat;
+        const speed = Math.abs(vehicle.speed);
+        const side = p.vehicleSeat === 0 ? -1 : 1;
+        const exitX = vehicle.x + Math.cos(vehicle.yaw) * side * 1.65;
+        const exitZ = vehicle.z - Math.sin(vehicle.yaw) * side * 1.65;
+        if (blockedPosition(room, exitX, exitZ, p.id, vehicle.id))
+          return send(ws, { type: "toast", text: "KHÔNG ĐỦ CHỖ ĐỂ RA XE" });
+        p.vehicleId = null;
+        p.vehicleSeat = -1;
+        p.x = exitX;
+        p.z = exitZ;
         p.yaw = vehicle.yaw;
-        p.groundY = groundHeightAt(room, vehicle.x, vehicle.z);
-        vehicle.controls = { throttle: 0, steer: 0, brake: false };
+        p.groundY = groundHeightAt(room, exitX, exitZ);
+        if (exitedSeat === 0)
+          vehicle.controls = { throttle: 0, steer: 0, brake: false };
+        const damage = speed >= 19.5 ? p.hp : Math.max(0, (speed - 9) * 5);
+        if (damage > 0) {
+          p.hp = Math.max(0, p.hp - damage);
+          send(ws, {
+            type: "toast",
+            text:
+              damage >= 100
+                ? "BẠN ĐÃ BỊ NGU KHI NHẢY KHỎI XE ĐANG CHẠY QUÁ NHANH"
+                : `RA XE KHI ĐANG CHẠY · -${Math.round(damage)} HP`,
+          });
+          if (p.hp <= 0) killByVehicle(room, p, vehicle);
+        }
         broadcast(room);
         return;
       }
-      if (m.type === "vehicleControl" && p.vehicleId && p.vehicleSeat === 0 && canFight(room, p)) {
-        const vehicle = room.vehicles.find((v) => v.id === p.vehicleId);
-        if (!vehicle || vehicle.destroyed || vehicle.submerged) return;
-        vehicle.controls = {
-          throttle: Math.max(-1, Math.min(1, Number(m.throttle) || 0)),
-          steer: Math.max(-1, Math.min(1, Number(m.steer) || 0)),
-          brake: Boolean(m.brake),
-        };
-        vehicle.lastDriverId = p.id;
-        return;
-      }
-      if (m.type === "horn" && p.vehicleId && p.vehicleSeat === 0 && canFight(room, p)) {
-        const vehicle = room.vehicles.find((v) => v.id === p.vehicleId && !v.destroyed);
-        if (!vehicle) return;
-        broadcastRaw(room, { type: "horn", senderId: p.id, x: vehicle.x, y: groundHeightAt(room, vehicle.x, vehicle.z) + 0.8, z: vehicle.z });
-        return;
-      }
-      if (m.type === "move" && canWalk(room, p) && !p.vehicleId) {
+      if (p.state !== "ground" || p.swimming) return;
+      if (p.healingUntil > Date.now())
+        return send(ws, {
+          type: "toast",
+          text: "HÃY HỦY HỒI MÁU TRƯỚC KHI VÀO XE",
+        });
+      const vehicle = (room.vehicles || [])
+        .filter(
+          (v) =>
+            !v.destroyed &&
+            !v.submerged &&
+            Math.hypot(v.x - p.x, v.z - p.z) <= 3.2,
+        )
+        .sort(
+          (a, b) =>
+            Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z),
+        )[0];
+      if (!vehicle) return;
+      const seat = [...room.players.values()].some(
+        (other) => other.vehicleId === vehicle.id && other.vehicleSeat === 0,
+      )
+        ? 1
+        : 0;
+      if (
+        [...room.players.values()].some(
+          (other) =>
+            other.vehicleId === vehicle.id && other.vehicleSeat === seat,
+        )
+      )
+        return send(ws, { type: "toast", text: "XE ĐÃ ĐỦ 2 NGƯỜI" });
+      p.vehicleId = vehicle.id;
+      p.vehicleSeat = seat;
+      p.crouching = false;
+      p.prone = false;
+      p.jumping = false;
+      p.swimming = false;
+      p.reloadingUntil = 0;
+      const seatPos = vehicleSeatPosition(vehicle, seat);
+      p.x = seatPos.x;
+      p.z = seatPos.z;
+      p.yaw = vehicle.yaw;
+      p.groundY = groundHeightAt(room, vehicle.x, vehicle.z);
+      vehicle.controls = { throttle: 0, steer: 0, brake: false };
+      broadcast(room);
+      return;
+    }
+    if (
+      m.type === "vehicleControl" &&
+      p.vehicleId &&
+      p.vehicleSeat === 0 &&
+      canFight(room, p)
+    ) {
+      const vehicle = room.vehicles.find((v) => v.id === p.vehicleId);
+      if (!vehicle || vehicle.destroyed || vehicle.submerged) return;
+      vehicle.controls = {
+        throttle: Math.max(-1, Math.min(1, Number(m.throttle) || 0)),
+        steer: Math.max(-1, Math.min(1, Number(m.steer) || 0)),
+        brake: Boolean(m.brake),
+      };
+      vehicle.lastDriverId = p.id;
+      return;
+    }
+    if (
+      m.type === "horn" &&
+      p.vehicleId &&
+      p.vehicleSeat === 0 &&
+      canFight(room, p)
+    ) {
+      const vehicle = room.vehicles.find(
+        (v) => v.id === p.vehicleId && !v.destroyed,
+      );
+      if (!vehicle) return;
+      broadcastRaw(room, {
+        type: "horn",
+        senderId: p.id,
+        x: vehicle.x,
+        y: groundHeightAt(room, vehicle.x, vehicle.z) + 0.8,
+        z: vehicle.z,
+      });
+      return;
+    }
+    if (m.type === "move" && canWalk(room, p) && !p.vehicleId) {
       p.crouching = Boolean(m.crouching);
       p.prone = Boolean(m.prone);
       if (p.prone) p.crouching = false;
@@ -1587,13 +1815,17 @@ wss.on("connection", (ws) => {
         const nextX = p.x + stepX;
         if (
           !blockedPosition(room, nextX, p.z, p.id) &&
-          (!stayInWaterWhileSubmerged || waterAt(room, nextX, p.z) || isOnBridge(room.obstacles, nextX, p.z, 0.8))
+          (!stayInWaterWhileSubmerged ||
+            waterAt(room, nextX, p.z) ||
+            isOnBridge(room.obstacles, nextX, p.z, 0.8))
         )
           p.x = nextX;
         const nextZ = p.z + stepZ;
         if (
           !blockedPosition(room, p.x, nextZ, p.id) &&
-          (!stayInWaterWhileSubmerged || waterAt(room, p.x, nextZ) || isOnBridge(room.obstacles, p.x, nextZ, 0.8))
+          (!stayInWaterWhileSubmerged ||
+            waterAt(room, p.x, nextZ) ||
+            isOnBridge(room.obstacles, p.x, nextZ, 0.8))
         )
           p.z = nextZ;
       }
@@ -1628,7 +1860,10 @@ wss.on("connection", (ws) => {
         return;
       // Keep the active magazine size stable for the duration of a reload.
       if (best.type === "weapon" && p.reloadingUntil > Date.now())
-        return send(ws, { type: "toast", text: "CHỜ NẠP ĐẠN XONG ĐỂ ĐỔI SÚNG" });
+        return send(ws, {
+          type: "toast",
+          text: "CHỜ NẠP ĐẠN XONG ĐỂ ĐỔI SÚNG",
+        });
       if (best.type === "ammo") {
         const space = MAX_RESERVE_AMMO - p.reserveAmmo;
         if (space <= 0)
@@ -2051,12 +2286,22 @@ wss.on("connection", (ws) => {
         let vehicleDistance = null;
         for (const [lx, y, lz, hx, hy, hz] of parts) {
           const center = {
-            x: vehicle.x + Math.cos(vehicle.yaw) * lx + Math.sin(vehicle.yaw) * lz,
+            x:
+              vehicle.x +
+              Math.cos(vehicle.yaw) * lx +
+              Math.sin(vehicle.yaw) * lz,
             y: baseY + y,
-            z: vehicle.z - Math.sin(vehicle.yaw) * lx + Math.cos(vehicle.yaw) * lz,
+            z:
+              vehicle.z -
+              Math.sin(vehicle.yaw) * lx +
+              Math.cos(vehicle.yaw) * lz,
           };
           const hit = rayBox(center, vehicle.yaw, { x: hx, y: hy, z: hz });
-          if (hit !== null && (vehicleDistance === null || hit < vehicleDistance)) vehicleDistance = hit;
+          if (
+            hit !== null &&
+            (vehicleDistance === null || hit < vehicleDistance)
+          )
+            vehicleDistance = hit;
         }
         if (vehicleDistance !== null && vehicleDistance < nearest) {
           nearest = vehicleDistance;
@@ -2079,16 +2324,28 @@ wss.on("connection", (ws) => {
               : q.groundY || 0;
           if (q.vehicleId) {
             const bodyDistance = rayBox(
-              { x: q.x, y: targetBaseY + 1.03, z: q.z }, q.yaw,
+              { x: q.x, y: targetBaseY + 1.03, z: q.z },
+              q.yaw,
               { x: 0.29, y: 0.39, z: 0.23 },
             );
-            const headDistance = raySphere({ x: q.x, y: targetBaseY + 1.55, z: q.z }, 0.23);
-            const distance = bodyDistance === null ? headDistance : headDistance === null ? bodyDistance : Math.min(bodyDistance, headDistance);
+            const headDistance = raySphere(
+              { x: q.x, y: targetBaseY + 1.55, z: q.z },
+              0.23,
+            );
+            const distance =
+              bodyDistance === null
+                ? headDistance
+                : headDistance === null
+                  ? bodyDistance
+                  : Math.min(bodyDistance, headDistance);
             if (distance !== null && distance < nearest) {
               nearest = distance;
               struckVehicle = null;
               target = q;
-              targetPart = headDistance !== null && headDistance <= distance ? "head" : "body";
+              targetPart =
+                headDistance !== null && headDistance <= distance
+                  ? "head"
+                  : "body";
             }
             continue;
           }
@@ -2223,7 +2480,8 @@ wss.on("connection", (ws) => {
       if (struckVehicle) {
         struckVehicle.hits++;
         struckVehicle.hp = Math.max(0, 60 - struckVehicle.hits);
-        struckVehicle.smoke = struckVehicle.hits >= 50 ? 2 : struckVehicle.hits >= 30 ? 1 : 0;
+        struckVehicle.smoke =
+          struckVehicle.hits >= 50 ? 2 : struckVehicle.hits >= 30 ? 1 : 0;
         if (struckVehicle.hits >= 60) {
           struckVehicle.destroyed = true;
           struckVehicle.speed = 0;

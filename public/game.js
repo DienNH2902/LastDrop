@@ -155,7 +155,10 @@ let inMatch = false, // đã vào màn hình trận (phòng chờ trong map, má
   localLegLeft = null,
   localLegRight = null,
   airState = { vx: 0, vz: 0, fall: 0, time: 0 };
-const audioLoops = { plane: null, wind: null /* weather loop temporarily disabled */ };
+const audioLoops = {
+  plane: null,
+  wind: null /* weather loop temporarily disabled */,
+};
 // let weatherFx = null; // weather particles disabled for performance profiling
 // let weatherActive = false; // weather synchronization disabled for profiling
 
@@ -1936,33 +1939,42 @@ function updateVehicleMeshes(dt) {
     let targetZ = vehicle.z;
     let targetYaw = vehicle.yaw;
     const localDriver =
-      local.vehicleId === vehicle.id && local.vehicleSeat === 0 &&
-      !vehicle.destroyed && !vehicle.submerged;
+      local.vehicleId === vehicle.id &&
+      local.vehicleSeat === 0 &&
+      !vehicle.destroyed &&
+      !vehicle.submerged;
     if (localDriver) {
       // Predict the server car for at most 120 ms so the driver's camera does
       // not wait for each 20 Hz WebSocket snapshot. Server snapshots still
       // correct the prediction continuously, including when collision stops it.
       const age = Math.min(
         0.12,
-        Math.max(0, (performance.now() - (vehicle.receivedAt || performance.now())) / 1000) + 0.025,
+        Math.max(
+          0,
+          (performance.now() - (vehicle.receivedAt || performance.now())) /
+            1000,
+        ) + 0.025,
       );
       const throttle = keys.KeyW ? 1 : keys.KeyS ? -1 : 0;
       const steer = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
       let predictedSpeed = vehicle.speed;
       if (keys.Space) predictedSpeed *= Math.max(0, 1 - 7 * age);
       else if (throttle)
-        predictedSpeed = Math.max(-7, Math.min(22, predictedSpeed + throttle * 8 * age));
+        predictedSpeed = Math.max(
+          -7,
+          Math.min(22, predictedSpeed + throttle * 8 * age),
+        );
       else predictedSpeed *= Math.max(0, 1 - 0.8 * age);
       const direction = predictedSpeed < 0 ? -1 : 1;
-      const yawRate = steer * 1.35 * Math.min(1, Math.abs(predictedSpeed) / 4) * direction;
+      const yawRate =
+        steer * 1.35 * Math.min(1, Math.abs(predictedSpeed) / 4) * direction;
       targetYaw = vehicle.yaw + yawRate * age;
       const middleYaw = vehicle.yaw + yawRate * age * 0.5;
       const averageSpeed = (vehicle.speed + predictedSpeed) * 0.5;
       targetX -= Math.sin(middleYaw) * averageSpeed * age;
       targetZ -= Math.cos(middleYaw) * averageSpeed * age;
     }
-    const targetY =
-      groundHeightAt(targetX, targetZ) - (vehicle.sinkDepth || 0);
+    const targetY = groundHeightAt(targetX, targetZ) - (vehicle.sinkDepth || 0);
     const positionBlend = Math.min((localDriver ? 28 : 12) * dt, 1);
     mesh.position.x += (targetX - mesh.position.x) * positionBlend;
     mesh.position.z += (targetZ - mesh.position.z) * positionBlend;
@@ -2910,17 +2922,18 @@ function renderPlayers(state) {
       const muzzleY = soundBaseY + (p.prone ? 0.55 : p.crouching ? 0.9 : 1.3);
       // Nếu một gói tin gộp nhiều phát thì phát lần lượt, cách nhau 120 ms.
       for (let i = 0; i < Math.min(shotCount, 4); i++) {
-                playSpatialGunshot(
-                  { x: p.x, y: muzzleY, z: p.z },
-                  0.78,
-                  i * 0.12,
-                  p.weapon === "sniper" ? "sniper" : "rifle",
-                );        playSpatialGunshot(
-                  { x: p.x, y: muzzleY, z: p.z },
-                  0.78,
-                  i * 0.12,
-                  p.weapon === "sniper" ? "sniper" : "rifle",
-                );
+        playSpatialGunshot(
+          { x: p.x, y: muzzleY, z: p.z },
+          0.78,
+          i * 0.12,
+          p.weapon === "sniper" ? "sniper" : "rifle",
+        );
+        playSpatialGunshot(
+          { x: p.x, y: muzzleY, z: p.z },
+          0.78,
+          i * 0.12,
+          p.weapon === "sniper" ? "sniper" : "rifle",
+        );
       }
     }
     mesh.userData.muzzleFlash.visible = Date.now() < mesh.userData.flashUntil;
@@ -3713,8 +3726,22 @@ function beginGame() {
 // Ctrl+W sẽ vẫn đặt KeyW cho điều khiển đi chậm, nhưng không đóng tab nếu browser
 // cho phép khóa phím. Các trình duyệt/OS vẫn có thể giữ lại một số shortcut.
 const GAME_KEY_CODES = [
-  "KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyZ", "KeyF",
-  "Space", "Tab", "Escape", "F5", "F6", "F11", "F12",
+  "KeyW",
+  "KeyA",
+  "KeyS",
+  "KeyD",
+  "KeyQ",
+  "KeyE",
+  "KeyR",
+  "KeyZ",
+  "KeyF",
+  "Space",
+  "Tab",
+  "Escape",
+  "F5",
+  "F6",
+  "F11",
+  "F12",
 ];
 
 function enterGameInputMode() {
@@ -3734,10 +3761,15 @@ function enterGameInputMode() {
         navigationUI: "hide",
         keyboardLock: "browser",
       });
-      fullscreenRequest?.then(() => lockGameKeys()).catch(() => {
-        // Hỗ trợ browser không nhận tùy chọn keyboardLock nhưng vẫn có fullscreen.
-        game.requestFullscreen?.().then(() => lockGameKeys()).catch(() => {});
-      });
+      fullscreenRequest
+        ?.then(() => lockGameKeys())
+        .catch(() => {
+          // Hỗ trợ browser không nhận tùy chọn keyboardLock nhưng vẫn có fullscreen.
+          game
+            .requestFullscreen?.()
+            .then(() => lockGameKeys())
+            .catch(() => {});
+        });
     } catch {
       // Tiếp tục chơi dạng cửa sổ nếu fullscreen không được hỗ trợ.
     }
@@ -3756,7 +3788,9 @@ function lockGameKeys() {
 }
 
 function releaseGameInputMode() {
-  try { navigator.keyboard?.unlock?.(); } catch {}
+  try {
+    navigator.keyboard?.unlock?.();
+  } catch {}
   if (document.fullscreenElement === $("#game")) {
     document.exitFullscreen?.().catch?.(() => {});
   }
@@ -3764,13 +3798,20 @@ function releaseGameInputMode() {
 
 function blockBrowserShortcuts(e) {
   const game = $("#game");
-  const editing = e.target?.closest?.("input, textarea, select, [contenteditable='true']");
+  const editing = e.target?.closest?.(
+    "input, textarea, select, [contenteditable='true']",
+  );
   if (!game?.classList.contains("active") || editing) return;
   if (document.pointerLockElement !== renderer?.domElement) return;
 
   // Không stopPropagation: các phím điều khiển của game vẫn nhận được sự kiện.
   // preventDefault chặn các shortcut có thể chặn bằng trang web.
-  if (e.ctrlKey || e.metaKey || e.altKey || ["F5", "F6", "F11", "F12"].includes(e.code)) {
+  if (
+    e.ctrlKey ||
+    e.metaKey ||
+    e.altKey ||
+    ["F5", "F6", "F11", "F12"].includes(e.code)
+  ) {
     e.preventDefault();
   }
 }
@@ -3958,8 +3999,22 @@ function onPointerLockChange() {
     pauseGame();
 }
 function onKeyDown(e) {
-  const modifierKey = ["ControlLeft", "ControlRight", "AltLeft", "AltRight", "ShiftLeft", "ShiftRight", "MetaLeft", "MetaRight"].includes(e.code);
-  const ctrlWalkKey = e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && ["KeyW", "KeyS"].includes(e.code);
+  const modifierKey = [
+    "ControlLeft",
+    "ControlRight",
+    "AltLeft",
+    "AltRight",
+    "ShiftLeft",
+    "ShiftRight",
+    "MetaLeft",
+    "MetaRight",
+  ].includes(e.code);
+  const ctrlWalkKey =
+    e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey &&
+    !e.shiftKey &&
+    ["KeyW", "KeyS"].includes(e.code);
   if (!modifierKey && !ctrlWalkKey && (e.ctrlKey || e.metaKey || e.altKey)) {
     // Ctrl+R, Ctrl+T, Alt+Left... không được kích hoạt thao tác game.
     e.preventDefault();
@@ -4308,13 +4363,13 @@ function shootOnce() {
     stopFiring();
     return;
   }
-    lastClientShotAt = now;
-    playSpatialGunshot(
-      null,
-      0.65,
-      0,
-      local.weapon === "sniper" ? "sniper" : "rifle",
-    );
+  lastClientShotAt = now;
+  playSpatialGunshot(
+    null,
+    0.65,
+    0,
+    local.weapon === "sniper" ? "sniper" : "rifle",
+  );
   const flash = new THREE.PointLight(0xffc66b, 2, 3);
   flash.position.set(0.28, -0.22, -1);
   camera.add(flash);
