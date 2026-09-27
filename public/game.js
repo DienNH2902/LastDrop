@@ -782,6 +782,9 @@ function syncPauseSettings() {
     const input = document.getElementById(settingsBindings[key].main);
     if (input) syncSettingControl(key, input.value);
   }
+  const fullscreen = document.getElementById("pauseFullscreen");
+  if (fullscreen)
+    fullscreen.value = document.fullscreenElement ? "on" : "off";
 }
 function saveSettings() {
   localStorage.setItem(
@@ -815,6 +818,22 @@ for (const [key, binding] of Object.entries(settingsBindings)) {
       );
   }
 }
+document.getElementById("pauseFullscreen")?.addEventListener("change", async (event) => {
+  const enabled = event.currentTarget.value === "on";
+  try {
+    if (enabled && !document.fullscreenElement)
+      await document.documentElement.requestFullscreen?.();
+    else if (!enabled && document.fullscreenElement)
+      await document.exitFullscreen?.();
+  } catch {
+    // The browser may deny fullscreen; keep the selector in sync with reality.
+  }
+  syncPauseSettings();
+});
+document.addEventListener("fullscreenchange", () => {
+  const fullscreen = document.getElementById("pauseFullscreen");
+  if (fullscreen) fullscreen.value = document.fullscreenElement ? "on" : "off";
+});
 $("#nameInput").addEventListener("input", () => {
   localStorage.setItem("ld-player-name", $("#nameInput").value.slice(0, 18));
 });
