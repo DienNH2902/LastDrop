@@ -6681,6 +6681,15 @@ function showResult() {
   deathView = null;
   camera?.up.set(0, 1, 0);
   if (renderer?.domElement) renderer.domElement.style.filter = "";
+  // Clear screen effects before switching views so the fixed zone tint (and
+  // any last damage/death effect) cannot wash out the result panel.
+  for (const id of ["zoneGrayOverlay", "zoneDangerTint", "damageDirection"]) {
+    const overlay = document.getElementById(id);
+    if (!overlay) continue;
+    overlay.style.opacity = "0";
+    overlay.classList.remove("show", "active");
+    if (id === "damageDirection") overlay.classList.add("hidden");
+  }
   $("#deathViewOverlay")?.classList.add("hidden");
   closeBackpack(false);
   // Tắt scope và đóng menu ESC ngay khi trận kết thúc — không mang trạng thái
