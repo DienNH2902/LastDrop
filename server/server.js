@@ -172,7 +172,19 @@ const snapshot = (room) => ({
   // Keep the round denominator fixed even if a disconnected player is removed.
   total: room.matchTotal ?? room.players.size,
 });
+// Gộp nhiều lần gọi broadcast() liên tiếp trong cùng 1 tick mạng thành ĐÚNG
+// MỘT lần gửi thật sự (xem flushRoomState, chạy mỗi 50ms ngay sau tickRoom).
+// Trước đây mỗi gói "move" của MỖI người chơi (~20 lần/giây/người) đều lập
+// tức dựng lại toàn bộ state rồi gửi cho tất cả — chi phí tăng theo O(số
+// người chơi²), chính là nguyên nhân giật/lag/tele khi phòng đông người, ảnh
+// hưởng luôn cả bắn súng, nạp đạn, lái xe vì tất cả dùng chung vòng lặp sự
+// kiện của Node (đơn luồng).
 function broadcast(room) {
+  room.dirty = true;
+}
+function flushRoomState(room) {
+  if (!room.dirty) return;
+  room.dirty = false;
   const data = JSON.stringify(snapshot(room));
   for (const p of room.players.values())
     if (p.ws.readyState === 1) p.ws.send(data);
@@ -1245,6 +1257,14 @@ wss.on("connection", (ws) => {
           nextLootId: 1,
         };
         rooms.set(code, room);
+        // Vòng lặp gửi state phải chạy NGAY từ lúc tạo phòng — không đợi tới
+        // lúc bấm Start — nếu không thì mọi broadcast() lúc đang chờ trong
+        // sảnh (có người vào/ra) chỉ đánh dấu "dirty" mà không ai thực sự gửi
+        // đi, khiến chủ phòng và người mới vào bị lệch danh sách người chơi.
+        room.timer = setInterval(() => {
+          tickRoom(room);
+          flushRoomState(room);
+        }, 50);
       }
       if (room.phase !== "waiting" || room.players.size >= 5)
         return send(ws, {
@@ -1300,6 +1320,7 @@ wss.on("connection", (ws) => {
         obstacles: room.obstacles,
       });
       broadcast(room);
+      flushRoomState(room);
       return;
     }
     if (!room || !ws.player) return;
@@ -1333,9 +1354,8 @@ wss.on("connection", (ws) => {
         q.ready = false;
         q.placement = 0;
       }
-      // 20 Hz vehicle/server simulation reduces per-step jumps for the driver.
-      room.timer = setInterval(() => tickRoom(room), 50);
       broadcast(room);
+      flushRoomState(room);
       return;
     }
     // Client báo đã dựng xong map trong phòng chờ.
