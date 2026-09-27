@@ -4077,8 +4077,8 @@ function onKeyDown(e) {
   if (e.code === "Escape") {
     e.preventDefault();
 
-    // Deathcam is a spectator state, not a playable pause state.
-    if (deathView || $("#result")?.classList.contains("active")) return;
+    // ESC may open the menu during deathcam; gameplay controls remain disabled.
+    if ($("#result")?.classList.contains("active")) return;
 
     if (backpackOpen) {
       closeBackpack();
@@ -4223,7 +4223,6 @@ function onGameWindowBlur() {
 function pauseGame() {
   if (
     paused ||
-    deathView ||
     $("#result")?.classList.contains("active") ||
     !$("#game").classList.contains("active")
   )
@@ -4254,6 +4253,8 @@ function resumeGame() {
   if (!paused) return;
   paused = false;
   $("#gameMessage").classList.add("hidden");
+  // Deadview intentionally has no pointer lock; resume spectating in place.
+  if (deathView) return;
   renderer?.domElement.requestPointerLock?.();
 }
 function leaveMatch() {
