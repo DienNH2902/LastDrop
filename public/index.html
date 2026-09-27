@@ -228,7 +228,15 @@
     <footer><span>LAST DROP ARENA © 2026 · D.I.E.N PROJECT</span><span>EARLY ACCESS 0.1.0 &nbsp; / &nbsp; <i>BUILD FOR
           SURVIVAL</i></span></footer>
   </div>
-  <script type="module" src="/game.js?v=weather-off-perf-test-1"></script>
+    <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.166.1/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.166.1/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="/game.js?v=loot-crate-transfer-5"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

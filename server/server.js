@@ -1080,7 +1080,7 @@ function tickZone(room, now) {
         if (remaining[0])
           send(remaining[0].ws, {
             type: "toast",
-            text: `CHIẾN THẮNG! TRANH THỦ NHẶT HÒM ĐỒ — VỀ SẢNH SAU ${Math.round(MATCH_END_DELAY_MS / 1000)}S`,
+            text: `CHIẾN THẮNG! VÒNG BO ĐÃ NẮC ĐỐI THỦ CỦA BẠN`,
           });
       }
     }
@@ -1184,7 +1184,7 @@ function killByVehicle(
     if (alive[0])
       send(alive[0].ws, {
         type: "toast",
-        text: `CHIẾN THẮNG! TRANH THỦ NHẶT HÒM ĐỒ — VỀ SẢNH SAU ${Math.round(MATCH_END_DELAY_MS / 1000)}S`,
+        text: `CHIẾN THẮNG! RA NGOÀI NHỚ ĐỪNG LÁI XE TÔNG NGƯỜI VẬY NHÉ`,
       });
   }
 }
@@ -2550,7 +2550,7 @@ wss.on("connection", (ws) => {
         room.finishAt = Date.now() + MATCH_END_DELAY_MS;
         send(ws, {
           type: "toast",
-          text: `CHIẾN THẮNG! TRANH THỦ NHẶT HÒM ĐỒ — VỀ SẢNH SAU ${Math.round(MATCH_END_DELAY_MS / 1000)}S`,
+          text: `CHIẾN THẮNG! BẠN ĐÃ GÕ ĐẦU TẤT CẢ`,
         });
       }
       broadcast(room);

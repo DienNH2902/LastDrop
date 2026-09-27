@@ -1,5 +1,6 @@
 // Client prototype: Three.js scene, FPS controls and WebSocket room connection.
-import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.166.1/build/three.module.js";
+import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 const $ = (s) => document.querySelector(s),
   screens = [...document.querySelectorAll(".screen")];
@@ -1032,8 +1033,42 @@ function escapeHtml(s) {
       ],
   );
 }
+// Trước đây mỗi lần gọi tạo MỚI một Material dù cùng màu — với hàng nghìn
+// vật cản (nhà/cây/đá...) thì con số Material tạo ra lên tới hàng nghìn,
+// trong khi thực chất chỉ có vài chục màu khác nhau. Cache lại theo màu để
+// GPU không phải đổi trạng thái vật liệu liên tục.
+const materialCache = new Map();
 function makeMat(color, roughness = 1) {
-  return new THREE.MeshStandardMaterial({ color, roughness });
+  const key = color + "|" + roughness;
+  let mat = materialCache.get(key);
+  if (!mat) {
+    mat = new THREE.MeshStandardMaterial({ color, roughness });
+    materialCache.set(key, mat);
+  }
+  return mat;
+}
+// Gộp hàng trăm/nghìn vật cản tĩnh cùng màu (nhà, cây, đá...) thành một mesh
+// DUY NHẤT mỗi màu — biến hàng nghìn draw call thành vài chục, không đổi bất
+// kỳ hình ảnh nào vì mỗi mảnh vẫn giữ đúng vị trí/xoay/scale gốc, chỉ khác là
+// được "đóng cứng" vào hình học chung thay vì làm một Mesh riêng.
+let mergeBuckets = null;
+function bucketAdd(key, color, geometry, build) {
+  const temp = new THREE.Object3D();
+  build(temp);
+  temp.updateMatrix();
+  const geo = geometry.clone();
+  geo.applyMatrix4(temp.matrix);
+  geometry.dispose();
+  (mergeBuckets[key] ||= { color, parts: [] }).parts.push(geo);
+}
+function flushMergeBuckets() {
+  for (const key in mergeBuckets) {
+    const bucket = mergeBuckets[key];
+    if (!bucket.parts.length) continue;
+    const merged = mergeGeometries(bucket.parts, false);
+    scene.add(new THREE.Mesh(merged, makeMat(bucket.color)));
+  }
+  mergeBuckets = null;
 }
 function updateAmmoHud() {
   const capacity = local.weapon === "sniper" ? 5 : 30;
@@ -1379,7 +1414,9 @@ function drawMapObject(o, forest) {
       const windowTop = wallH * 0.73;
       const doorH = Math.min(2.25, wallH * 0.78);
       const wall = (x, y, z, sx, sy, sz, color = wallColor) =>
-        add(new THREE.BoxGeometry(sx, sy, sz), color, o.x + x, y, o.z + z);
+        bucketAdd(color, color, new THREE.BoxGeometry(sx, sy, sz), (t) =>
+          t.position.set(o.x + x, y + baseY, o.z + z),
+        );
       wall(0, 0.04, 0, w, 0.08, w, "#594834"); // interior floor slab
       // Split front wall leaves a real doorway; the back remains fully covered.
       wall(
@@ -1471,17 +1508,21 @@ function drawMapObject(o, forest) {
           ? "#72522f"
           : "#68543b";
       for (const side of [-1, 1]) {
-        const roof = wall(
-          side * w * 0.245,
-          wallH + w * 0.16,
-          0,
-          w * 0.58,
-          0.24,
-          w + 0.55,
+        // Mái cần xoay nghiêng nên không dùng chung hàm wall() (không trả về
+        // mesh để chỉnh rotation nữa) — gọi bucketAdd trực tiếp.
+        bucketAdd(
           roofColor,
+          roofColor,
+          new THREE.BoxGeometry(w * 0.58, 0.24, w + 0.55),
+          (t) => {
+            t.position.set(
+              o.x + side * w * 0.245,
+              wallH + w * 0.16 + baseY,
+              o.z,
+            );
+            t.rotation.z = -side * 0.48; // lật mái để cả 2 mặt cùng dốc về đỉnh
+          },
         );
-        // Flip the slope so both roof planes rise toward the ridge.
-        roof.rotation.z = -side * 0.48;
       }
       // Door posts and lintel make the entrance visible without blocking it.
       wall(-doorHalf, doorH / 2, -half - 0.03, 0.12, doorH, 0.12, "#493826");
@@ -1498,81 +1539,83 @@ function drawMapObject(o, forest) {
       break;
     }
     case "tree": {
-      add(
-        new THREE.CylinderGeometry(w * 0.18, w * 0.25, o.h * 0.62, 6),
+      // Thân/tán cây tròn xoay quanh trục Y nên bỏ qua o.yaw không ảnh hưởng
+      // hình ảnh gì — an toàn để gộp không cần xoay riêng từng cây.
+      bucketAdd(
+        "tree-trunk",
         "#60452d",
-        o.x,
-        o.h * 0.31,
-        o.z,
+        new THREE.CylinderGeometry(w * 0.18, w * 0.25, o.h * 0.62, 6),
+        (t) => t.position.set(o.x, o.h * 0.31 + baseY, o.z),
       );
       for (let tier = 0; tier < 3; tier++) {
-        add(
-          new THREE.ConeGeometry(w * (1.45 - tier * 0.18), o.h * 0.48, 7),
+        bucketAdd(
+          tier === 1 ? "tree-tier-mid" : "tree-tier-outer",
           tier === 1 ? "#397344" : "#2d633b",
-          o.x,
-          o.h * (0.62 + tier * 0.18),
-          o.z,
+          new THREE.ConeGeometry(w * (1.45 - tier * 0.18), o.h * 0.48, 7),
+          (t) => t.position.set(o.x, o.h * (0.62 + tier * 0.18) + baseY, o.z),
         );
       }
       break;
     }
     case "deadTree": {
-      const trunk = add(
-        new THREE.CylinderGeometry(w * 0.17, w * 0.28, o.h, 5),
+      bucketAdd(
+        "deadtree",
         "#70563b",
-        o.x,
-        o.h / 2,
-        o.z,
+        new THREE.CylinderGeometry(w * 0.17, w * 0.28, o.h, 5),
+        (t) => {
+          t.position.set(o.x, o.h / 2 + baseY, o.z);
+          if (o.yaw) t.rotation.y = o.yaw;
+          t.rotation.z = 0.08;
+        },
       );
-      trunk.rotation.z = 0.08;
       for (const side of [-1, 1]) {
-        const branch = add(
-          new THREE.CylinderGeometry(w * 0.08, w * 0.12, o.h * 0.36, 4),
+        bucketAdd(
+          "deadtree",
           "#70563b",
-          o.x + side * w * 0.35,
-          o.h * 0.72,
-          o.z,
+          new THREE.CylinderGeometry(w * 0.08, w * 0.12, o.h * 0.36, 4),
+          (t) => {
+            t.position.set(o.x + side * w * 0.35, o.h * 0.72 + baseY, o.z);
+            if (o.yaw) t.rotation.y = o.yaw;
+            t.rotation.z = side * 0.72;
+          },
         );
-        branch.rotation.z = side * 0.72;
       }
       break;
     }
     case "cactus": {
-      add(
-        new THREE.CylinderGeometry(w * 0.22, w * 0.26, o.h, 7),
+      bucketAdd(
+        "cactus-trunk",
         "#3d7744",
-        o.x,
-        o.h / 2,
-        o.z,
+        new THREE.CylinderGeometry(w * 0.22, w * 0.26, o.h, 7),
+        (t) => t.position.set(o.x, o.h / 2 + baseY, o.z),
       );
       for (const side of [-1, 1]) {
-        add(
+        bucketAdd(
+          "cactus-arm",
+          "#4b8948",
           new THREE.CylinderGeometry(w * 0.12, w * 0.15, o.h * 0.38, 6),
-          "#4b8948",
-          o.x + side * w * 0.36,
-          o.h * 0.48,
-          o.z,
+          (t) => t.position.set(o.x + side * w * 0.36, o.h * 0.48 + baseY, o.z),
         );
-        add(
-          new THREE.CylinderGeometry(w * 0.12, w * 0.12, o.h * 0.16, 6),
+        bucketAdd(
+          "cactus-arm",
           "#4b8948",
-          o.x + side * w * 0.36,
-          o.h * 0.64,
-          o.z,
+          new THREE.CylinderGeometry(w * 0.12, w * 0.12, o.h * 0.16, 6),
+          (t) => t.position.set(o.x + side * w * 0.36, o.h * 0.64 + baseY, o.z),
         );
       }
       break;
     }
     case "rock": {
-      const rock = add(
-        new THREE.DodecahedronGeometry(0.5, 0),
+      bucketAdd(
+        "rock",
         forest ? "#68705a" : "#88765c",
-        o.x,
-        o.h * 0.42,
-        o.z,
+        new THREE.DodecahedronGeometry(0.5, 0),
+        (t) => {
+          t.position.set(o.x, o.h * 0.42 + baseY, o.z);
+          t.scale.set(w, o.h, w * 0.82);
+          t.rotation.set(o.yaw || 0, o.yaw || 0, 0.12);
+        },
       );
-      rock.scale.set(w, o.h, w * 0.82);
-      rock.rotation.set(o.yaw || 0, o.yaw || 0, 0.12);
       break;
     }
     case "hill": {
@@ -2146,7 +2189,9 @@ function initWorld() {
   addZoneBorder();
   addSafeZoneWall();
   if (forest) addForestGrass(gameState?.mapSeed ?? 305419896);
+  mergeBuckets = {};
   for (const obstacle of mapObstacles) drawMapObject(obstacle, forest);
+  flushMergeBuckets(); // dồn toàn bộ nhà/cây/đá/xương rồng thành vài chục draw call
   // First-person weapon silhouette attached to the camera.
   gun = new THREE.Group();
   const body = new THREE.Mesh(
@@ -3755,27 +3800,27 @@ function enterGameInputMode() {
     lockRequest?.catch?.(() => {});
   } catch {}
 
-  if (!document.fullscreenElement && game.requestFullscreen) {
-    try {
-      const fullscreenRequest = game.requestFullscreen({
-        navigationUI: "hide",
-        keyboardLock: "browser",
-      });
-      fullscreenRequest
-        ?.then(() => lockGameKeys())
-        .catch(() => {
-          // Hỗ trợ browser không nhận tùy chọn keyboardLock nhưng vẫn có fullscreen.
-          game
-            .requestFullscreen?.()
-            .then(() => lockGameKeys())
-            .catch(() => {});
-        });
-    } catch {
-      // Tiếp tục chơi dạng cửa sổ nếu fullscreen không được hỗ trợ.
-    }
-  } else if (document.fullscreenElement === game) {
-    lockGameKeys();
-  }
+  // if (!document.fullscreenElement && game.requestFullscreen) {
+  //   try {
+  //     const fullscreenRequest = game.requestFullscreen({
+  //       navigationUI: "hide",
+  //       keyboardLock: "browser",
+  //     });
+  //     fullscreenRequest
+  //       ?.then(() => lockGameKeys())
+  //       .catch(() => {
+  //         // Hỗ trợ browser không nhận tùy chọn keyboardLock nhưng vẫn có fullscreen.
+  //         game
+  //           .requestFullscreen?.()
+  //           .then(() => lockGameKeys())
+  //           .catch(() => {});
+  //       });
+  //   } catch {
+  //     // Tiếp tục chơi dạng cửa sổ nếu fullscreen không được hỗ trợ.
+  //   }
+  // } else if (document.fullscreenElement === game) {
+  //   lockGameKeys();
+  // }
 }
 
 function lockGameKeys() {
@@ -3791,9 +3836,9 @@ function releaseGameInputMode() {
   try {
     navigator.keyboard?.unlock?.();
   } catch {}
-  if (document.fullscreenElement === $("#game")) {
-    document.exitFullscreen?.().catch?.(() => {});
-  }
+  // if (document.fullscreenElement === $("#game")) {
+  //   document.exitFullscreen?.().catch?.(() => {});
+  // }
 }
 
 function blockBrowserShortcuts(e) {
