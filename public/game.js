@@ -2569,7 +2569,9 @@ function renderPlayers(state) {
     const row = document.createElement("div");
     row.className = "kill-feed-row";
     row.textContent =
-      event.killerName === "Nổ xe"
+      event.cause === "collision"
+        ? `${event.killerName} đã tông ${event.victimName} không thương tiếc`
+        : event.killerName === "Nổ xe"
         ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn`
         : `${event.killerName} đã chịch ${event.victimName} đến chết`;
     $("#killFeed")?.prepend(row);
@@ -2577,7 +2579,9 @@ function renderPlayers(state) {
     killFeedTimers.push(timer);
     if (event.victimId === playerId) {
       localEliminationMessage =
-        event.killerName === "Nổ xe"
+        event.cause === "collision"
+          ? `${event.killerName} đã lỡ tông bạn.`
+          : event.killerName === "Nổ xe"
           ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn.`
           : `Bạn đã bị chịch đến chết bởi ${event.killerName}.`;
       $("#resultDetail").textContent = localEliminationMessage;
@@ -2585,14 +2589,18 @@ function renderPlayers(state) {
     if (event.killerId === playerId && event.killerName !== "Nổ xe") {
       const notice = $("#killNotice");
       if (notice) {
-        notice.replaceChildren(document.createTextNode("Bạn "));
-        const action = document.createElement("span");
-        action.className = "kill-notice-action";
-        action.textContent = "đã chịch";
-        notice.append(
-          action,
-          document.createTextNode(` ${event.victimName} đến chết.`),
-        );
+        if (event.cause === "collision") {
+          notice.textContent = `Bạn đã tông ${event.victimName} dẹp lép`;
+        } else {
+          notice.replaceChildren(document.createTextNode("Bạn "));
+          const action = document.createElement("span");
+          action.className = "kill-notice-action";
+          action.textContent = "đã chịch";
+          notice.append(
+            action,
+            document.createTextNode(` ${event.victimName} đến chết.`),
+          );
+        }
         notice.classList.remove("hidden");
         setTimeout(() => notice.classList.add("hidden"), 10000);
       }

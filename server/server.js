@@ -1162,6 +1162,7 @@ function killByVehicle(
     victimId: victim.id,
     victimName: victim.name,
     killerId: killer?.id || null,
+    cause,
     killerName:
       cause === "explosion"
         ? "Nổ xe"
@@ -1331,10 +1332,10 @@ function tickVehicles(room, now) {
         if (victim.vehicleContacts.has(vehicle.id)) continue;
         victim.vehicleContacts.add(vehicle.id);
         if (Math.abs(vehicle.speed) >= 12) {
-          killByVehicle(room, victim, vehicle, now);
+          killByVehicle(room, victim, vehicle, now, "collision");
         } else {
           victim.hp = Math.max(0, victim.hp - 30);
-          if (victim.hp <= 0) killByVehicle(room, victim, vehicle, now);
+          if (victim.hp <= 0) killByVehicle(room, victim, vehicle, now, "collision");
           else {
             send(victim.ws, { type: "toast", text: "VA CHẠM XE · -30 HP" });
             changed = true;
@@ -1677,7 +1678,7 @@ wss.on("connection", (ws) => {
                 ? "BẠN ĐÃ BỊ NGU KHI NHẢY KHỎI XE ĐANG CHẠY QUÁ NHANH"
                 : `RA XE KHI ĐANG CHẠY · -${Math.round(damage)} HP`,
           });
-          if (p.hp <= 0) killByVehicle(room, p, vehicle);
+          if (p.hp <= 0) killByVehicle(room, p, vehicle, Date.now(), "exit");
         }
         broadcast(room);
         return;
