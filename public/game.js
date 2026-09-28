@@ -4544,7 +4544,7 @@ function closeBackpack(relock = true) {
   crateOpenId = null;
   $("#backpack")?.classList.add("hidden");
   if (relock && !paused && $("#game").classList.contains("active")) {
-    renderer?.domElement.requestPointerLock?.();
+    lockPointer(renderer?.domElement);
   }
 }
 function toggleBackpack() {
@@ -4850,8 +4850,7 @@ function enterGameInputMode() {
   // Gọi cả hai API đồng bộ trong cùng thao tác click để đáp ứng user activation.
   applyDisplayMode(); // theo setting fullscreen/windowed đã chọn
   try {
-    const lockRequest = canvas.requestPointerLock?.();
-    lockRequest?.catch?.(() => {});
+    lockPointer(canvas);
   } catch {}
 
   // if (!document.fullscreenElement && game.requestFullscreen) {
@@ -5301,7 +5300,7 @@ function resumeGame() {
   $("#gameMessage").classList.add("hidden");
   // Deadview intentionally has no pointer lock; resume spectating in place.
   if (deathView) return;
-  renderer?.domElement.requestPointerLock?.();
+  lockPointer(renderer?.domElement);
 }
 function leaveMatch() {
   paused = false;
@@ -5370,10 +5369,50 @@ function cleanupGame() {
   lastVehicleControlKey = "";
   resolutionScale = 1;
 }
+// Khóa chuột ở chế độ "unadjustedMovement" (đọc chuyển động thô, bỏ gia tốc
+// chuột của Windows). Trình duyệt không hỗ trợ thì khóa kiểu thường.
+function lockPointer(element) {
+  if (!element?.requestPointerLock) return;
+  let request;
+  try {
+    request = element.requestPointerLock({ unadjustedMovement: true });
+  } catch {
+    // Trình duyệt cũ báo lỗi ngay với tuỳ chọn → khóa kiểu thường.
+    try {
+      element.requestPointerLock();
+    } catch {}
+    return;
+  }
+  // Trình duyệt không nhận tuỳ chọn → Promise bị từ chối → khóa lại kiểu thường.
+  request?.catch?.(() => {
+    try {
+      element.requestPointerLock()?.catch?.(() => {});
+    } catch {}
+  });
+}
+// Chrome/Edge trên Windows thỉnh thoảng trả về một movementX/Y khổng lồ (thường
+// ngược hướng) khi đang khóa chuột và xoay liên tục — đó là cú "giật màn hình về
+// sau một khúc". Bỏ các giá trị bất thường so với tốc độ tay gần đây, và bỏ vài
+// sự kiện đầu tiên ngay sau khi vừa khóa chuột (hay chứa bước nhảy rác).
+let mouseAvg = 12,
+  pointerLockedAt = 0;
+document.addEventListener("pointerlockchange", () => {
+  pointerLockedAt = performance.now();
+  mouseAvg = 12;
+});
+function saneMouseDelta(e) {
+  if (performance.now() - pointerLockedAt < 60) return false;
+  const mag = Math.max(Math.abs(e.movementX), Math.abs(e.movementY));
+  const limit = Math.max(180, mouseAvg * 8);
+  if (mag > limit) return false;
+  mouseAvg += (mag - mouseAvg) * 0.2;
+  return true;
+}
 function onMouse(e) {
   // While driving, steering controls the car and the POV follows its heading.
   if (local.vehicleId && local.vehicleSeat === 0) return;
   if (document.pointerLockElement !== renderer?.domElement) return;
+  if (!saneMouseDelta(e)) return;
   const sniperZoomScale =
     scoped && local.weapon === "sniper"
       ? clamp(sniperZoomFov / baseFov, 0.12, 1)

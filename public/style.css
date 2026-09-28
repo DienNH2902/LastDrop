@@ -1773,7 +1773,7 @@ body:has(#game.active) #game {
 /* Ping mạng: xanh < 80 ms, vàng < 160 ms, đỏ khi mạng chậm. */
 .ping-hud {
   position: absolute;
-  top: 66px;
+  top: 80px;
   right: 25px;
   font-size: 10px;
   letter-spacing: 1px;
@@ -2380,4 +2380,15 @@ body:has(#game.active) #game {
 }
 
 /* ĐÃ HẠ nằm góc trên bên phải, ngay trên ô PING. */
-.kill-hud{position:absolute;top:40px;right:25px;margin:0;padding:3px 8px;background:#111a;font-size:11px;letter-spacing:1px;color:#f3f3ed;text-shadow:0 1px 3px #000}
+.kill-hud {
+  position: absolute;
+  top: 40px;
+  right: 25px;
+  margin: 0;
+  padding: 3px 8px;
+  background: #111a;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #f3f3ed;
+  text-shadow: 0 1px 3px #000;
+}
