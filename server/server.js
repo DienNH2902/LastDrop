@@ -39,13 +39,15 @@ const STAGING_TIMEOUT_MS = 20000; // chờ tối đa bấy nhiêu ms cho máy ch
 // cũ; càng về sau vòng càng nhỏ và sát thương mỗi giây cho người đứng ngoài
 // càng cao.
 const ZONE_STAGES = [
-  { radiusRatio: 0.62, waitMs: 35000, shrinkMs: 26000, damage: 2 },
-  { radiusRatio: 0.55, waitMs: 28000, shrinkMs: 22000, damage: 4 },
-  { radiusRatio: 0.5, waitMs: 24000, shrinkMs: 18000, damage: 6 },
-  { radiusRatio: 0.45, waitMs: 20000, shrinkMs: 15000, damage: 9 },
-  { radiusRatio: 0.4, waitMs: 16000, shrinkMs: 12000, damage: 13 },
-  { radiusRatio: 0.35, waitMs: 14000, shrinkMs: 10000, damage: 18 },
-  { radiusRatio: 0.3, waitMs: 12000, shrinkMs: 8000, damage: 25 },
+  // Vòng đầu chờ lâu (người chơi vừa tiếp đất, cần thời gian nhặt đồ / tìm xe),
+  // các vòng sau cũng thu chậm hơn trước khoảng gấp đôi.
+  { radiusRatio: 0.62, waitMs: 90000, shrinkMs: 60000, damage: 1.5 },
+  { radiusRatio: 0.55, waitMs: 70000, shrinkMs: 50000, damage: 3 },
+  { radiusRatio: 0.5, waitMs: 60000, shrinkMs: 45000, damage: 5 },
+  { radiusRatio: 0.45, waitMs: 50000, shrinkMs: 40000, damage: 8 },
+  { radiusRatio: 0.4, waitMs: 45000, shrinkMs: 35000, damage: 11 },
+  { radiusRatio: 0.35, waitMs: 40000, shrinkMs: 30000, damage: 15 },
+  { radiusRatio: 0.3, waitMs: 35000, shrinkMs: 25000, damage: 20 },
 ];
 const ZONE_FULL_RADIUS = MAP_HALF * Math.SQRT2; // đủ phủ hết bản đồ hình vuông
 const ZONE_TICK_SECONDS = 0.1; // tickRoom chạy mỗi 100ms
@@ -1317,7 +1319,12 @@ function tickVehicles(room, now) {
     else if (controls.throttle) {
       vehicle.speed += controls.throttle * 8 * dt;
       vehicle.speed = Math.max(-7, Math.min(22, vehicle.speed));
-    } else vehicle.speed *= Math.max(0, 1 - 0.8 * dt);
+    } else {
+      // Nhả ga: xe trôi theo quán tính, chậm dần vì ma sát lăn + lực cản gió
+      // (từ 80 km/h mất ~10 s mới dừng), thay vì khựng lại gần như ngay.
+      const drag = (0.9 + 0.08 * Math.abs(vehicle.speed)) * dt;
+      vehicle.speed -= Math.sign(vehicle.speed) * Math.min(Math.abs(vehicle.speed), drag);
+    }
     const speedFactor = Math.min(1, Math.abs(vehicle.speed) / 4);
     vehicle.yaw +=
       controls.steer * 1.35 * speedFactor * dt * (vehicle.speed < 0 ? -1 : 1);

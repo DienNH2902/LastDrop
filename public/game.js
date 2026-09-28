@@ -181,6 +181,8 @@ let keys = {},
   steeringWheel = null,
   lastVehicleControlAt = 0,
   lastVehicleControlKey = "",
+  cameraBaseY = 1.65,
+  headBob = 0,
   snapshotServerTime = 0;
 // Slightly above the server's 120 ms cadence so timer/network jitter won't
 // cause valid automatic shots to be rejected by the server.
@@ -2960,7 +2962,11 @@ function stepCar(state, input, dt) {
       -7,
       Math.min(22, state.speed + input.throttle * 8 * dt),
     );
-  else state.speed *= Math.max(0, 1 - 0.8 * dt);
+  else {
+    // Trôi theo quán tính (giống hệt server): ma sát lăn + cản gió.
+    const drag = (0.9 + 0.08 * Math.abs(state.speed)) * dt;
+    state.speed -= Math.sign(state.speed) * Math.min(Math.abs(state.speed), drag);
+  }
   const speedFactor = Math.min(1, Math.abs(state.speed) / 4);
   state.yaw +=
     input.steer * 1.35 * speedFactor * dt * (state.speed < 0 ? -1 : 1);
@@ -3335,8 +3341,51 @@ function initWorld() {
     scene.add(mesh);
     vehicleMeshes.set(vehicle.id, mesh);
   }
+  warmupShaders();
   addEventListener("resize", resizeWorld);
   requestAnimationFrame(frame);
+}
+// Biên dịch sẵn MỌI shader ngay khi vào map. Nếu không, lần đầu tiên cỏ /
+// loot / chớp nòng / nhân vật địch / hạt máu xuất hiện, trình duyệt phải dừng
+// để biên dịch shader → khựng 50–200 ms giữa trận (thường đúng lúc đấu súng).
+function warmupShaders() {
+  if (!renderer || !scene || !camera) return;
+  const kit = new THREE.Group();
+  try {
+    const { root, rig } = buildAvatar(catHeadMaterials, catEarMat);
+    for (const kind of ["ranger", "sniper"]) {
+      const weapon = buildBakedWeapon(kind, mergeGeometries);
+      const flash = makeMuzzleFlash(1);
+      flash.visible = true;
+      weapon.add(flash);
+      rig.weaponMount.add(weapon);
+    }
+    kit.add(root);
+    const indicators = indicatorAssets();
+    kit.add(new THREE.Mesh(indicators.ring, indicators.ringMat));
+    kit.add(new THREE.Mesh(indicators.cross, indicators.crossMat));
+    for (const material of bloodMaterials) kit.add(new THREE.Mesh(bloodGeometry, material));
+    kit.add(buildChute());
+  } catch (error) {
+    console.warn("warmup kit:", error);
+  }
+  kit.position.copy(camera.position);
+  scene.add(kit);
+  // Tạm bật mọi vật đang ẩn (cỏ xa, loot xa, súng tay, máy bay...) để compile.
+  const hidden = [];
+  scene.traverse((o) => {
+    if (!o.visible) {
+      hidden.push(o);
+      o.visible = true;
+    }
+  });
+  try {
+    renderer.compile(scene, camera);
+  } catch (error) {
+    console.warn("shader warmup:", error);
+  }
+  for (const o of hidden) o.visible = false;
+  scene.remove(kit);
 }
 function resizeWorld() {
   if (!renderer) return;
@@ -3623,7 +3672,12 @@ function renderPlayers(state) {
       local.hp = Math.round(Number(p.hp) || 0);
       local.kills = p.kills;
       local.placement = p.placement || 0;
-      local.groundY = Number(p.groundY) || 0;
+      // KHÔNG ghi đè local.groundY bằng giá trị server lúc đang đi bộ: gói server
+      // tới trễ ~50–150 ms nên độ cao cũ làm client tính sai "đang đứng trên đá /
+      // mái nào" → bị chặn hoặc tụt xuống rồi bật lại (màn hình giật về sau).
+      // Client tự tính độ cao chân mỗi khung hình (standingHeightAt).
+      if (local.state !== "ground" && local.state !== "lobby")
+        local.groundY = Number(p.groundY) || 0;
       if (local.hp <= 0 && !deathView) beginDeathView(p);
       const previousVehicleId = local.vehicleId;
       local.vehicleId = p.vehicleId || null;
@@ -3760,6 +3814,11 @@ function renderPlayers(state) {
     mesh.userData.crouching = Boolean(p.crouching);
     mesh.userData.prone = Boolean(p.prone);
     mesh.userData.swimming = Boolean(p.swimming);
+    // Nhảy: dựng tư thế co gối khi đang ở trên không; phát tiếng đáp đất khi chạm đất.
+    const wasJumping = mesh.userData.jumpY > 0.05;
+    mesh.userData.jumpY = Number(p.jumpY) || 0;
+    if (wasJumping && mesh.userData.jumpY <= 0.02 && p.alive && (p.state || "lobby") === "ground")
+      playJumpLand(p.x, p.groundY || 0, p.z, false);
     const wasReloading = Boolean(mesh.userData.reloading);
     mesh.userData.reloading = Boolean(p.reloading);
     if (mesh.userData.reloading && !wasReloading && p.alive)
@@ -6007,9 +6066,11 @@ function animateAvatars(dt) {
               ? "swim"
               : ud.prone
                 ? "prone"
-                : ud.crouching
-                  ? "crouch"
-                  : "stand";
+                : ud.jumpY > 0.05
+                  ? "jump"
+                  : ud.crouching
+                    ? "crouch"
+                    : "stand";
     const armed = ud.weapon.visible || ud.sniperWeapon.visible;
     poseAvatar(
       ud.rig,
@@ -7465,19 +7526,42 @@ function playChuteOpen(position) {
   }); // vải sột soạt
   toneBurst(a, { at: 0.04, duration: 0.3, from: 140, to: 55, gain: 0.7 }); // cú giật nặng
 }
+// Tiếp đất sau khi NHẢY DÙ: cả người đổ xuống đất (cú "huỵch" nặng, trầm), lăn
+// một vòng giảm chấn, dây dù căng rồi tán dù xẹp phập phồng, khóa đai cách cách.
 function playLanding(position) {
-  const a = spatialAudio(position, { volume: 0.9, ref: 3, max: 45 });
+  const a = spatialAudio(position, { volume: 1, ref: 3, max: 50 });
   if (!a) return;
-  toneBurst(a, { duration: 0.22, from: 110, to: 42, gain: 0.95 }); // tiếng chạm đất
-  noiseBurst(a, { duration: 0.2, filter: "lowpass", freq: 900, gain: 1 });
-  noiseBurst(a, {
-    at: 0.08,
-    duration: 0.3,
-    filter: "bandpass",
-    freq: 500,
-    q: 0.7,
-    gain: 0.35,
-  }); // dù xẹp xuống
+  toneBurst(a, { duration: 0.28, from: 85, to: 30, gain: 1.25 }); // thân người đập đất
+  noiseBurst(a, { duration: 0.16, filter: "lowpass", freq: 700, gain: 1.1, drive: 6 });
+  noiseBurst(a, { at: 0.12, duration: 0.45, filter: "lowpass", freq: 420, gain: 0.55 }); // lăn người
+  toneBurst(a, { at: 0.2, duration: 0.14, from: 70, to: 40, gain: 0.45 }); // chạm đất lần 2 khi lăn
+  noiseBurst(a, { at: 0.18, duration: 0.7, filter: "bandpass", freq: 260, q: 0.6, gain: 0.5 }); // tán dù xẹp
+  noiseBurst(a, { at: 0.45, duration: 0.55, filter: "bandpass", freq: 180, q: 0.8, gain: 0.35 }); // vải dù phập phồng
+  noiseBurst(a, { at: 0.62, duration: 0.025, filter: "bandpass", freq: 3400, q: 4, gain: 0.7 }); // tháo khóa đai
+  noiseBurst(a, { at: 0.7, duration: 0.025, filter: "bandpass", freq: 3100, q: 4, gain: 0.55 });
+}
+// Đáp đất sau khi NHẢY (bật tại chỗ): hai bàn chân chạm gần như cùng lúc, đầu gối
+// nhún, trang bị trên người va lách cách; tiếng mặt đất theo bề mặt.
+function playJumpLand(x, y, z, ownPlayer) {
+  const a = spatialAudio(ownPlayer ? null : { x, y: y + 0.1, z }, {
+    volume: ownPlayer ? 0.45 : 0.8,
+    ref: 2,
+    max: 26,
+  });
+  if (!a) return;
+  const surface = footSurface(x, z);
+  for (const [at, g] of [[0, 1], [0.018, 0.8]]) {
+    toneBurst(a, { at, duration: 0.09, from: surface === "wood" ? 170 : 115, to: 55, gain: 0.55 * g }); // gót chạm đất
+    if (surface === "grass") noiseBurst(a, { at, duration: 0.14, filter: "bandpass", freq: 2400, q: 0.7, gain: 0.5 * g });
+    else if (surface === "sand") noiseBurst(a, { at, duration: 0.18, filter: "highpass", freq: 2600, gain: 0.4 * g });
+    else if (surface === "road") noiseBurst(a, { at, duration: 0.04, filter: "bandpass", freq: 1800, q: 2, gain: 0.9 * g });
+    else if (surface === "wood") noiseBurst(a, { at, duration: 0.06, filter: "bandpass", freq: 850, q: 3, gain: 0.8 * g });
+    else if (surface === "water" || surface === "mud") noiseBurst(a, { at, duration: 0.25, filter: "lowpass", freq: 1400, gain: 0.8 * g });
+    noiseBurst(a, { at, duration: 0.08, filter: "lowpass", freq: 450, gain: 0.6 * g });
+  }
+  // Súng, băng đạn, giáp va nhau khi nhún gối.
+  noiseBurst(a, { at: 0.05, duration: 0.04, filter: "bandpass", freq: 3200, q: 3, gain: 0.35 });
+  toneBurst(a, { at: 0.06, duration: 0.05, type: "triangle", from: 2200, to: 1700, gain: 0.04 });
 }
 function playJumpWhoosh() {
   const a = spatialAudio(null, { volume: 0.6 });
@@ -7703,16 +7787,19 @@ function frame() {
           verticalSpeed = 0;
           grounded = true;
           local.jumping = false;
+          playJumpLand(local.x, local.groundY, local.z, true);
         }
       }
       if (grounded) {
         jumpOffset = 0;
-        camera.position.y +=
-          (targetHeight - camera.position.y) * Math.min(12 * dt, 1);
-        if (!isCrouching && (dx || dz)) {
-          camera.position.y += Math.sin(Date.now() * 0.012) * 0.025;
-        }
+        // Độ cao gốc của mắt đuổi mượt theo mặt đất; nhún đầu khi đi là một
+        // ĐỘ LỆCH theo nhịp bước (trước đây cộng dồn sin mỗi khung hình → rung).
+        cameraBaseY += (targetHeight - cameraBaseY) * Math.min(12 * dt, 1);
+        const bob = !isCrouching && isMoving ? Math.sin(localGaitPhase * 2) * 0.022 : 0;
+        headBob += (bob - headBob) * Math.min(14 * dt, 1);
+        camera.position.y = cameraBaseY + headBob;
       } else {
+        cameraBaseY = targetHeight;
         camera.position.y = targetHeight + jumpOffset;
       }
     }
@@ -7783,16 +7870,28 @@ function frame() {
 let frameTimeAvg = 1 / 60,
   resolutionScale = 1,
   resolutionCheckAt = 0;
+// Mỗi lần đổi độ phân giải, trình duyệt cấp phát lại bộ đệm vẽ (khựng một
+// nhịp). Bản cũ có thể hạ rồi tăng lại mỗi 2 giây khi FPS dao động quanh ngưỡng
+// (vd. lúc nhìn xuống đám cỏ) → giật định kỳ. Nay: chỉ hạ khi chậm LIÊN TỤC
+// ~4 s, chỉ tăng lại khi mượt liên tục ~12 s, và nghỉ ít nhất 8 s sau mỗi lần đổi.
+let slowChecks = 0,
+  fastChecks = 0,
+  resolutionChangedAt = 0;
 function adaptResolution(dt) {
   frameTimeAvg += (dt - frameTimeAvg) * 0.05;
   const now = performance.now();
   if (now < resolutionCheckAt) return;
-  resolutionCheckAt = now + 2000;
+  resolutionCheckAt = now + 1000;
+  slowChecks = frameTimeAvg > 1 / 42 ? slowChecks + 1 : 0;
+  fastChecks = frameTimeAvg < 1 / 57 ? fastChecks + 1 : 0;
+  if (now - resolutionChangedAt < 8000) return;
   let next = resolutionScale;
-  if (frameTimeAvg > 1 / 45) next = Math.max(0.55, resolutionScale - 0.1);
-  else if (frameTimeAvg < 1 / 58) next = Math.min(1, resolutionScale + 0.05);
+  if (slowChecks >= 4) next = Math.max(0.55, resolutionScale - 0.1);
+  else if (fastChecks >= 12) next = Math.min(1, resolutionScale + 0.05);
   if (Math.abs(next - resolutionScale) < 0.001) return;
   resolutionScale = next;
+  resolutionChangedAt = now;
+  slowChecks = fastChecks = 0;
   renderer.setPixelRatio(graphicsPixelRatio());
 }
 function showResult() {

@@ -293,7 +293,9 @@ const _d = new THREE.Vector3(),
   _q = new THREE.Quaternion(),
   _qi = new THREE.Quaternion();
 const DOWN = new THREE.Vector3(0, -1, 0);
-function solveArm(arm, target) {
+// hintMode: "gun"  — cầm súng: khuỷu chĩa xuống và hơi ra ngoài;
+//           "free" — tay tự do: khuỷu chĩa ra SAU, cẳng tay gập về trước như người thật.
+function solveArm(arm, target, hintMode = "gun") {
   const s = arm.shoulder.position;
   _d.subVectors(target, s);
   const L = Math.min(Math.max(_d.length(), 0.08), UPPER_ARM + FOREARM - 0.002);
@@ -301,8 +303,8 @@ function solveArm(arm, target) {
   const cosA =
     (UPPER_ARM * UPPER_ARM + L * L - FOREARM * FOREARM) / (2 * UPPER_ARM * L);
   const a = Math.acos(Math.min(1, Math.max(-1, cosA)));
-  // Khuỷu tay chĩa xuống dưới và ra ngoài.
-  _hint.set(arm.side * 0.6, -1, 0.2).normalize();
+  if (hintMode === "gun") _hint.set(arm.side * 0.6, -1, 0.2).normalize();
+  else _hint.set(arm.side * 0.35, -0.2, 1).normalize();
   _n.crossVectors(_d, _hint).normalize();
   _u.copy(_d).applyAxisAngle(_n, -a);
   if (_u.dot(_hint) < 0) _u.copy(_d).applyAxisAngle(_n, a);
@@ -375,6 +377,11 @@ export function poseAvatar(rig, pose, state, dt) {
     kneeBase = -0.05;
     swing = moving ? 0.22 : 0;
     kneeSwing = moving ? 0.4 : 0;
+  } else if (stance === "jump") {
+    // Bật nhảy: co gối, đùi đưa ra trước, thân hơi cúi — nhìn tự nhiên từ xa.
+    lean = 0.12;
+    thighBase = 0.55;
+    kneeBase = -1.05;
   } else if (stance === "swim") {
     lean = 0.1;
     swing = 0.35;
@@ -432,7 +439,10 @@ export function poseAvatar(rig, pose, state, dt) {
   rig.arms.forEach((arm, i) => {
     if (
       grip &&
-      (stance === "stand" || stance === "crouch" || stance === "prone")
+      (stance === "stand" ||
+        stance === "crouch" ||
+        stance === "prone" ||
+        stance === "jump")
     ) {
       // Điểm cầm (toạ độ của giá súng) → toạ độ thân.
       _t.copy(i === 1 ? grip.right : grip.left)
@@ -445,13 +455,13 @@ export function poseAvatar(rig, pose, state, dt) {
         state.driver ? 0.34 : 0.02,
         state.driver ? -0.42 : -0.3,
       );
-      solveArm(arm, _t);
+      solveArm(arm, _t, "free");
     } else if (stance === "chute") {
       _t.set(arm.side * 0.3, 0.98, -0.05);
-      solveArm(arm, _t);
+      solveArm(arm, _t, "free");
     } else if (stance === "air") {
       _t.set(arm.side * 0.62, 0.62 + Math.sin(pose.phase + i) * 0.03, -0.1);
-      solveArm(arm, _t);
+      solveArm(arm, _t, "free");
     } else if (stance === "swim") {
       const s = Math.sin(pose.phase + i * Math.PI);
       _t.set(
@@ -459,14 +469,16 @@ export function poseAvatar(rig, pose, state, dt) {
         0.35,
         -0.35 - Math.cos(pose.phase + i * Math.PI) * 0.15,
       );
-      solveArm(arm, _t);
+      solveArm(arm, _t, "free");
     } else {
+      // Tay không cầm súng: buông tự nhiên dọc thân, đánh nhẹ theo nhịp bước.
+      const swingArm = i ? sinP : -sinP;
       _t.set(
-        arm.side * 0.3,
-        0.05 + (i ? sinP : -sinP) * 0.05,
-        -0.05 - (i ? sinP : -sinP) * 0.12,
+        arm.side * 0.31,
+        -0.08 + Math.abs(swingArm) * 0.03,
+        -0.03 - swingArm * 0.14,
       );
-      solveArm(arm, _t);
+      solveArm(arm, _t, "free");
     }
   });
 }

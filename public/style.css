@@ -2378,5 +2378,6 @@ body:has(#game.active) #game {
     font-size: 10px;
   }
 }
-/* Chừa chỗ cho dòng ĐÃ HẠ dưới ô CÒN SỐNG. */
-.flight-hud{top:104px}
+
+/* ĐÃ HẠ nằm góc trên bên phải, ngay trên ô PING. */
+.kill-hud{position:absolute;top:40px;right:25px;margin:0;padding:3px 8px;background:#111a;font-size:11px;letter-spacing:1px;color:#f3f3ed;text-shadow:0 1px 3px #000}
