@@ -1319,29 +1319,130 @@ function detachFromVehicle(room, player) {
   player.vehicleId = null;
   player.vehicleSeat = -1;
 }
-function vehicleFootprintBlocked(room, vehicle, x, z, yaw) {
+// ---------------------------------------------------------------------------
+// VA CHẠM XE (client game.js dùng ĐÚNG thuật toán này để dự đoán xe mình lái).
+// Điểm lấy mẫu quanh thân xe (đơn vị = nửa rộng / nửa dài): 4 góc, giữa mũi,
+// giữa đuôi và 3 điểm dọc mỗi hông (lan can cầu mỏng không lọt giữa 2 mẫu).
+// ---------------------------------------------------------------------------
+const CAR_HALF_X = 1.03,
+  CAR_HALF_Z = 1.84;
+const CAR_SAMPLES = [
+  [-1, -1], [-1, -0.5], [-1, 0], [-1, 0.5], [-1, 1],
+  [1, -1], [1, -0.5], [1, 0], [1, 0.5], [1, 1],
+  [0, -1], [0, 1],
+];
+// Số điểm mẫu bị chặn; trả về cả vật cản đầu tiên để tính hướng trượt.
+function vehicleBlockInfo(room, vehicle, x, z, yaw) {
   // Unbridged water stalls and sinks cars; flagged road crossings are bridges.
   if (waterAt(room, x, z) && !isOnBridge(room.obstacles, x, z, 1.2))
-    return false;
-  const halfX = 1.03,
-    halfZ = 1.84;
-  const samples = [];
-  for (const side of [-1, 0, 1]) {
-    for (const forward of [-1, 0, 1]) {
-      if (Math.abs(side) !== 1 && Math.abs(forward) !== 1) continue;
-      const lx = side * halfX,
-        lz = forward * halfZ;
-      samples.push({
-        x: x + Math.cos(yaw) * lx + Math.sin(yaw) * lz,
-        z: z - Math.sin(yaw) * lx + Math.cos(yaw) * lz,
-      });
+    return { count: 0, fences: [] };
+  const c = Math.cos(yaw),
+    s = Math.sin(yaw);
+  let count = 0;
+  const fences = [];
+  for (const [sx, sz] of CAR_SAMPLES) {
+    const lx = sx * CAR_HALF_X,
+      lz = sz * CAR_HALF_Z;
+    const px = x + c * lx + s * lz,
+      pz = z - s * lx + c * lz;
+    // Xe không cần phép thử bề mặt mái/đá dành cho người đi bộ (mover = null).
+    if (blockedPosition(room, px, pz, null, vehicle.id, true)) {
+      count++;
+      const fence = fenceAt(room, px, pz);
+      if (fence && !fences.includes(fence)) fences.push(fence);
     }
   }
-  // Xe không cần phép thử bề mặt mái/đá dành cho người đi bộ; bỏ mover để
-  // tránh quét lại toàn bộ địa hình tìm bề mặt hỗ trợ cho từng góc xe.
-  return samples.some((point) =>
-    blockedPosition(room, point.x, point.z, null, vehicle.id, true),
-  );
+  return { count, fences };
+}
+function vehicleFootprintBlocked(room, vehicle, x, z, yaw) {
+  return vehicleBlockInfo(room, vehicle, x, z, yaw).count > 0;
+}
+// Lan can / hàng rào đang chặn điểm này (để xe trượt dọc theo nó).
+function fenceAt(room, x, z) {
+  for (const o of nearObstacles(room.obstacles, x, z))
+    if (o.type === "fence" && blockedByFence(o, x, z, PLAYER_RADIUS)) return o;
+  return null;
+}
+// Di chuyển xe một bước có xử lý va chạm:
+//  - trống → đi thẳng;
+//  - đụng lan can/rào → TRƯỢT dọc theo nó (mất chút tốc độ) thay vì dội ngược
+//    và kẹt cứng như trước;
+//  - đã lỡ lún vào vật cản → cho phép mọi bước làm giảm độ lún (tự thoát ra).
+// Trả về: "moved" | "slid" | "blocked".
+function moveVehicleStep(room, vehicle, stepX, stepZ, current) {
+  const nx = vehicle.x + stepX,
+    nz = vehicle.z + stepZ;
+  const next = vehicleBlockInfo(room, vehicle, nx, nz, vehicle.yaw);
+  if (next.count === 0 || next.count < current.count) {
+    vehicle.x = nx;
+    vehicle.z = nz;
+    current.count = next.count;
+    return "moved";
+  }
+  // Thử trượt theo từng đoạn lan can đang chạm (ở chỗ nối 2 đoạn của cầu
+  // cong, đoạn thứ nhất đẩy mũi xe vào đoạn thứ hai → thử luôn đoạn thứ hai).
+  for (const fence of next.fences) {
+    const tx = Math.sin(fence.yaw || 0),
+      tz = Math.cos(fence.yaw || 0);
+    const along = (stepX * tx + stepZ * tz) * 0.92;
+    if (Math.abs(along) < 1e-4) continue;
+    const sx = vehicle.x + tx * along,
+      sz = vehicle.z + tz * along;
+    const slide = vehicleBlockInfo(room, vehicle, sx, sz, vehicle.yaw);
+    // Trượt DỌC lan can: cho phép khi không lún thêm (đang cạ thì số điểm
+    // chạm giữ nguyên — trước đây đòi phải giảm nên xe cạ rào là kẹt cứng).
+    if (slide.count > current.count) continue;
+    vehicle.x = sx;
+    vehicle.z = sz;
+    current.count = slide.count;
+    alignVehicleToFence(room, vehicle, fence, current, Math.hypot(stepX, stepZ));
+    return "slid";
+  }
+  // Chỗ lan can gập vào trong (cầu cong): trượt tịnh tiến vẫn cắm mũi xe vào
+  // đoạn kế tiếp. Cho xe đi hết bước rồi ĐẨY RA khỏi lan can theo pháp tuyến
+  // (mỗi lần 12 cm, tối đa ~0.7 m) — cách xử lý va chạm chuẩn của game xe.
+  if (next.fences.length) {
+    let px = nx,
+      pz = nz,
+      info = next;
+    for (let k = 0; k < 6 && info.count > current.count && info.fences.length; k++) {
+      const fence = info.fences[0];
+      const fy = fence.yaw || 0;
+      const nxv = Math.cos(fy),
+        nzv = -Math.sin(fy); // pháp tuyến của lan can
+      const side = (px - fence.x) * nxv + (pz - fence.z) * nzv >= 0 ? 1 : -1;
+      px += nxv * side * 0.12;
+      pz += nzv * side * 0.12;
+      info = vehicleBlockInfo(room, vehicle, px, pz, vehicle.yaw);
+    }
+    if (info.count <= current.count) {
+      vehicle.x = px;
+      vehicle.z = pz;
+      current.count = info.count;
+      alignVehicleToFence(room, vehicle, next.fences[0], current, Math.hypot(stepX, stepZ));
+      return "slid";
+    }
+  }
+  return "blocked";
+}
+// Xe cạ lan can bị nắn dần cho song song với lan can (như xe thật quệt rào),
+// nhờ vậy đi tiếp được qua chỗ nối các đoạn lan can của cầu cong.
+// Nắn theo QUÃNG ĐƯỜNG (≈0.29 rad mỗi mét cạ) để client — bước nhỏ theo
+// khung hình — cho đúng kết quả như server bước 0.45 m.
+function alignVehicleToFence(room, vehicle, fence, current, stepLen) {
+  const fy = fence.yaw || 0;
+  // Hướng mũi xe = (-sin yaw, -cos yaw); lan can = (sin fy, cos fy).
+  const forwardDot = -Math.sin(vehicle.yaw) * Math.sin(fy) - Math.cos(vehicle.yaw) * Math.cos(fy);
+  const targetYaw = forwardDot >= 0 ? fy + Math.PI : fy;
+  const diff = Math.atan2(Math.sin(targetYaw - vehicle.yaw), Math.cos(targetYaw - vehicle.yaw));
+  const maxTurn = 0.13 * stepLen;
+  const turn = Math.max(-maxTurn, Math.min(maxTurn, diff));
+  if (Math.abs(turn) < 1e-4) return;
+  const turned = vehicleBlockInfo(room, vehicle, vehicle.x, vehicle.z, vehicle.yaw + turn);
+  if (turned.count <= current.count) {
+    vehicle.yaw += turn;
+    current.count = turned.count;
+  }
 }
 function tickVehicles(room, now) {
   let changed = false;
@@ -1405,8 +1506,19 @@ function tickVehicles(room, now) {
       vehicle.speed -= Math.sign(vehicle.speed) * Math.min(Math.abs(vehicle.speed), drag);
     }
     const speedFactor = Math.min(1, Math.abs(vehicle.speed) / 4);
-    vehicle.yaw +=
+    const steerYaw =
       controls.steer * 1.35 * speedFactor * dt * (vehicle.speed < 0 ? -1 : 1);
+    // Độ lún hiện tại (0 = không chạm gì) — tính 1 lần mỗi tick.
+    const current = vehicleBlockInfo(room, vehicle, vehicle.x, vehicle.z, vehicle.yaw);
+    if (steerYaw) {
+      // KHÔNG cho xe xoay lún vào lan can/tường: trước đây xoay trước, kiểm tra
+      // sau → thân xe cắm vào rào, mọi vị trí kế tiếp đều bị chặn → kẹt cứng.
+      const turned = vehicleBlockInfo(room, vehicle, vehicle.x, vehicle.z, vehicle.yaw + steerYaw);
+      if (turned.count <= current.count) {
+        vehicle.yaw += steerYaw;
+        current.count = turned.count;
+      }
+    }
     const distance = vehicle.speed * dt;
     const dx = -Math.sin(vehicle.yaw) * distance;
     const dz = -Math.cos(vehicle.yaw) * distance;
@@ -1426,12 +1538,15 @@ function tickVehicles(room, now) {
         changed = true;
         break;
       }
-      if (vehicleFootprintBlocked(room, vehicle, nx, nz, vehicle.yaw)) {
+      const result = moveVehicleStep(room, vehicle, dx / steps, dz / steps, current);
+      const stepLen = Math.abs(distance) / steps;
+      if (result === "blocked") {
+        // Đâm thẳng: dội nhẹ rồi dừng (không nảy qua lại mỗi tick).
         vehicle.speed *= -0.12;
         break;
       }
-      vehicle.x = nx;
-      vehicle.z = nz;
+      // Cạ lan can: mất ~3.3% tốc độ mỗi mét (tính theo quãng đường, khớp client).
+      if (result === "slid") vehicle.speed *= 1 - 0.033 * stepLen;
       moved = true;
     }
     vehicle.speed = Math.max(-22, Math.min(22, vehicle.speed));
@@ -1809,10 +1924,25 @@ wss.on("connection", (ws) => {
         const exitedSeat = p.vehicleSeat;
         const speed = Math.abs(vehicle.speed);
         const side = p.vehicleSeat === 0 ? -1 : 1;
-        const exitX = vehicle.x + Math.cos(vehicle.yaw) * side * 1.65;
-        const exitZ = vehicle.z - Math.sin(vehicle.yaw) * side * 1.65;
-        if (blockedPosition(room, exitX, exitZ, p.id, vehicle.id))
-          return send(ws, { type: "toast", text: "KHÔNG ĐỦ CHỖ ĐỂ RA XE" });
+        // Thử cửa bên mình → cửa bên kia → đầu xe → đuôi xe → chỗ trống gần
+        // nhất. Trước đây chỉ thử cửa bên mình: xe cạ sát lan can cầu thì
+        // "KHÔNG ĐỦ CHỖ ĐỂ RA XE" mãi mãi — xe kẹt, người cũng kẹt.
+        const c = Math.cos(vehicle.yaw),
+          s = Math.sin(vehicle.yaw);
+        const exits = [
+          [side * 1.65, 0],
+          [-side * 1.65, 0],
+          [0, -2.6],
+          [0, 2.6],
+        ].map(([lx, lz]) => ({ x: vehicle.x + c * lx + s * lz, z: vehicle.z - s * lx + c * lz }));
+        let exit = exits.find((e) => !blockedPosition(room, e.x, e.z, p.id, vehicle.id));
+        if (!exit) {
+          const spot = findFreeSpot(room, exits[0].x, exits[0].z, p.id);
+          if (!blockedPosition(room, spot.x, spot.z, p.id)) exit = spot;
+        }
+        if (!exit) return send(ws, { type: "toast", text: "KHÔNG ĐỦ CHỖ ĐỂ RA XE" });
+        const exitX = exit.x,
+          exitZ = exit.z;
         p.vehicleId = null;
         p.vehicleSeat = -1;
         p.x = exitX;

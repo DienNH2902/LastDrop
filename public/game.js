@@ -3264,31 +3264,231 @@ function stepCar(state, input, dt) {
     state.speed -= Math.sign(state.speed) * Math.min(Math.abs(state.speed), drag);
   }
   const speedFactor = Math.min(1, Math.abs(state.speed) / 4);
-  state.yaw +=
+  const steerYaw =
     input.steer * 1.35 * speedFactor * dt * (state.speed < 0 ? -1 : 1);
-  state.x -= Math.sin(state.yaw) * state.speed * dt;
-  state.z -= Math.cos(state.yaw) * state.speed * dt;
+  // Va chạm GIỐNG HỆT server (moveVehicleStep): trước đây máy mình dự đoán xe
+  // đi xuyên lan can trong khi server chặn lại → mỗi gói tin xe bị kéo giật về
+  // ("lag xe" mỗi lần cạ rào cầu).
+  const current = carBlockInfo(state.id, state.x, state.z, state.yaw);
+  if (steerYaw) {
+    const turned = carBlockInfo(state.id, state.x, state.z, state.yaw + steerYaw);
+    if (turned.count <= current.count) {
+      state.yaw += steerYaw;
+      current.count = turned.count;
+    }
+  }
+  const distance = state.speed * dt;
+  const dx = -Math.sin(state.yaw) * distance,
+    dz = -Math.cos(state.yaw) * distance;
+  const steps = Math.max(1, Math.ceil(Math.abs(distance) / 0.45));
+  for (let i = 0; i < steps; i++) {
+    const result = moveCarStep(state, dx / steps, dz / steps, current);
+    const stepLen = Math.abs(distance) / steps;
+    if (result === "blocked") {
+      state.speed *= -0.12;
+      break;
+    }
+    if (result === "slid") state.speed *= 1 - 0.033 * stepLen;
+  }
+}
+// ---- Va chạm xe phía client: bản sao của vehicleBlockInfo / moveVehicleStep
+// trong server.js (cùng điểm mẫu, cùng bán kính, cùng luật trượt). ----
+const CAR_HALF_X = 1.03,
+  CAR_HALF_Z = 1.84;
+const CAR_SAMPLES = [
+  [-1, -1], [-1, -0.5], [-1, 0], [-1, 0.5], [-1, 1],
+  [1, -1], [1, -0.5], [1, 0], [1, 0.5], [1, 1],
+  [0, -1], [0, 1],
+];
+function fenceBlocks(o, x, z, radius) {
+  const dx = x - o.x,
+    dz = z - o.z;
+  const c = Math.cos(o.yaw || 0),
+    s = Math.sin(o.yaw || 0);
+  return (
+    Math.abs(c * dx - s * dz) < o.w / 2 + radius &&
+    Math.abs(s * dx + c * dz) < o.length / 2 + radius
+  );
+}
+// Một điểm trên thân xe có đụng gì không (khớp blockedPosition của server với
+// mover = null, bỏ qua người chơi, bỏ qua chính chiếc xe này).
+function carPointBlocked(ownId, x, z) {
+  if (x < -MAP_HALF + 1 || x > MAP_HALF - 1 || z < -MAP_HALF + 1 || z > MAP_HALF - 1)
+    return true;
+  const r = PLAYER_RADIUS;
+  for (const o of obstaclesNear(x, z)) {
+    if (o.solid === false) continue;
+    if (o.type === "house" || o.type === "hut") {
+      if (blockedByBuilding(o, x, z, r)) return true;
+      continue;
+    }
+    if (o.type === "fence") {
+      if (fenceBlocks(o, x, z, r)) return true;
+      continue;
+    }
+    const footprint = obstacleFootprintRadius(o);
+    if (footprint !== null) {
+      if (Math.hypot(x - o.x, z - o.z) < footprint + r) return true;
+      continue;
+    }
+    const nearestX = Math.max(o.x - o.w / 2, Math.min(x, o.x + o.w / 2));
+    const nearestZ = Math.max(o.z - o.w / 2, Math.min(z, o.z + o.w / 2));
+    if (Math.hypot(x - nearestX, z - nearestZ) < r) return true;
+  }
+  for (const v of gameState?.vehicles || []) {
+    if (v.id === ownId) continue;
+    const dx = x - v.x,
+      dz = z - v.z;
+    const c = Math.cos(v.yaw),
+      s = Math.sin(v.yaw);
+    if (Math.abs(c * dx - s * dz) < CAR_HALF_X + r && Math.abs(s * dx + c * dz) < CAR_HALF_Z + r)
+      return true;
+  }
+  return null;
+}
+// Lan can đang chặn điểm này (khớp fenceAt của server).
+function fenceAtPoint(x, z) {
+  for (const o of obstaclesNear(x, z))
+    if (o.type === "fence" && o.solid !== false && fenceBlocks(o, x, z, PLAYER_RADIUS)) return o;
+  return null;
+}
+function carBlockInfo(ownId, x, z, yaw) {
+  if (waterAt(x, z) && !isOnBridgeAt(x, z, 1.2)) return { count: 0, fences: [] };
+  const c = Math.cos(yaw),
+    s = Math.sin(yaw);
+  let count = 0;
+  const fences = [];
+  for (const [sx, sz] of CAR_SAMPLES) {
+    const lx = sx * CAR_HALF_X,
+      lz = sz * CAR_HALF_Z;
+    const px = x + c * lx + s * lz,
+      pz = z - s * lx + c * lz;
+    if (carPointBlocked(ownId, px, pz)) {
+      count++;
+      const fence = fenceAtPoint(px, pz);
+      if (fence && !fences.includes(fence)) fences.push(fence);
+    }
+  }
+  return { count, fences };
+}
+function moveCarStep(state, stepX, stepZ, current) {
+  const nx = state.x + stepX,
+    nz = state.z + stepZ;
+  const next = carBlockInfo(state.id, nx, nz, state.yaw);
+  if (next.count === 0 || next.count < current.count) {
+    state.x = nx;
+    state.z = nz;
+    current.count = next.count;
+    return "moved";
+  }
+  // Trượt dọc từng đoạn lan can đang chạm (chỗ nối 2 đoạn của cầu cong).
+  for (const fence of next.fences) {
+    const tx = Math.sin(fence.yaw || 0),
+      tz = Math.cos(fence.yaw || 0);
+    const along = (stepX * tx + stepZ * tz) * 0.92;
+    if (Math.abs(along) < 1e-4) continue;
+    const sx = state.x + tx * along,
+      sz = state.z + tz * along;
+    const slide = carBlockInfo(state.id, sx, sz, state.yaw);
+    if (slide.count > current.count) continue;
+    state.x = sx;
+    state.z = sz;
+    current.count = slide.count;
+    alignCarToFence(state, fence, current, Math.hypot(stepX, stepZ));
+    return "slid";
+  }
+  // Chỗ lan can gập vào trong: đi hết bước rồi đẩy ra theo pháp tuyến lan can
+  // (giống hệt moveVehicleStep của server).
+  if (next.fences.length) {
+    let px = nx,
+      pz = nz,
+      info = next;
+    for (let k = 0; k < 6 && info.count > current.count && info.fences.length; k++) {
+      const fence = info.fences[0];
+      const fy = fence.yaw || 0;
+      const nxv = Math.cos(fy),
+        nzv = -Math.sin(fy);
+      const side = (px - fence.x) * nxv + (pz - fence.z) * nzv >= 0 ? 1 : -1;
+      px += nxv * side * 0.12;
+      pz += nzv * side * 0.12;
+      info = carBlockInfo(state.id, px, pz, state.yaw);
+    }
+    if (info.count <= current.count) {
+      state.x = px;
+      state.z = pz;
+      current.count = info.count;
+      alignCarToFence(state, next.fences[0], current, Math.hypot(stepX, stepZ));
+      return "slid";
+    }
+  }
+  return "blocked";
+}
+// Cạ lan can: nắn dần xe song song với lan can (giống alignVehicleToFence).
+function alignCarToFence(state, fence, current, stepLen) {
+  const fy = fence.yaw || 0;
+  const forwardDot = -Math.sin(state.yaw) * Math.sin(fy) - Math.cos(state.yaw) * Math.cos(fy);
+  const targetYaw = forwardDot >= 0 ? fy + Math.PI : fy;
+  const diff = Math.atan2(Math.sin(targetYaw - state.yaw), Math.cos(targetYaw - state.yaw));
+  const maxTurn = 0.13 * stepLen;
+  const turn = Math.max(-maxTurn, Math.min(maxTurn, diff));
+  if (Math.abs(turn) < 1e-4) return;
+  const turned = carBlockInfo(state.id, state.x, state.z, state.yaw + turn);
+  if (turned.count <= current.count) {
+    state.yaw += turn;
+    current.count = turned.count;
+  }
+}
+// Mô phỏng xe mình lái theo ĐÚNG nhịp server (50 ms) thay vì từng khung hình:
+// va chạm (dội, trượt lan can, nắn thẳng) được quyết định theo nhịp, nên nhịp
+// 16 ms của client cho kết quả khác server → lệch vài mét khi cạ rào → giật.
+// Khung hình vẽ nội suy giữa 2 nhịp gần nhất (px/pz/pyaw → x/z/yaw).
+const CAR_TICK = 0.05;
+function advanceCar(sim, input, seconds) {
+  sim.acc += seconds;
+  let guard = 0;
+  while (sim.acc >= CAR_TICK && guard++ < 12) {
+    sim.px = sim.x;
+    sim.pz = sim.z;
+    sim.pyaw = sim.yaw;
+    stepCar(sim, input, CAR_TICK);
+    sim.acc -= CAR_TICK;
+  }
+  if (sim.acc >= CAR_TICK) sim.acc = 0; // khựng quá lâu: bỏ phần nợ, không tua dồn
+}
+function carRenderPose(sim) {
+  const a = Math.min(1, sim.acc / CAR_TICK);
+  return {
+    x: sim.px + (sim.x - sim.px) * a,
+    z: sim.pz + (sim.z - sim.pz) * a,
+    yaw: sim.pyaw + angleDelta(sim.pyaw, sim.yaw) * a,
+  };
 }
 function reconcileDrive(vehicle) {
   // Gói server phản ánh phím đã gửi khoảng 1 RTT trước: tua trạng thái server
   // tiến lên đúng khoảng đó bằng phím hiện tại để ra "hiện tại" của máy mình.
   const lead = Math.min(0.3, (rttMs || 60) / 1000 + 0.025);
   const next = {
+    id: vehicle.id, // để phép thử va chạm bỏ qua chính chiếc xe này
     x: vehicle.x,
     z: vehicle.z,
     yaw: vehicle.yaw,
     speed: vehicle.speed,
+    px: vehicle.x,
+    pz: vehicle.z,
+    pyaw: vehicle.yaw,
+    // +1 nhịp: luôn có cặp (nhịp trước, nhịp sau) để nội suy đúng thời điểm "lead".
+    acc: CAR_TICK,
   };
-  const input = carInputs();
-  for (let left = lead; left > 1e-4; left -= 1 / 60)
-    stepCar(next, input, Math.min(1 / 60, left));
+  advanceCar(next, carInputs(), lead);
+  const nextShown = carRenderPose(next);
   if (driveSim && driveSim.id === vehicle.id) {
-    const shownX = driveSim.x + driveSim.ox;
-    const shownZ = driveSim.z + driveSim.oz;
-    const shownYaw = driveSim.yaw + driveSim.oyaw;
-    driveSim.ox = shownX - next.x;
-    driveSim.oz = shownZ - next.z;
-    driveSim.oyaw = angleDelta(next.yaw, shownYaw);
+    const shown = carRenderPose(driveSim);
+    const shownX = shown.x + driveSim.ox;
+    const shownZ = shown.z + driveSim.oz;
+    const shownYaw = shown.yaw + driveSim.oyaw;
+    driveSim.ox = shownX - nextShown.x;
+    driveSim.oz = shownZ - nextShown.z;
+    driveSim.oyaw = angleDelta(nextShown.yaw, shownYaw);
     // Lệch quá xa (va chạm mạnh, xe chìm...) thì chấp nhận nhảy ngay.
     if (Math.hypot(driveSim.ox, driveSim.oz) > 5)
       driveSim.ox = driveSim.oz = driveSim.oyaw = 0;
@@ -3360,14 +3560,15 @@ function updateVehicleMeshes(dt) {
       !vehicle.submerged;
     let targetX, targetZ, targetYaw;
     if (localDriver) {
-      stepCar(driveSim, carInputs(), dt);
+      advanceCar(driveSim, carInputs(), dt);
       const decay = Math.exp(-7 * dt);
       driveSim.ox *= decay;
       driveSim.oz *= decay;
       driveSim.oyaw *= decay;
-      targetX = driveSim.x + driveSim.ox;
-      targetZ = driveSim.z + driveSim.oz;
-      targetYaw = driveSim.yaw + driveSim.oyaw;
+      const pose = carRenderPose(driveSim);
+      targetX = pose.x + driveSim.ox;
+      targetZ = pose.z + driveSim.oz;
+      targetYaw = pose.yaw + driveSim.oyaw;
     } else {
       const s = sampleSnapshots(
         vehicleSnaps.get(vehicle.id) || [],
