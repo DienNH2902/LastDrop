@@ -1299,12 +1299,17 @@ function obstacleBoundRadius(o) {
   if (o.type === "road" || o.type === "river") return (length + w) / 2;
   return Math.hypot(w, length) * 0.6;
 }
+// Loại obstacle chỉ dùng để dựng địa hình (không va chạm, không vẽ riêng).
+const TERRAIN_ONLY = new Set(["hill", "terrain", "plateau", "pad", "swamp"]);
+let mapTerrain = null;
 function setMapObstacles(list) {
   mapObstacles = list;
   mapHills = list.filter((obstacle) => obstacle.type === "hill");
+  // Cùng lưới độ cao với server (public/terrain.js) → đứng/lái/đạn khớp mặt đất.
+  mapTerrain = window.LDTerrain.build(list);
   obstacleCells = new Map();
   for (const o of list) {
-    if (o.type === "hill") continue;
+    if (TERRAIN_ONLY.has(o.type) || !Number.isFinite(o.x)) continue;
     const r = obstacleBoundRadius(o) + OBSTACLE_CELL_MARGIN;
     const x0 = Math.floor((o.x - r) / OBSTACLE_CELL),
       x1 = Math.floor((o.x + r) / OBSTACLE_CELL);
@@ -1331,16 +1336,8 @@ function obstaclesNear(x, z) {
     ) || NO_OBSTACLES
   );
 }
-function terrainHeightForHill(hill, x, z) {
-  const radiusX = hill.w / 2;
-  const radiusZ = (hill.length || hill.w) / 2;
-  const d2 = ((x - hill.x) / radiusX) ** 2 + ((z - hill.z) / radiusZ) ** 2;
-  return d2 >= 1 ? 0 : hill.h * Math.pow(1 - d2, 1.4);
-}
 function groundHeightAt(x, z) {
-  let height = 0;
-  for (const hill of mapHills)
-    height = Math.max(height, terrainHeightForHill(hill, x, z));
+  let height = mapTerrain ? mapTerrain.heightAt(x, z) : 0;
   if (isOnBridgeAt(x, z, 0.2)) height = Math.max(height, 0.3);
   return height;
 }
@@ -1450,41 +1447,277 @@ function waterAt(x, z) {
   }
   return null;
 }
+// ---------------------------------------------------------------------------
+// ĐỊA HÌNH TỰ NHIÊN: mặt đất liền khối theo lưới độ cao dùng chung với server
+// ---------------------------------------------------------------------------
+// Độ sâu lòng nước tại (x, z) — bỏ qua cầu (dưới gầm cầu vẫn là lòng sông).
+function waterBedDepth(x, z) {
+  for (const o of obstaclesNear(x, z)) {
+    if (o.type !== "river" && o.type !== "lake") continue;
+    if (window.LDTerrain.insideWater(o, x, z)) return o.depth || 4;
+  }
+  return 0;
+}
+// Danh sách đầm lầy lọc sẵn (hàm này gọi hàng chục nghìn lần khi dựng map).
+let swampCache = null,
+  swampCacheFor = null;
+function inSwamp(x, z, margin = 0) {
+  if (swampCacheFor !== mapObstacles) {
+    swampCacheFor = mapObstacles;
+    swampCache = mapObstacles.filter((o) => o.type === "swamp");
+  }
+  for (const o of swampCache)
+    if (window.LDTerrain.insideWater(o, x, z, margin)) return true;
+  return false;
+}
+function terrainColor(forest, x, z, h, slope, bed, swamp, seed, out) {
+  const n = window.LDTerrain.fbm(x / 18, z / 18, seed + 5, 3);
+  const n2 = window.LDTerrain.fbm(x / 5, z / 5, seed + 9, 2);
+  const mix = (hex, t) => out.lerp(tmpTerrainColor.set(hex), t);
+  if (forest) {
+    out.set(n > 0.55 ? "#5c8a43" : n > 0.42 ? "#4f7d3c" : "#44703a");
+    mix("#7d8a4a", Math.max(0, n2 - 0.62) * 1.6); // mảng cỏ úa
+    if (h > 18) mix("#56654a", Math.min(1, (h - 18) / 22)); // cỏ núi sẫm
+    if (slope > 0.45) mix(n2 > 0.5 ? "#6d6f66" : "#5d6058", Math.min(1, (slope - 0.45) * 2.2)); // vách đá
+    if (h > 34) mix("#7b7e78", Math.min(1, (h - 34) / 10));
+    if (h > 46) mix("#e8ecef", Math.min(1, (h - 46) / 8) * (slope < 1 ? 1 : 0.5)); // tuyết đỉnh núi
+    if (swamp) out.set(n2 > 0.5 ? "#3d4a2b" : "#454f2e");
+    if (bed > 0) out.set("#3e4b3a");
+    else if (h < 0.7 && waterBedDepth(x + 6, z) + waterBedDepth(x - 6, z) + waterBedDepth(x, z + 6) + waterBedDepth(x, z - 6) > 0)
+      out.set("#7b7657"); // bãi bồi ven sông
+  } else {
+    out.set(n > 0.55 ? "#d2ae74" : n > 0.42 ? "#c9a46a" : "#bf975f");
+    mix("#e0c28c", Math.max(0, n2 - 0.6) * 1.5);
+    if (slope > 0.3) {
+      // Vách núi sa mạc: các lớp đá trầm tích theo độ cao.
+      const band = Math.floor((h + n * 6) / 3.2) % 3;
+      mix(band === 0 ? "#b5794a" : band === 1 ? "#a3673f" : "#c48c58", Math.min(1, (slope - 0.3) * 2));
+    }
+    if (h > 55) mix("#8d5e3c", Math.min(1, (h - 55) / 20));
+  }
+  return out;
+}
+const tmpTerrainColor = new THREE.Color();
 function createGroundMesh(forest) {
-  const size = MAP_HALF * 2 + 20;
-  const segments = forest ? 320 : 1;
-  const step = size / segments;
-  const positions = [];
-  const indices = [];
-  for (let row = 0; row <= segments; row++) {
-    const z = -size / 2 + row * step;
-    for (let col = 0; col <= segments; col++) {
-      positions.push(-size / 2 + col * step, 0, z);
+  const T = mapTerrain;
+  const { N, CELL, EXTENT } = T;
+  const seed = (mapObstacles.find((o) => o.type === "terrain")?.seed || 1) | 0;
+  const vis = new Float32Array(N * N);
+  const colors = new Float32Array(N * N * 3);
+  const color = new THREE.Color();
+  for (let j = 0; j < N; j++) {
+    const z = j * CELL - EXTENT;
+    for (let i = 0; i < N; i++) {
+      const x = i * CELL - EXTENT;
+      const k = j * N + i;
+      const h = T.heights[k];
+      const bed = waterBedDepth(x, z);
+      const swamp = forest && inSwamp(x, z);
+      // Lòng sông/hồ hạ xuống đáy; đầm lầy lún nhẹ dưới mặt nước đục.
+      vis[k] = bed > 0 ? -bed : swamp ? -0.25 : h;
+      const slope =
+        i > 0 && i < N - 1 && j > 0 && j < N - 1
+          ? Math.hypot(
+              T.heights[k + 1] - T.heights[k - 1],
+              T.heights[k + N] - T.heights[k - N],
+            ) /
+            (2 * CELL)
+          : 0;
+      terrainColor(forest, x, z, h, slope, bed, swamp, seed, color);
+      colors[k * 3] = color.r;
+      colors[k * 3 + 1] = color.g;
+      colors[k * 3 + 2] = color.b;
     }
   }
-  for (let row = 0; row < segments; row++) {
-    for (let col = 0; col < segments; col++) {
-      const x = -size / 2 + (col + 0.5) * step;
-      const z = -size / 2 + (row + 0.5) * step;
-      // Leave an opening in the terrain under every lake and river segment.
-      if (forest && waterAt(x, z)) continue;
-      const a = row * (segments + 1) + col;
-      const b = a + segments + 1;
-      indices.push(a, b, a + 1, a + 1, b, b + 1);
+  const normals = new Float32Array(N * N * 3);
+  for (let j = 0; j < N; j++)
+    for (let i = 0; i < N; i++) {
+      const k = j * N + i;
+      const hl = vis[j * N + Math.max(0, i - 1)],
+        hr = vis[j * N + Math.min(N - 1, i + 1)];
+      const hd = vis[Math.max(0, j - 1) * N + i],
+        hu = vis[Math.min(N - 1, j + 1) * N + i];
+      const nx = hl - hr,
+        ny = 2 * CELL,
+        nz = hd - hu;
+      const len = Math.hypot(nx, ny, nz);
+      normals[k * 3] = nx / len;
+      normals[k * 3 + 1] = ny / len;
+      normals[k * 3 + 2] = nz / len;
+    }
+  // Chia 6×6 khối để GPU bỏ qua phần nằm ngoài khung nhìn.
+  const material = new THREE.MeshLambertMaterial({ vertexColors: true });
+  const CH = Math.ceil((N - 1) / 6);
+  for (let cj = 0; cj < N - 1; cj += CH)
+    for (let ci = 0; ci < N - 1; ci += CH) {
+      const w = Math.min(CH, N - 1 - ci) + 1,
+        d = Math.min(CH, N - 1 - cj) + 1;
+      const pos = new Float32Array(w * d * 3),
+        nor = new Float32Array(w * d * 3),
+        col = new Float32Array(w * d * 3);
+      for (let j = 0; j < d; j++)
+        for (let i = 0; i < w; i++) {
+          const k = (cj + j) * N + (ci + i),
+            v = j * w + i;
+          pos[v * 3] = (ci + i) * CELL - EXTENT;
+          pos[v * 3 + 1] = vis[k];
+          pos[v * 3 + 2] = (cj + j) * CELL - EXTENT;
+          for (let c = 0; c < 3; c++) {
+            nor[v * 3 + c] = normals[k * 3 + c];
+            col[v * 3 + c] = colors[k * 3 + c];
+          }
+        }
+      const index = [];
+      for (let j = 0; j < d - 1; j++)
+        for (let i = 0; i < w - 1; i++) {
+          const a = j * w + i,
+            b = a + w;
+          index.push(a, b, a + 1, a + 1, b, b + 1);
+        }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      geometry.setAttribute("normal", new THREE.BufferAttribute(nor, 3));
+      geometry.setAttribute("color", new THREE.BufferAttribute(col, 3));
+      geometry.setIndex(index);
+      geometry.computeBoundingSphere();
+      scene.add(new THREE.Mesh(geometry, material));
+    }
+  addWaterSurfaces(forest);
+  addRoadRibbons(forest);
+}
+// Dải băng (ribbon) chạy dọc một đường gấp khúc, bám độ cao yFn — dùng cho
+// mặt đường, lề đường và mặt sông. Trả về BufferGeometry có index/normal/uv
+// để gộp chung được với các hình khác trong bucket.
+function ribbonGeometry(points, halfWidth, yFn) {
+  const pos = [],
+    nor = [],
+    uv = [],
+    index = [];
+  let along = 0;
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const a = points[Math.max(0, i - 1)],
+      b = points[Math.min(points.length - 1, i + 1)];
+    let dx = b.x - a.x,
+      dz = b.z - a.z;
+    const len = Math.hypot(dx, dz) || 1;
+    dx /= len;
+    dz /= len;
+    const hw = typeof halfWidth === "function" ? halfWidth(i) : halfWidth;
+    if (i > 0) along += Math.hypot(p.x - points[i - 1].x, p.z - points[i - 1].z);
+    for (const side of [-1, 1]) {
+      const x = p.x + dz * hw * side,
+        z = p.z - dx * hw * side;
+      pos.push(x, yFn(x, z, p), z);
+      nor.push(0, 1, 0);
+      uv.push(side < 0 ? 0 : 1, along / 8);
+    }
+    if (i > 0) {
+      const v = i * 2;
+      index.push(v - 2, v, v - 1, v - 1, v, v + 1);
     }
   }
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute(
-    "position",
-    new THREE.Float32BufferAttribute(positions, 3),
-  );
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-  const material = makeMat(forest ? "#416f3e" : "#ad905e");
-  // The underside remains an opaque floor when the player views the river bank underwater.
-  material.side = THREE.DoubleSide;
-  const floor = new THREE.Mesh(geometry, material);
-  scene.add(floor);
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geometry.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+  geometry.setIndex(index);
+  return geometry;
+}
+// Gom các đoạn (road/river) cùng id theo thứ tự seq thành đường gấp khúc mịn.
+function segmentLines(type, idKey, trim = 0) {
+  const groups = new Map();
+  for (const o of mapObstacles)
+    if (o.type === type && o[idKey] !== undefined) {
+      if (!groups.has(o[idKey])) groups.set(o[idKey], []);
+      groups.get(o[idKey]).push(o);
+    }
+  const lines = [];
+  for (const segs of groups.values()) {
+    segs.sort((a, b) => a.seq - b.seq);
+    const pts = [];
+    segs.forEach((s, n) => {
+      const half = (s.length - trim) / 2;
+      const sx = Math.sin(s.yaw) * half,
+        sz = Math.cos(s.yaw) * half;
+      if (n === 0) pts.push({ x: s.x - sx, z: s.z - sz, seg: s });
+      // Chia nhỏ để bám địa hình (mỗi ~2.5 m một điểm).
+      const steps = Math.max(1, Math.round((half * 2) / 2.5));
+      for (let k = 1; k <= steps; k++) {
+        const t = k / steps;
+        pts.push({ x: s.x - sx + 2 * sx * t, z: s.z - sz + 2 * sz * t, seg: s });
+      }
+    });
+    lines.push(pts);
+  }
+  return lines;
+}
+function addRoadRibbons(forest) {
+  const noop = () => {};
+  for (const pts of segmentLines("road", "roadId", 0.6)) {
+    const y = (lift) => (x, z) => groundHeightAt(x, z) + lift;
+    const halfW = pts[0]?.seg.w / 2 || 4.5;
+    bucketAdd("road-shoulder", forest ? "#7c7563" : "#9a8a6c", ribbonGeometry(pts, halfW + 1.2, y(0.05)), noop);
+    bucketAdd("road-asphalt", forest ? "#4f4d46" : "#5e584e", ribbonGeometry(pts, halfW, y(0.085)), noop);
+    // Vạch giữa đứt quãng.
+    let run = 0;
+    let dash = [];
+    for (let i = 1; i < pts.length; i++) {
+      run += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z);
+      const on = run % 5 < 2.2;
+      if (on) dash.push(pts[i]);
+      if ((!on || i === pts.length - 1) && dash.length > 1) {
+        bucketAdd("road-dash", "#d9d0a8", ribbonGeometry(dash, 0.09, y(0.11)), noop);
+        dash = [];
+      } else if (!on) dash = [];
+    }
+  }
+  // Mặt cầu dày + trụ cầu xuống lòng sông.
+  for (const s of mapObstacles) {
+    if (s.type !== "road" || !s.bridge) continue;
+    bucketAdd("bridge-deck", "#6b6358", new THREE.BoxGeometry(s.w + 0.6, 0.4, s.length), (t) => {
+      t.position.set(s.x, groundHeightAt(s.x, s.z) - 0.18, s.z);
+      t.rotation.y = s.yaw;
+    });
+    for (const side of [-1, 1])
+      bucketAdd("bridge-deck", "#6b6358", new THREE.BoxGeometry(0.7, 5.2, 0.7), (t) => {
+        t.position.set(
+          s.x + Math.cos(s.yaw) * side * (s.w / 2 - 0.3),
+          -2.5,
+          s.z - Math.sin(s.yaw) * side * (s.w / 2 - 0.3),
+        );
+      });
+  }
+}
+function addWaterSurfaces(forest) {
+  if (!forest) return;
+  const riverMat = waterMaterial("riverSurface", {
+    color: "#32869a",
+    roughness: 0.22,
+    metalness: 0.12,
+    transparent: true,
+    opacity: 0.86,
+  });
+  for (const pts of segmentLines("river", "riverId", 6)) {
+    const geometry = ribbonGeometry(pts, (i) => pts[i].seg.w / 2 + 0.6, () => 0.05);
+    scene.add(new THREE.Mesh(geometry, riverMat));
+  }
+  // Đầm lầy: mặt nước đục màu rêu, nông (đi bộ được), kèm lau sậy từ addGrass().
+  const swampMat = waterMaterial("swamp", {
+    color: "#55622f",
+    roughness: 0.55,
+    transparent: true,
+    opacity: 0.82,
+  });
+  for (const o of mapObstacles) {
+    if (o.type !== "swamp") continue;
+    const m = new THREE.Mesh(new THREE.CircleGeometry(1, 40), swampMat);
+    m.rotation.x = -Math.PI / 2;
+    m.rotation.z = o.yaw || 0; // khớp phép xoay elip của insideWater
+    m.scale.set(o.w, o.length, 1);
+    m.position.set(o.x, 0.04, o.z);
+    scene.add(m);
+  }
 }
 function blockedByBuilding(o, x, z, radius) {
   const dx = x - o.x;
@@ -1528,144 +1761,48 @@ function drawMapObject(o, forest) {
   };
   const w = o.w || 1;
   switch (o.type) {
-    case "road": {
-      // Roads are rendered as flat surfaces and have no collision volume.
-      // Mọi mảnh (mặt đường, vạch, lan can cầu) được gộp vào bucket theo màu như
-      // nhà/cây: trước đây 80 đoạn đường × ~8 mesh = hàng trăm draw call riêng.
-      const deckY = o.bridge ? 0.205 : 0;
-      const piece = (color, geometry, x, y, z) => {
-        geometry.translate(x, y, z);
-        bucketAdd(color, color, geometry, (t) => {
-          t.position.set(o.x, 0.095, o.z);
-          t.rotation.y = o.yaw || 0;
-        });
-      };
-      const surface = (width, height, color, y) =>
-        piece(
-          color,
-          new THREE.PlaneGeometry(width, height).rotateX(-Math.PI / 2),
-          0,
-          y,
-          0,
-        );
-      surface(o.w + 2.2, o.length, forest ? "#827d68" : "#8d8068", deckY);
-      surface(o.w, o.length, forest ? "#514f47" : "#5e594f", deckY + 0.012);
-      if (o.bridge) {
-        for (const side of [-1, 1]) {
-          piece(
-            "#685d49",
-            new THREE.BoxGeometry(0.22, 0.78, o.length),
-            side * (o.w / 2 - 0.15),
-            deckY + 0.43,
-            0,
-          );
-          for (let z = -o.length / 2 + 1; z < o.length / 2; z += 3)
-            piece(
-              "#685d49",
-              new THREE.BoxGeometry(0.25, 0.82, 0.25),
-              side * (o.w / 2 - 0.15),
-              deckY + 0.43,
-              z,
-            );
-        }
-      }
-      // Short center dashes repeat over each segment, leaving the edges clear.
-      for (let z = -o.length / 2 + 1; z < o.length / 2 - 0.5; z += 3.2)
-        piece(
-          "#d9d0a8",
-          new THREE.PlaneGeometry(0.16, 1.7).rotateX(-Math.PI / 2),
-          0,
-          deckY + 0.026,
-          z,
-        );
+    case "road":
+    case "river":
+      // Vẽ liền mạch bằng dải băng bám địa hình trong createGroundMesh().
       break;
-    }
-    case "river": {
-      const depth = o.depth || 4;
-      const bed = add(
-        new THREE.BoxGeometry(w, 0.12, o.length),
-        "#344b3b",
-        o.x,
-        -depth + 0.06,
-        o.z,
-      );
-      bed.rotation.y = o.yaw || 0;
-      const volume = add(
-        new THREE.BoxGeometry(w, depth, o.length),
-        "#32869a",
-        o.x,
-        -depth / 2,
-        o.z,
-        waterMaterial("riverVolume", {
-          color: "#32869a",
-          transparent: true,
-          opacity: 0.24,
-          depthWrite: false,
-          roughness: 0.18,
-          side: THREE.DoubleSide,
-        }),
-      );
-      volume.rotation.y = o.yaw || 0;
-      const water = add(
-        new THREE.BoxGeometry(w, o.h, o.length),
-        "#32869a",
-        o.x,
-        0.025,
-        o.z,
-        waterMaterial("riverSurface", {
-          color: "#32869a",
-          roughness: 0.22,
-          metalness: 0.12,
-          transparent: true,
-          opacity: 0.88,
-        }),
-      );
-      water.rotation.y = o.yaw || 0;
-      break;
-    }
     case "lake": {
-      const depth = o.depth || 4;
-      const bed = add(
-        new THREE.CircleGeometry(o.w, 24),
-        "#344b3b",
-        o.x,
-        -depth + 0.05,
-        o.z,
-      );
-      bed.rotation.x = -Math.PI / 2;
-      bed.scale.y = o.length / o.w;
-      const volume = add(
-        new THREE.CylinderGeometry(o.w, o.w, depth, 24),
-        "#287f92",
-        o.x,
-        -depth / 2,
-        o.z,
-        new THREE.MeshStandardMaterial({
-          color: "#287f92",
-          transparent: true,
-          opacity: 0.2,
-          depthWrite: false,
-          roughness: 0.18,
-          side: THREE.DoubleSide,
-        }),
-      );
-      volume.scale.z = o.length / o.w;
+      // Lòng hồ là địa hình đã hạ xuống (createGroundMesh); chỉ còn mặt nước.
       const water = add(
-        new THREE.CircleGeometry(o.w, 24),
+        new THREE.CircleGeometry(1, 48),
         "#287f92",
         o.x,
-        0.035,
+        0.05,
         o.z,
-        new THREE.MeshStandardMaterial({
+        waterMaterial("lakeSurface", {
           color: "#287f92",
           roughness: 0.2,
           metalness: 0.1,
           transparent: true,
-          opacity: 0.88,
+          opacity: 0.86,
         }),
       );
-      water.rotation.x = -Math.PI / 2;
-      water.scale.y = o.length / o.w;
+      water.rotation.set(-Math.PI / 2, 0, o.yaw || 0);
+      water.scale.set(o.w, o.length, 1);
+      break;
+    }
+    case "fence": {
+      // Lan can / hàng rào: 2 thanh ngang + cọc mỗi ~2.4 m (đúng khối va chạm).
+      const c = Math.cos(o.yaw || 0),
+        sn = Math.sin(o.yaw || 0);
+      const color = "#7a6a52";
+      for (const y of [0.55, 1.02])
+        bucketAdd("fence", color, new THREE.BoxGeometry(0.09, 0.12, o.length), (t) => {
+          t.position.set(o.x, baseY + y, o.z);
+          t.rotation.y = o.yaw || 0;
+        });
+      const posts = Math.max(1, Math.round(o.length / 2.4));
+      for (let n = 0; n <= posts; n++) {
+        const along = (n / posts - 0.5) * o.length;
+        bucketAdd("fence", color, new THREE.BoxGeometry(0.14, 1.2, 0.14), (t) => {
+          t.position.set(o.x + sn * along, baseY + 0.55, o.z + c * along);
+          t.rotation.y = o.yaw || 0;
+        });
+      }
       break;
     }
     case "house":
@@ -1686,10 +1823,18 @@ function drawMapObject(o, forest) {
       const sill = wallH * 0.34;
       const windowTop = wallH * 0.73;
       const doorH = Math.min(2.25, wallH * 0.78);
+      // Toạ độ cục bộ của nhà → thế giới theo đúng phép xoay dùng cho va chạm
+      // (blockedByBuilding) để tường vẽ ra trùng tường chặn đạn/người.
+      const yaw = o.yaw || 0,
+        yc = Math.cos(yaw),
+        ys = Math.sin(yaw);
+      const at = (t, x, y, z) =>
+        t.position.set(o.x + yc * x + ys * z, y + baseY, o.z - ys * x + yc * z);
       const wall = (x, y, z, sx, sy, sz, color = wallColor) =>
-        bucketAdd(color, color, new THREE.BoxGeometry(sx, sy, sz), (t) =>
-          t.position.set(o.x + x, y + baseY, o.z + z),
-        );
+        bucketAdd(color, color, new THREE.BoxGeometry(sx, sy, sz), (t) => {
+          at(t, x, y, z);
+          t.rotation.y = yaw;
+        });
       wall(0, 0.04, 0, w, 0.08, w, "#594834"); // interior floor slab
       // Split front wall leaves a real doorway; the back remains fully covered.
       wall(
@@ -1788,12 +1933,10 @@ function drawMapObject(o, forest) {
           roofColor,
           new THREE.BoxGeometry(w * 0.58, 0.24, w + 0.55),
           (t) => {
-            t.position.set(
-              o.x + side * w * 0.245,
-              wallH + w * 0.16 + baseY,
-              o.z,
-            );
-            t.rotation.z = -side * 0.48; // lật mái để cả 2 mặt cùng dốc về đỉnh
+            at(t, side * w * 0.245, wallH + w * 0.16, 0);
+            // Xoay theo hướng nhà trước rồi mới nghiêng mái.
+            t.rotation.order = "YXZ";
+            t.rotation.set(0, yaw, -side * 0.48); // lật mái để cả 2 mặt cùng dốc về đỉnh
           },
         );
       }
@@ -1812,21 +1955,47 @@ function drawMapObject(o, forest) {
       break;
     }
     case "tree": {
-      // Thân/tán cây tròn xoay quanh trục Y nên bỏ qua o.yaw không ảnh hưởng
-      // hình ảnh gì — an toàn để gộp không cần xoay riêng từng cây.
+      // Hai dáng cây: thông nhiều tầng (variant 0–1) và cây lá rộng tán tròn
+      // (variant 2–3). Gốc lún 0.5 m để cây trên sườn dốc không bị hở chân.
+      const sink = 0.5;
+      const trunkH = o.h * (o.variant >= 2 ? 0.5 : 0.62) + sink;
       bucketAdd(
         "tree-trunk",
-        "#60452d",
-        new THREE.CylinderGeometry(w * 0.18, w * 0.25, o.h * 0.62, 6),
-        (t) => t.position.set(o.x, o.h * 0.31 + baseY, o.z),
+        "#5a4029",
+        new THREE.CylinderGeometry(w * 0.14, w * 0.24, trunkH, 6),
+        (t) => t.position.set(o.x, baseY - sink + trunkH / 2, o.z),
       );
-      for (let tier = 0; tier < 3; tier++) {
-        bucketAdd(
-          tier === 1 ? "tree-tier-mid" : "tree-tier-outer",
-          tier === 1 ? "#397344" : "#2d633b",
-          new THREE.ConeGeometry(w * (1.45 - tier * 0.18), o.h * 0.48, 7),
-          (t) => t.position.set(o.x, o.h * (0.62 + tier * 0.18) + baseY, o.z),
-        );
+      if ((o.variant || 0) < 2) {
+        const tiers = 4;
+        for (let tier = 0; tier < tiers; tier++) {
+          const f = tier / (tiers - 1);
+          bucketAdd(
+            tier % 2 ? "pine-a" : "pine-b",
+            tier % 2 ? "#2f5e38" : "#274f30",
+            new THREE.ConeGeometry(w * (1.55 - f * 0.9), o.h * 0.36, 8),
+            (t) => {
+              t.position.set(o.x, baseY + o.h * (0.34 + f * 0.5), o.z);
+              t.rotation.y = (o.yaw || 0) + tier;
+            },
+          );
+        }
+      } else {
+        const leaf = o.variant === 2 ? "#4e7b37" : "#5d8a3e";
+        const blobs = [
+          [0, 0.72, 0, 1.25],
+          [0.55, 0.62, 0.2, 0.9],
+          [-0.45, 0.66, -0.3, 0.95],
+          [0.1, 0.9, -0.1, 0.85],
+        ];
+        for (const [bx, by, bz, bs] of blobs)
+          bucketAdd("broadleaf-" + o.variant, leaf, new THREE.IcosahedronGeometry(1, 0), (t) => {
+            const r = w * 1.35 * bs;
+            const c = Math.cos(o.yaw || 0),
+              sn = Math.sin(o.yaw || 0);
+            t.position.set(o.x + (c * bx + sn * bz) * w * 1.4, baseY + o.h * by, o.z + (-sn * bx + c * bz) * w * 1.4);
+            t.scale.set(r, r * 0.8, r);
+            t.rotation.y = (o.yaw || 0) + bx;
+          });
       }
       break;
     }
@@ -1879,162 +2048,182 @@ function drawMapObject(o, forest) {
       break;
     }
     case "rock": {
-      bucketAdd(
-        "rock",
-        forest ? "#68705a" : "#88765c",
-        new THREE.DodecahedronGeometry(0.5, 0),
-        (t) => {
-          t.position.set(o.x, o.h * 0.42 + baseY, o.z);
-          t.scale.set(w, o.h, w * 0.82);
-          t.rotation.set(o.yaw || 0, o.yaw || 0, 0.12);
-        },
-      );
-      break;
-    }
-    case "hill": {
-      const divisions = 32;
-      const depth = o.length || w;
-      const positions = [];
-      const colors = [];
-      const indices = [];
-      const color = new THREE.Color();
-      for (let iz = 0; iz <= divisions; iz++) {
-        const z = (iz / divisions - 0.5) * depth;
-        for (let ix = 0; ix <= divisions; ix++) {
-          const x = (ix / divisions - 0.5) * w;
-          const height = terrainHeightForHill(o, o.x + x, o.z + z);
-          positions.push(x, height, z);
-          const top = height / o.h;
-          if (forest)
-            color.set(
-              top > 0.72 ? "#77796a" : top > 0.36 ? "#58774a" : "#426844",
-            );
-          else
-            color.set(
-              top > 0.72 ? "#7f7055" : top > 0.36 ? "#b19a6e" : "#a58a5a",
-            );
-          colors.push(color.r, color.g, color.b);
-          if (ix < divisions && iz < divisions) {
-            const a = iz * (divisions + 1) + ix;
-            const b = a + divisions + 1;
-            indices.push(a, b, a + 1, b, b + 1, a + 1);
-          }
+      // Đá có mặt lồi lõm (nhiễu theo vị trí đỉnh nên các mặt vẫn khít nhau),
+      // lún 20% xuống đất. Đá lớn ở sa mạc thành mỏm đá nhiều tầng.
+      const colorA = forest ? "#6f7465" : "#9a7552";
+      const colorB = forest ? "#5f6557" : "#86613f";
+      const makeRock = (sx, sy, sz, y, spin, color) => {
+        const g = new THREE.DodecahedronGeometry(0.5, 1);
+        const p = g.attributes.position;
+        for (let i = 0; i < p.count; i++) {
+          const vx = p.getX(i),
+            vy = p.getY(i),
+            vz = p.getZ(i);
+          const n =
+            0.78 +
+            0.44 *
+              window.LDTerrain.valueNoise(
+                vx * 3.1 + o.x * 0.37,
+                vz * 3.1 + vy * 2.3 + o.z * 0.37,
+                7,
+              );
+          p.setXYZ(i, vx * n, vy * n, vz * n);
         }
+        g.computeVertexNormals();
+        bucketAdd("rock-" + color, color, g, (t) => {
+          t.position.set(o.x, baseY + y, o.z);
+          t.scale.set(sx, sy, sz);
+          t.rotation.set(0.1, (o.yaw || 0) + spin, 0.08);
+        });
+      };
+      makeRock(w, o.h, w * 0.82, o.h * 0.3, 0, o.variant % 2 ? colorA : colorB);
+      if (w > 4.5) {
+        // Tầng đá phía trên, lệch tâm — nhìn như mỏm đá phong hoá.
+        makeRock(w * 0.62, o.h * 0.55, w * 0.55, o.h * 0.72, 1.3, colorA);
       }
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute(
-        "position",
-        new THREE.Float32BufferAttribute(positions, 3),
-      );
-      geometry.setAttribute(
-        "color",
-        new THREE.Float32BufferAttribute(colors, 3),
-      );
-      geometry.setIndex(indices);
-      geometry.computeVertexNormals();
-      const hillMesh = new THREE.Mesh(
-        geometry,
-        new THREE.MeshLambertMaterial({
-          vertexColors: true,
-          side: THREE.DoubleSide,
-        }),
-      );
-      hillMesh.position.set(o.x, 0, o.z);
-      scene.add(hillMesh);
       break;
     }
+    // Núi/đồi, cao nguyên, nền nhà, đầm lầy đã nằm trong mặt địa hình liền khối.
   }
 }
-function addForestGrass(seed) {
-  let state = seed >>> 0;
-  const rand = () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+// ---- Cỏ: bụi cỏ lá mảnh, dày, chỉ vẽ gần người chơi ----
+// Mỗi "bụi" là 5 lá mảnh (rộng ~5 cm) nghiêng ngẫu nhiên, màu sẫm ở gốc sáng ở
+// ngọn, gộp sẵn thành MỘT geometry và nhân bản bằng InstancedMesh. Bụi được
+// chia ô 25 m; chỉ các ô trong tầm GRASS_VIEW_DISTANCE mới được vẽ.
+function grassTuftGeometry(blades, height, seed) {
+  const rnd = (() => {
+    let s = seed >>> 0;
+    return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
+  })();
+  const pos = [],
+    col = [],
+    index = [];
+  const base = new THREE.Color("#2e4a22"),
+    tip = new THREE.Color("#b7cf7a");
+  for (let b = 0; b < blades; b++) {
+    const a = rnd() * Math.PI * 2;
+    const ox = (rnd() - 0.5) * 0.18,
+      oz = (rnd() - 0.5) * 0.18;
+    const h = height * (0.6 + rnd() * 0.55);
+    const lean = 0.15 + rnd() * 0.3;
+    const w = 0.022 + rnd() * 0.014;
+    const cx = Math.cos(a),
+      cz = Math.sin(a);
+    const lx = -Math.sin(a) * lean * h,
+      lz = Math.cos(a) * lean * h;
+    const v0 = pos.length / 3;
+    // gốc trái, gốc phải, giữa trái, giữa phải, ngọn
+    const pts = [
+      [ox - cx * w, 0, oz - cz * w, 0],
+      [ox + cx * w, 0, oz + cz * w, 0],
+      [ox - cx * w * 0.7 + lx * 0.35, h * 0.55, oz - cz * w * 0.7 + lz * 0.35, 0.55],
+      [ox + cx * w * 0.7 + lx * 0.35, h * 0.55, oz + cz * w * 0.7 + lz * 0.35, 0.55],
+      [ox + lx, h, oz + lz, 1],
+    ];
+    for (const [x, y, z, t] of pts) {
+      pos.push(x, y, z);
+      const c = base.clone().lerp(tip, t);
+      col.push(c.r, c.g, c.b);
+    }
+    index.push(v0, v0 + 1, v0 + 2, v0 + 1, v0 + 3, v0 + 2, v0 + 2, v0 + 3, v0 + 4);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(index);
+  g.computeVertexNormals();
+  return g;
+}
+function nearHouse(x, z, margin) {
+  for (const o of obstaclesNear(x, z))
+    if ((o.type === "house" || o.type === "hut") && Math.hypot(o.x - x, o.z - z) < o.w * 0.72 + margin)
+      return true;
+  return false;
+}
+function addGrass(forest) {
+  const lowQuality = $("#quality")?.value === "Performance";
+  GRASS_VIEW_DISTANCE = lowQuality ? 50 : 75;
+  const seed = (mapObstacles.find((o) => o.type === "terrain")?.seed || 1) >>> 0;
+  let s = seed ^ 0x9e3779b9;
+  const rand = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
+  const material = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    side: THREE.DoubleSide,
+  });
+  const kinds = {
+    grass: { geometry: grassTuftGeometry(5, 0.55, seed), chunks: new Map() },
+    reed: { geometry: grassTuftGeometry(4, 1.5, seed + 3), chunks: new Map() },
   };
-  const blade = new THREE.ConeGeometry(0.12, 0.65, 3);
-  const grassMaterial = new THREE.MeshLambertMaterial({ color: "#ffffff" });
-  // Trước đây toàn bộ 38.400 ngọn cỏ nằm trong MỘT InstancedMesh phủ cả map →
-  // luôn bị vẽ hết, kể cả phía sau lưng và ở xa 300 m. Chia thành ô 50 m để
-  // frustum culling bỏ phần ngoài khung nhìn và tắt hẳn các ô ở xa.
-  const chunks = new Map();
   const dummy = new THREE.Object3D();
   const tint = new THREE.Color();
-  const lowQuality = $("#quality")?.value === "Performance";
-  for (let i = 0; i < 38400; i++) {
-    const x = (rand() - 0.5) * (MAP_HALF * 2 - 4);
-    const z = (rand() - 0.5) * (MAP_HALF * 2 - 4);
-    if (isNearRoad(x, z, 1.25)) continue;
-    if (Math.hypot(x, z - 8) < 10 || Math.hypot(x, z + 8) < 9) continue;
-    const streamZ =
-      (-7 + Math.sin((x + 12 * MAP_SCALE) / (13 * MAP_SCALE)) * 13) * MAP_SCALE;
-    if (
-      Math.abs(z - streamZ) < 3.1 * MAP_SCALE ||
-      Math.hypot(x - 22 * MAP_SCALE, z + 3 * MAP_SCALE) < 12 * MAP_SCALE
-    )
-      continue;
-    dummy.position.set(x, groundHeightAt(x, z) + 0.29, z);
-    dummy.rotation.set(
-      (rand() - 0.5) * 0.22,
-      rand() * Math.PI,
-      (rand() - 0.5) * 0.18,
-    );
-    const size = 0.55 + rand() * 1.25;
-    dummy.scale.set(size, size, size);
+  const push = (kind, x, z, scale, color) => {
+    dummy.position.set(x, groundHeightAt(x, z) - 0.02, z);
+    dummy.rotation.set(0, rand() * Math.PI * 2, 0);
+    dummy.scale.set(scale, scale * (0.8 + rand() * 0.5), scale);
     dummy.updateMatrix();
-    tint.setHSL(
-      0.27 + rand() * 0.06,
-      0.52 + rand() * 0.2,
-      0.24 + rand() * 0.15,
-    );
-    // Chế độ Performance: một nửa mật độ (vẫn giữ nguyên chuỗi random nên
-    // phân bố y hệt, chỉ bỏ bớt).
-    if (lowQuality && i % 2) continue;
     const key = `${Math.floor(x / GRASS_CHUNK)}|${Math.floor(z / GRASS_CHUNK)}`;
-    let chunk = chunks.get(key);
-    if (!chunk) chunks.set(key, (chunk = { matrices: [], colors: [] }));
-    chunk.matrices.push(dummy.matrix.clone());
-    chunk.colors.push(tint.clone());
-  }
+    const chunks = kinds[kind].chunks;
+    if (!chunks.has(key)) chunks.set(key, { matrices: [], colors: [] });
+    chunks.get(key).matrices.push(dummy.matrix.clone());
+    chunks.get(key).colors.push(color.clone());
+  };
+  const spacing = (forest ? 1.2 : 3.6) * (lowQuality ? 1.45 : 1);
+  for (let gz = -MAP_HALF + 1; gz < MAP_HALF - 1; gz += spacing)
+    for (let gx = -MAP_HALF + 1; gx < MAP_HALF - 1; gx += spacing) {
+      const x = gx + (rand() - 0.5) * spacing,
+        z = gz + (rand() - 0.5) * spacing;
+      const r = rand();
+      if (Math.abs(x) < 6 && Math.abs(z) < 12) continue; // khu chờ đầu trận
+      if (waterBedDepth(x, z) > 0) continue;
+      if (forest && inSwamp(x, z)) {
+        if (r < 0.7) push("reed", x, z, 0.8 + rand() * 0.6, tint.setHSL(0.17 + rand() * 0.04, 0.35, 0.3 + rand() * 0.12));
+        continue;
+      }
+      if (isNearRoad(x, z, 0.9) || nearHouse(x, z, 0.3)) continue;
+      const h = mapTerrain.heightAt(x, z);
+      const slope = mapTerrain.slopeAt(x, z);
+      if (forest) {
+        // Thưa dần lên cao, không mọc trên vách đá / đỉnh núi.
+        if (slope > 0.55 || h > 40 || r > 1 - Math.min(0.85, h / 48)) {
+        } else push("grass", x, z, 0.75 + rand() * 0.7, tint.setHSL(0.22 + rand() * 0.07, 0.45 + rand() * 0.2, 0.55 + rand() * 0.25));
+      } else if (slope < 0.35 && h < 24 && r < 0.55) {
+        push("grass", x, z, 0.6 + rand() * 0.5, tint.setHSL(0.11 + rand() * 0.03, 0.35, 0.6 + rand() * 0.15));
+      }
+    }
   grassChunks = [];
-  for (const chunk of chunks.values()) {
-    const mesh = new THREE.InstancedMesh(
-      blade,
-      grassMaterial,
-      chunk.matrices.length,
-    );
-    chunk.matrices.forEach((matrix, index) => {
-      mesh.setMatrixAt(index, matrix);
-      mesh.setColorAt(index, chunk.colors[index]);
-    });
-    mesh.instanceMatrix.needsUpdate = true;
-    mesh.computeBoundingSphere();
-    scene.add(mesh);
-    grassChunks.push(mesh);
-  }
+  for (const kind of Object.values(kinds))
+    for (const chunk of kind.chunks.values()) {
+      const mesh = new THREE.InstancedMesh(kind.geometry, material, chunk.matrices.length);
+      chunk.matrices.forEach((matrix, index) => {
+        mesh.setMatrixAt(index, matrix);
+        mesh.setColorAt(index, chunk.colors[index]);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      mesh.visible = false;
+      scene.add(mesh);
+      grassChunks.push(mesh);
+    }
   grassCheckAt = 0;
 }
-const GRASS_CHUNK = 50;
-const GRASS_VIEW_DISTANCE = 120;
+const GRASS_CHUNK = 25;
+let GRASS_VIEW_DISTANCE = 75;
 let grassChunks = [],
   grassCheckAt = 0;
-// Cỏ nhỏ, ở xa hơn ~120 m gần như không thấy (và bị sương che) → tắt các ô đó.
+// Chỉ vẽ các ô cỏ gần camera; trên máy bay / rơi cao thì tắt hết.
 function updateGrassVisibility() {
   if (!grassChunks.length || !camera) return;
   const now = performance.now();
   if (now < grassCheckAt) return;
-  grassCheckAt = now + 250;
-  // Trên máy bay / đang rơi cao: cỏ quá nhỏ để thấy, tắt hết.
-  const high = local.state === "plane" || camera.position.y > 120;
+  grassCheckAt = now + 200;
+  const high =
+    local.state === "plane" ||
+    camera.position.y - groundHeightAt(camera.position.x, camera.position.z) > 60;
   for (const mesh of grassChunks) {
     const sphere = mesh.boundingSphere;
     const d =
-      Math.hypot(
-        sphere.center.x - camera.position.x,
-        sphere.center.z - camera.position.z,
-      ) - sphere.radius;
+      Math.hypot(sphere.center.x - camera.position.x, sphere.center.z - camera.position.z) -
+      sphere.radius;
     mesh.visible = !high && d < GRASS_VIEW_DISTANCE;
   }
 }
@@ -2092,6 +2281,18 @@ function isBlockedAt(x, z) {
         support.obstacle === o;
       if (isAboveThisRoof) continue;
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
+      continue;
+    }
+    if (o.type === "fence") {
+      const dx = x - o.x,
+        dz = z - o.z;
+      const c = Math.cos(o.yaw || 0),
+        s = Math.sin(o.yaw || 0);
+      if (
+        Math.abs(c * dx - s * dz) < o.w / 2 + obstacleRadius &&
+        Math.abs(s * dx + c * dz) < o.length / 2 + obstacleRadius
+      )
+        return true;
       continue;
     }
     const footprint = obstacleFootprintRadius(o);
@@ -2616,12 +2817,13 @@ function initWorld() {
   if (!mapObstacles.length) {
     setMapObstacles(gameState?.obstacles || []);
   }
+  // Bucket gộp hình phải sẵn sàng trước: mặt đường / cầu cũng được gộp vào đó.
+  mergeBuckets = {};
   createGroundMesh(forest);
   addOutskirts(forest);
-  addZoneBorder();
+  // Không còn vẽ 4 bức tường xanh vuông quanh map: viền map giờ là dãy núi.
   addSafeZoneWall();
-  if (forest) addForestGrass(gameState?.mapSeed ?? 305419896);
-  mergeBuckets = {};
+  addGrass(forest);
   for (const obstacle of mapObstacles) drawMapObject(obstacle, forest);
   flushMergeBuckets(); // dồn toàn bộ nhà/cây/đá/xương rồng thành vài chục draw call
   // First-person weapon silhouette attached to the camera.
@@ -5826,220 +6028,71 @@ function minimapBase(S, forest, k, X, Y) {
   minimapBaseCanvas ||= document.createElement("canvas");
   minimapBaseCanvas.width = minimapBaseCanvas.height = S;
   const ctx = minimapBaseCanvas.getContext("2d");
-  ctx.clearRect(0, 0, S, S);
-  ctx.fillStyle = forest ? "#527d45" : "#b99a62";
-  ctx.fillRect(0, 0, S, S);
-  // Subtle seeded terrain patches give the map a real overhead land texture.
-  let seed = (gameState?.mapSeed || 1) >>> 0;
-  const random = () => {
-    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-    return seed / 4294967296;
-  };
-  for (let i = 0; i < 90; i++) {
-    const x = random() * S;
-    const y = random() * S;
-    const r = 3 + random() * 15;
-    ctx.fillStyle = forest
-      ? i % 2
-        ? "rgba(144,181,91,.18)"
-        : "rgba(29,77,43,.17)"
-      : i % 2
-        ? "rgba(238,207,133,.2)"
-        : "rgba(106,78,46,.12)";
-    ctx.beginPath();
-    ctx.ellipse(
-      x,
-      y,
-      r,
-      r * (0.42 + random() * 0.38),
-      random() * Math.PI,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
-  }
-  if (forest) {
-    // Draw the same winding river and lake used by the forest level generator.
-    const riverZ = (x) =>
-      (-7 + Math.sin((x + 12 * MAP_SCALE) / (13 * MAP_SCALE)) * 13) * MAP_SCALE;
-    ctx.lineCap = "round";
-    for (const [color, width] of [
-      ["#8a9b61", 15],
-      ["#31899a", 9],
-      ["#54b7b8", 3],
-    ]) {
-      ctx.strokeStyle = color;
-      ctx.lineWidth = width;
-      ctx.beginPath();
-      for (let i = 0; i <= 80; i++) {
-        const x = -MAP_HALF + (i / 80) * MAP_HALF * 2;
-        if (!i) ctx.moveTo(X(x), Y(riverZ(x)));
-        else ctx.lineTo(X(x), Y(riverZ(x)));
-      }
-      ctx.stroke();
+  // Nền: tô theo độ cao + đổ bóng sườn núi từ chính lưới địa hình (vẽ 1 lần).
+  const img = ctx.createImageData(S, S);
+  const c = new THREE.Color();
+  const ramp = forest
+    ? [[0, "#5a8a47"], [8, "#4c7a3d"], [20, "#5d6f4a"], [32, "#7d7f74"], [48, "#e6eaec"]]
+    : [[0, "#d0ac72"], [10, "#c79b62"], [28, "#b27a4c"], [50, "#93613f"], [80, "#7b5236"]];
+  const c2 = new THREE.Color();
+  for (let py = 0; py < S; py++)
+    for (let px = 0; px < S; px++) {
+      const x = (px + 0.5 - S / 2) / k,
+        z = (py + 0.5 - S / 2) / k;
+      const h = mapTerrain ? mapTerrain.heightAt(x, z) : 0;
+      let i = 0;
+      while (i < ramp.length - 2 && h > ramp[i + 1][0]) i++;
+      const t = Math.min(1, Math.max(0, (h - ramp[i][0]) / (ramp[i + 1][0] - ramp[i][0])));
+      c.set(ramp[i][1]).lerp(c2.set(ramp[i + 1][1]), t);
+      if (waterBedDepth(x, z) > 0) c.set("#3a8fa3");
+      else if (forest && inSwamp(x, z)) c.set("#56643a");
+      const d = 2 / k;
+      const gx = mapTerrain ? mapTerrain.heightAt(x + d, z) - mapTerrain.heightAt(x - d, z) : 0;
+      const gz = mapTerrain ? mapTerrain.heightAt(x, z + d) - mapTerrain.heightAt(x, z - d) : 0;
+      const shade = Math.max(0.55, Math.min(1.25, 1 - (gx + gz) * 0.035));
+      const o = (py * S + px) * 4;
+      img.data[o] = Math.min(255, c.r * 255 * shade);
+      img.data[o + 1] = Math.min(255, c.g * 255 * shade);
+      img.data[o + 2] = Math.min(255, c.b * 255 * shade);
+      img.data[o + 3] = 255;
     }
-    ctx.fillStyle = "#31899a";
-    ctx.beginPath();
-    ctx.ellipse(
-      X(22 * MAP_SCALE),
-      Y(-3 * MAP_SCALE),
-      12 * MAP_SCALE * k,
-      17 * MAP_SCALE * k,
-      0.12,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
-  } else {
-    // Curving contour bands represent the desert dunes from overhead.
-    for (let band = 0; band < 7; band++) {
-      ctx.strokeStyle =
-        band % 2 ? "rgba(245,219,156,.28)" : "rgba(110,81,48,.18)";
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      for (let i = 0; i <= 60; i++) {
-        const x = (i / 60) * S;
-        const y = band * (S / 6) + Math.sin(i * 0.16 + band) * 5;
-        if (!i) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-    }
-  }
-  const terrain = mapObstacles || [];
-  // Roads appear as continuous clean tracks on the tactical map.
+  ctx.putImageData(img, 0, 0);
+  // Đường: vẽ theo từng tuyến liền mạch, cầu sáng màu hơn.
   ctx.lineCap = "round";
-  for (const [color, factor] of [
-    ["#b2a98c", 1.28],
-    ["#4f514b", 1],
-  ]) {
+  ctx.lineJoin = "round";
+  const roadLines = segmentLines("road", "roadId", 0.6);
+  for (const [color, width] of [["#3c3a33", 1.7], [forest ? "#d8cfae" : "#efe0bb", 0.9]]) {
     ctx.strokeStyle = color;
-    ctx.lineWidth = Math.max(1, 9 * k * factor);
+    ctx.lineWidth = Math.max(1, 9 * k * width);
     ctx.beginPath();
-    for (const road of terrain) {
-      if (road.type !== "road") continue;
-      const dx = (Math.sin(road.yaw || 0) * road.length) / 2;
-      const dz = (Math.cos(road.yaw || 0) * road.length) / 2;
-      ctx.moveTo(X(road.x - dx), Y(road.z - dz));
-      ctx.lineTo(X(road.x + dx), Y(road.z + dz));
-    }
+    for (const pts of roadLines)
+      pts.forEach((p, i) => (i ? ctx.lineTo(X(p.x), Y(p.z)) : ctx.moveTo(X(p.x), Y(p.z))));
     ctx.stroke();
   }
-  // Elevation contours are underneath buildings, trees and rocks.
-  for (const o of terrain)
-    if (o.type === "hill") {
-      const cx = X(o.x),
-        cy = Y(o.z),
-        rx = Math.max(4, o.w * k * 0.52),
-        ry = Math.max(4, (o.length || o.w) * k * 0.52);
-      // Opaque relief covers any road track below a mountain ridge.
-      ctx.fillStyle = forest ? "#3f6838" : "#96764e";
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, rx, ry, o.yaw || 0, 0, Math.PI * 2);
-      ctx.fill();
-      for (let ring = 0; ring < 3; ring++) {
-        ctx.strokeStyle = forest
-          ? "rgba(218,226,153,.35)"
-          : "rgba(230,199,139,.38)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.ellipse(
-          cx,
-          cy,
-          rx * (0.78 - ring * 0.18),
-          ry * (0.78 - ring * 0.18),
-          o.yaw || 0,
-          0,
-          Math.PI * 2,
-        );
-        ctx.stroke();
-      }
-    }
-  for (const o of terrain) {
-    const x = X(o.x),
-      y = Y(o.z),
-      size = Math.max(1.5, (o.w || 1) * k);
+  for (const o of mapObstacles) {
+    if (o.type !== "house" && o.type !== "hut" && o.type !== "tree" && o.type !== "rock") continue;
+    const size = Math.max(1.4, (o.w || 1) * k);
     ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(o.yaw || 0);
-    if (o.type === "road") {
-      const coveredByHill = terrain.some(
-        (hill) =>
-          hill.type === "hill" &&
-          Array.from({ length: 9 }, (_, i) => {
-            const along = (i / 8 - 0.5) * o.length;
-            const x = o.x + Math.sin(o.yaw || 0) * along;
-            const z = o.z + Math.cos(o.yaw || 0) * along;
-            return (
-              ((x - hill.x) / (hill.w / 2)) ** 2 +
-                ((z - hill.z) / ((hill.length || hill.w) / 2)) ** 2 <
-              1
-            );
-          }).some(Boolean),
-      );
-      if (!coveredByHill) {
-        ctx.strokeStyle = "rgba(226,216,179,.82)";
-        ctx.lineWidth = Math.max(0.7, 0.8 * k);
-        ctx.setLineDash([2.4 * k, 2.2 * k]);
-        ctx.beginPath();
-        const dx = Math.sin(o.yaw || 0) * o.length * 0.36;
-        const dz = Math.cos(o.yaw || 0) * o.length * 0.36;
-        ctx.moveTo(-dx, -dz);
-        ctx.lineTo(dx, dz);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-    } else if (o.type === "house" || o.type === "hut") {
-      ctx.fillStyle = o.type === "house" ? "#675443" : "#8b704b";
-      ctx.fillRect(-size * 0.48, -size * 0.38, size * 0.96, size * 0.76);
-      ctx.strokeStyle = "#e4c895";
-      ctx.lineWidth = 0.8;
-      ctx.strokeRect(-size * 0.48, -size * 0.38, size * 0.96, size * 0.76);
-      ctx.fillStyle = "#302e28";
-      ctx.fillRect(-size * 0.08, size * 0.12, size * 0.16, size * 0.26);
-    } else if (o.type === "tree") {
-      ctx.fillStyle = "#234d31";
-      ctx.beginPath();
-      ctx.arc(0, 0, size * 0.68, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#528746";
-      ctx.beginPath();
-      ctx.arc(-size * 0.18, -size * 0.2, size * 0.37, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (o.type === "cactus" || o.type === "deadTree") {
-      ctx.strokeStyle = o.type === "cactus" ? "#41663d" : "#514b3d";
-      ctx.lineWidth = 1.3;
-      ctx.beginPath();
-      ctx.moveTo(0, size * 0.45);
-      ctx.lineTo(0, -size * 0.5);
-      ctx.moveTo(0, 0);
-      ctx.lineTo(-size * 0.35, -size * 0.18);
-      ctx.moveTo(0, size * 0.12);
-      ctx.lineTo(size * 0.34, -size * 0.1);
-      ctx.stroke();
-    } else if (o.type === "rock") {
-      ctx.fillStyle = forest ? "#737a61" : "#75664e";
-      ctx.beginPath();
-      ctx.ellipse(0, 0, size * 0.62, size * 0.43, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,.2)";
+    ctx.translate(X(o.x), Y(o.z));
+    ctx.rotate(-(o.yaw || 0));
+    if (o.type === "house" || o.type === "hut") {
+      ctx.fillStyle = o.type === "house" ? "#8a4f38" : "#9c7a4e";
+      ctx.fillRect(-size / 2, -size / 2, size, size);
+      ctx.strokeStyle = "rgba(20,16,10,.7)";
       ctx.lineWidth = 0.6;
-      ctx.stroke();
+      ctx.strokeRect(-size / 2, -size / 2, size, size);
+    } else if (o.type === "tree") {
+      ctx.fillStyle = "rgba(24,62,32,.75)";
+      ctx.beginPath();
+      ctx.arc(0, 0, Math.max(1, size * 0.9), 0, Math.PI * 2);
+      ctx.fill();
+    } else if (o.w > 4) {
+      ctx.fillStyle = forest ? "#6b6f62" : "#7d5a3c";
+      ctx.beginPath();
+      ctx.arc(0, 0, size * 0.5, 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.restore();
-  }
-  // A light coordinate grid and the border show the playable map limits.
-  ctx.strokeStyle = "rgba(236,239,209,.12)";
-  ctx.lineWidth = 0.7;
-  for (let n = -1; n <= 1; n++) {
-    ctx.beginPath();
-    ctx.moveTo(X((n * MAP_HALF) / 2), 0);
-    ctx.lineTo(X((n * MAP_HALF) / 2), S);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(0, Y((n * MAP_HALF) / 2));
-    ctx.lineTo(S, Y((n * MAP_HALF) / 2));
-    ctx.stroke();
   }
   ctx.strokeStyle = forest ? "#c8f27a" : "#f3d38c";
   ctx.lineWidth = 2;
@@ -6462,12 +6515,13 @@ function buildPlane() {
 // Đất quanh map (chỉ để nhìn từ trên cao) và bức tường zone mờ bao quanh khu chơi.
 function addOutskirts(forest) {
   const mat = makeMat(forest ? "#2f5232" : "#8f7650");
+  // Mặt phẳng xa bắt đầu từ mép lưới địa hình (núi viền đã hạ dần về 0 ở đó).
   const far = 1600,
-    edge = MAP_HALF + 5;
+    edge = window.LDTerrain.EXTENT - 1;
   const strip = (w, d, x, z) => {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat);
     m.rotation.x = -Math.PI / 2;
-    m.position.set(x, -0.02, z);
+    m.position.set(x, -0.05, z);
     scene.add(m);
   };
   const mid = edge + (far - edge) / 2;

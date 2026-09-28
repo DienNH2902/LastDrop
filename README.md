@@ -81,6 +81,13 @@ Server Render **không render đồ họa** (không cần GPU); đồ họa ch�
 - Bắn liên thanh được nhịp theo khung hình (`updateAutoFire`), mỗi phát gửi **một** gói `shoot`.
 - Độ phân giải render tự hạ khi FPS < 45 (`adaptResolution`); góc phải HUD hiện PING (xanh/vàng/đỏ).
 
+## Bản đồ tự nhiên (rừng / sa mạc)
+
+- `server/mapgen.js` sinh map từ seed: dãy núi (chuỗi khối núi elip xoay, phủ ~40% rừng / ~60% sa mạc), viền map là núi uốn lượn nên không lộ mép vuông; sông + hồ + đầm lầy (rừng); làng gom cụm, nhà quay cửa ra đường; đường cong nối các làng, cắt nhau trên đất liền, luôn có ít nhất một cầu qua sông, lan can + rào bờ sông quanh cầu; làng / điểm ngắm trên núi có đường đèo lên. Mọi vật thể kiểm tra chồng lấp bằng lưới chiếm chỗ.
+- `public/terrain.js` dùng chung cho server và client: dựng lưới độ cao 2 m (tra O(1)), san nền đường theo mặt cắt dọc giới hạn độ dốc, san nền nhà, cao nguyên. Sửa hình dạng địa hình chỉ sửa ở file này để server/client luôn khớp.
+- Vật phẩm chỉ sinh **trong nhà** (`createLoot`), mỗi ô sàn tối đa một món. Xe giữ nguyên logic spawn.
+- Client vẽ mặt đất liền khối chia 6×6 ô (GPU bỏ phần ngoài tầm nhìn), đường/sông là dải băng bám địa hình, cỏ là bụi lá mảnh chỉ vẽ trong ~75 m (50 m ở chế độ Performance).
+
 ## Tự tạo và import đồ họa
 
 Map hiện sinh trực tiếp từ hình khối trong `public/game.js` (`initWorld`). Để tự làm asset miễn phí, dựng model trong Blender, export `.glb`, đặt file vào `public/assets/`, rồi import `GLTFLoader` từ Three.js và thêm model vào scene trong `initWorld`. Giữ texture nhỏ, gộp vật thể tĩnh và dùng ít polygon để tối ưu. Có thể thay các khối người chơi trong `renderPlayers()` bằng model nhân vật. Không dùng ảnh khuôn mặt nếu chưa có đồng ý rõ ràng; upload ảnh và phân phối ảnh cần thêm kiểm soát quyền riêng tư/bảo mật.

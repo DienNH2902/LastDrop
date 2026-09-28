@@ -6,6 +6,8 @@ const path = require("node:path");
 const zlib = require("node:zlib");
 const crypto = require("node:crypto");
 const { WebSocketServer } = require("ws");
+const Terrain = require("../public/terrain.js");
+const { createObstacles } = require("./mapgen.js");
 
 const ROOT = path.join(__dirname, "..", "public");
 const PORT = Number(process.env.PORT || 3000);
@@ -332,243 +334,7 @@ function roomCode() {
   } while (rooms.has(n));
   return n;
 }
-function createObstacles(seed, mapId) {
-  let state = seed >>> 0;
-  const random = () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  const forest = mapId === "forest";
-  const spawns = [
-    [-3, 8],
-    [0, 8],
-    [3, 8],
-    [-3, -8],
-    [0, -8],
-  ];
-  const obstacles = [];
-  // Mặt sông uốn quanh bản đồ. Tuyến đường cắt ngang con sông sẽ thành cầu.
-  const riverZ = (x) =>
-    (-7 + Math.sin((x + 12 * MAP_SCALE) / (13 * MAP_SCALE)) * 13) * MAP_SCALE;
-  const roads = [];
-  const roadPaths = [
-    (x) => 24 * MAP_SCALE + Math.sin(x / (30 * MAP_SCALE)) * 1.5 * MAP_SCALE,
-    (x) =>
-      -29 * MAP_SCALE +
-      Math.sin((x + 17 * MAP_SCALE) / (34 * MAP_SCALE)) * 1.5 * MAP_SCALE,
-  ];
-  const crossRoadPaths = [
-    (z) => -18 * MAP_SCALE + Math.sin(z / (28 * MAP_SCALE)) * 1.2 * MAP_SCALE,
-    (z) =>
-      20 * MAP_SCALE +
-      Math.sin((z + 14 * MAP_SCALE) / (31 * MAP_SCALE)) * 1.2 * MAP_SCALE,
-  ];
-  const addRoadPath = (points) => {
-    for (let i = 0; i < points.length - 1; i++) {
-      const a = points[i],
-        b = points[i + 1];
-      const dx = b.x - a.x,
-        dz = b.z - a.z;
-      const segment = {
-        type: "road",
-        x: (a.x + b.x) / 2,
-        z: (a.z + b.z) / 2,
-        w: 9,
-        length: Math.hypot(dx, dz),
-        h: 0.12,
-        yaw: Math.atan2(dx, dz),
-        solid: false,
-        bridge:
-          forest &&
-          Array.from({ length: 5 }, (_, n) => n / 4).some((t) => {
-            const x = a.x + dx * t,
-              z = a.z + dz * t;
-            return Math.abs(z - riverZ(x)) < 13;
-          }),
-      };
-      roads.push(segment);
-      obstacles.push(segment);
-    }
-  };
-  for (const pathZ of roadPaths) {
-    const points = [];
-    for (let x = -MAP_HALF; x <= MAP_HALF; x += 20)
-      points.push({ x, z: pathZ(x) });
-    addRoadPath(points);
-  }
-  for (const pathX of crossRoadPaths) {
-    const points = [];
-    for (let z = -MAP_HALF; z <= MAP_HALF; z += 20)
-      points.push({ x: pathX(z), z });
-    addRoadPath(points);
-  }
-  const nearRoad = (x, z, clearance = 0) =>
-    roads.some((road) => {
-      const dx = (Math.sin(road.yaw) * road.length) / 2;
-      const dz = (Math.cos(road.yaw) * road.length) / 2;
-      const ax = road.x - dx,
-        az = road.z - dz;
-      const bx = road.x + dx,
-        bz = road.z + dz;
-      const vx = bx - ax,
-        vz = bz - az;
-      const t = Math.max(
-        0,
-        Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)),
-      );
-      return (
-        Math.hypot(x - (ax + t * vx), z - (az + t * vz)) <
-        road.w / 2 + clearance
-      );
-    });
-  if (forest) {
-    // Deep water volumes follow the winding stream and can be traversed by swimmers.
-    for (let i = 0; i < 10; i++) {
-      const x = (-45 + i * 10) * MAP_SCALE;
-      const z = riverZ(x);
-      const yaw = Math.atan2(2, riverZ(x + 1) - riverZ(x - 1));
-      obstacles.push({
-        type: "river",
-        x,
-        z,
-        w: 5.2 * MAP_SCALE,
-        length: 12 * MAP_SCALE,
-        h: 0.08,
-        depth: 4.5,
-        yaw,
-        solid: false,
-      });
-    }
-    obstacles.push({
-      type: "lake",
-      x: 22 * MAP_SCALE,
-      z: -3 * MAP_SCALE,
-      w: 12 * MAP_SCALE,
-      length: 17 * MAP_SCALE,
-      h: 0.08,
-      depth: 5.5,
-      solid: false,
-    });
-    // Mark bridge segments by testing the actual rotated river/lake volumes,
-    // rather than approximating the stream centerline.
-    const rawWaterAt = (water, x, z) => {
-      const dx = x - water.x,
-        dz = z - water.z;
-      const c = Math.cos(water.yaw || 0),
-        s = Math.sin(water.yaw || 0);
-      const localX = c * dx - s * dz,
-        localZ = s * dx + c * dz;
-      return water.type === "lake"
-        ? (localX / water.w) ** 2 + (localZ / water.length) ** 2 <= 1
-        : Math.abs(localX) <= water.w / 2 &&
-            Math.abs(localZ) <= water.length / 2;
-    };
-    for (const road of roads) {
-      road.bridge = false;
-      const steps = Math.max(1, Math.ceil(road.length * 2));
-      for (let i = 0; i <= steps && !road.bridge; i++) {
-        const along = (i / steps - 0.5) * road.length;
-        const x = road.x + Math.sin(road.yaw) * along;
-        const z = road.z + Math.cos(road.yaw) * along;
-        road.bridge = obstacles.some(
-          (water) =>
-            (water.type === "river" || water.type === "lake") &&
-            rawWaterAt(water, x, z),
-        );
-      }
-    }
-  }
-  const overlapsWater = (x, z, radius) =>
-    forest &&
-    (Math.hypot(x - 22 * MAP_SCALE, z + 3 * MAP_SCALE) <
-      radius + 11 * MAP_SCALE ||
-      Array.from({ length: 10 }, (_, i) => (-45 + i * 10) * MAP_SCALE).some(
-        (rx) => Math.hypot(x - rx, z - riverZ(rx)) < radius + 3,
-      ));
-  function add(type, count, minW, maxW, minH, maxH, gap = 1.2) {
-    let made = 0;
-    for (let attempt = 0; attempt < count * 30 && made < count; attempt++) {
-      const x = (random() - 0.5) * (MAP_HALF * 2 - 16);
-      const z = (random() - 0.5) * (MAP_HALF * 2 - 16);
-      const w = minW + random() * (maxW - minW);
-      const h = minH + random() * (maxH - minH);
-      const spawnClearance = type === "hill" ? w / 2 + 8 : w / 2 + 5;
-      if (
-        spawns.some(([sx, sz]) => Math.hypot(x - sx, z - sz) < spawnClearance)
-      )
-        continue;
-      if (overlapsWater(x, z, w / 2)) continue;
-      if (nearRoad(x, z, w / 2 + 1.5)) continue;
-      if (
-        obstacles.some((o) => {
-          if (o.solid === false && o.type !== "hill") return false;
-          if (o.type === "hill") {
-            const rx = o.w / 2 + w / 2 + gap;
-            const rz = (o.length || o.w) / 2 + w / 2 + gap;
-            return ((x - o.x) / rx) ** 2 + ((z - o.z) / rz) ** 2 < 1;
-          }
-          return Math.hypot(x - o.x, z - o.z) < (w + o.w) / 2 + gap;
-        })
-      )
-        continue;
-      obstacles.push({
-        type,
-        x,
-        z,
-        w,
-        h,
-        solid: type !== "hill",
-        yaw:
-          type === "house" || type === "hut" || type === "hill"
-            ? 0
-            : random() * Math.PI * 2,
-      });
-      made++;
-    }
-  }
-  if (forest) {
-    add("hill", 16, 18, 25, 6, 11, 5);
-  } else {
-    add("hill", 12, 20, 28, 7, 13, 5);
-  }
-  // A long elevated ridge makes the terrain read as mountains instead of
-  // scattered low bumps. The two overlapping crests form a broad ridgeline.
-  obstacles.push(
-    {
-      type: "hill",
-      x: 0,
-      z: 124,
-      w: 62,
-      length: 142,
-      h: forest ? 27 : 30,
-      solid: false,
-    },
-    {
-      type: "hill",
-      x: 22,
-      z: 126,
-      w: 42,
-      length: 118,
-      h: forest ? 23 : 26,
-      solid: false,
-    },
-  );
-  // Shelters are larger now and remain on flatter ground around the hills.
-  add("house", 44, 6.5, 8.5, 4.2, 5.4, 3);
-  add("hut", 32, 4.5, 6, 3, 3.8, 2.2);
-  if (forest) {
-    add("rock", 120, 1.3, 3.2, 1, 3.2, 0.8);
-    add("tree", 192, 0.65, 1.15, 3.8, 7.2, 0.6);
-  } else {
-    add("rock", 152, 1.4, 3.8, 1, 3.5, 0.8);
-    add("cactus", 96, 0.55, 1.1, 2, 4.2, 0.7);
-    add("deadTree", 60, 0.6, 1.1, 3, 5.5, 0.8);
-  }
-  return obstacles;
-}
+// Map được sinh trong server/mapgen.js (địa hình tự nhiên, làng, đường cong, cầu có rào).
 function createVehicles(obstacles) {
   const roads = obstacles.filter(
     (item) =>
@@ -756,11 +522,13 @@ function obstacleBoundRadius(o) {
 }
 // Gắn hàm tra ô trực tiếp lên mảng obstacles (JSON.stringify bỏ qua thuộc tính
 // không phải chỉ số nên dữ liệu gửi cho client không đổi).
+const TERRAIN_ONLY = new Set(["hill", "terrain", "plateau", "pad", "swamp"]);
 function attachObstacleGrid(obstacles) {
   const cells = new Map();
   const key = (ix, iz) => (ix + 512) * 1024 + (iz + 512);
   for (const o of obstacles) {
-    if (o.type === "hill") continue; // đồi xử lý riêng qua room.hills
+    // Đồi / cao nguyên / nền nhà / đầm lầy chỉ dùng để dựng địa hình.
+    if (TERRAIN_ONLY.has(o.type) || !Number.isFinite(o.x)) continue;
     const r = obstacleBoundRadius(o) + GRID_MARGIN;
     const x0 = Math.floor((o.x - r) / GRID_CELL),
       x1 = Math.floor((o.x + r) / GRID_CELL);
@@ -825,34 +593,59 @@ function isOnBridge(obstacles, x, z, clearance = 0) {
     );
   });
 }
+// Vật phẩm chỉ nằm TRONG các căn nhà/chòi: mỗi nhà có một lưới ô trên sàn
+// (cách tường ≥ 0.8 m, chừa lối cửa), mỗi ô tối đa một món → không chồng lên nhau.
+// Vật phẩm được chia vòng quanh các nhà theo thứ tự ngẫu nhiên nên nhà nào cũng có đồ.
 function createLoot(room) {
   const items = [];
   let nextId = 1;
+  const houses = room.obstacles.filter(
+    (o) => o.type === "house" || o.type === "hut",
+  );
+  const slots = houses.map((house) => {
+    const inner = house.w / 2 - 0.8;
+    const cells = [];
+    for (let lx = -inner; lx <= inner + 1e-6; lx += 1.2)
+      for (let lz = -inner; lz <= inner + 1e-6; lz += 1.2) {
+        // Lối vào ngay sau cửa (mặt -Z) để trống cho người chơi đi vào.
+        if (lz < -inner + 1.3 && Math.abs(lx) < 1.3) continue;
+        const c = Math.cos(house.yaw || 0),
+          sn = Math.sin(house.yaw || 0);
+        // Toạ độ cục bộ → thế giới (nghịch đảo phép xoay dùng trong blockedByBuilding).
+        cells.push({
+          x: house.x + c * lx + sn * lz,
+          z: house.z - sn * lx + c * lz,
+        });
+      }
+    for (let i = cells.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [cells[i], cells[j]] = [cells[j], cells[i]];
+    }
+    return cells;
+  });
+  const order = houses.map((_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  let cursor = 0;
   const place = (type, count, amount) => {
-    let made = 0;
-    for (let attempt = 0; attempt < count * 80 && made < count; attempt++) {
-      const x = (Math.random() - 0.5) * (MAP_HALF * 2 - 8);
-      const z = (Math.random() - 0.5) * (MAP_HALF * 2 - 8);
-      if (isNearRoad(room.obstacles, x, z, 2.5)) continue;
-      if (blockedPosition(room, x, z, null)) continue; // cây, đá, tường nhà...
-      // Không đặt trong nước (kể cả sát mép sông/hồ).
-      if (
-        [
-          [0, 0],
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-        ].some(([ox, oz]) => waterAt(room, x + ox, z + oz))
-      )
+    let made = 0,
+      misses = 0;
+    while (made < count && misses < order.length) {
+      const cells = slots[order[cursor % order.length]];
+      cursor++;
+      const cell = cells?.pop();
+      if (!cell) {
+        misses++;
         continue;
-      // Rải đều, tránh các vật phẩm chồng lên nhau.
-      if (items.some((i) => Math.hypot(i.x - x, i.z - z) < 5)) continue;
+      }
+      misses = 0;
       items.push({
         id: nextId++,
         type,
-        x: Math.round(x * 100) / 100,
-        z: Math.round(z * 100) / 100,
+        x: Math.round(cell.x * 100) / 100,
+        z: Math.round(cell.z * 100) / 100,
         amount,
       });
       made++;
@@ -860,7 +653,7 @@ function createLoot(room) {
   };
   place("ammo", AMMO_BOX_COUNT, AMMO_PER_BOX);
   place("medkit", MEDKIT_COUNT, 1);
-  // Two sniper rifles spawn at separate, walkable positions each round.
+  // Two sniper rifles spawn in two different houses each round.
   place("weapon", 2, 1);
   for (const item of items.filter((entry) => entry.type === "weapon")) {
     item.weapon = "sniper";
@@ -882,17 +675,10 @@ function obstacleBaseY(room, o) {
   return base;
 }
 
+// Độ cao nền: tra lưới địa hình dùng chung (public/terrain.js), O(1).
 function groundHeightAt(room, x, z) {
-  let height = 0;
-  for (const hill of room.hills || room.obstacles) {
-    if (hill.type !== "hill") continue;
-    const radiusX = hill.w / 2;
-    const radiusZ = (hill.length || hill.w) / 2;
-    const distanceSquared =
-      ((x - hill.x) / radiusX) ** 2 + ((z - hill.z) / radiusZ) ** 2;
-    if (distanceSquared >= 1) continue;
-    height = Math.max(height, hill.h * Math.pow(1 - distanceSquared, 1.4));
-  }
+  room.terrain ||= Terrain.build(room.obstacles || []);
+  let height = room.terrain.heightAt(x, z);
   if (isOnBridge(room.obstacles || [], x, z, 0.2))
     height = Math.max(height, 0.3);
   return height;
@@ -996,6 +782,17 @@ function blockedByBuilding(o, x, z, radius) {
     lz < 0 && Math.abs(lx) < 1.05 && Math.abs(lz) >= half - 0.16 - radius;
   return (sideWall || endWall) && !frontDoor;
 }
+// Hàng rào / lan can cầu: hộp mỏng xoay theo yaw, dài theo trục length.
+function blockedByFence(o, x, z, radius) {
+  const dx = x - o.x,
+    dz = z - o.z;
+  const c = Math.cos(o.yaw || 0),
+    s = Math.sin(o.yaw || 0);
+  return (
+    Math.abs(c * dx - s * dz) < o.w / 2 + radius &&
+    Math.abs(s * dx + c * dz) < o.length / 2 + radius
+  );
+}
 const PLAYER_RADIUS = 0.38;
 // Keep server movement blockers aligned with the visible prop footprints.
 function obstacleFootprintRadius(o) {
@@ -1037,6 +834,10 @@ function blockedPosition(
         mover.groundY > support.base + o.h * 0.72 + 0.1;
       if (moverIsOnRoof) continue;
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
+      continue;
+    }
+    if (o.type === "fence") {
+      if (blockedByFence(o, x, z, obstacleRadius)) return true;
       continue;
     }
     const footprint = obstacleFootprintRadius(o);
@@ -1634,6 +1435,7 @@ wss.on("connection", (ws) => {
         const mapId = m.mapId === "desert" ? "desert" : "forest";
         const mapSeed = Math.floor(Math.random() * 0xffffffff);
         const obstacles = attachObstacleGrid(createObstacles(mapSeed, mapId));
+        const terrain = Terrain.build(obstacles);
         room = {
           code,
           phase: "waiting",
@@ -1641,6 +1443,7 @@ wss.on("connection", (ws) => {
           mapSeed,
           mapId,
           obstacles,
+          terrain,
           vehicles: createVehicles(obstacles),
           hills: obstacles.filter((obstacle) => obstacle.type === "hill"),
           crates: [],
@@ -2430,10 +2233,8 @@ wss.on("connection", (ws) => {
       // → vài triệu phép tính cho MỖI viên đạn, bắn auto là server đứng hình.
       // Dò đúng một lần cho kết quả y hệt; tia đã bay lên cao hơn mọi ngọn
       // đồi thì không thể chạm đất nữa nên dừng sớm.
-      const terrainTop = (room.maxHillHeight ??= Math.max(
-        0.3,
-        ...(room.hills || []).map((hill) => hill.h),
-      ));
+      room.terrain ||= Terrain.build(room.obstacles);
+      const terrainTop = room.terrain.maxHeight;
       for (let distance = 0.5; distance < nearest; distance += 0.5) {
         const y = origin.y + dir.y * distance;
         if (dir.y >= 0 && y > terrainTop + 0.1) break;
@@ -2484,6 +2285,12 @@ wss.on("connection", (ws) => {
             x: o.w * 0.48,
             y: o.h / 2,
             z: o.w * 0.27,
+          });
+        } else if (o.type === "fence") {
+          wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, o.yaw || 0, {
+            x: o.w / 2,
+            y: o.h / 2,
+            z: o.length / 2,
           });
         } else if (o.type === "rock") {
           wallDistance = rayBox(
