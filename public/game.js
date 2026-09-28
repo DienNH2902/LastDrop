@@ -1422,8 +1422,21 @@ function connect(message) {
     const m = JSON.parse(e.data);
     if (m.type === "pong") {
       const sample = performance.now() - Number(m.t);
-      if (Number.isFinite(sample) && sample >= 0 && sample < 5000)
-        rttMs = rttMs ? rttMs + (sample - rttMs) * 0.25 : sample;
+      // Bỏ mẫu nếu CHÍNH MÁY MÌNH bị khựng trong lúc chờ (đang dựng map, biên
+      // dịch shader...): gói pong phải xếp hàng chờ nên đo ra ping ảo rất cao.
+      if (
+        Number.isFinite(sample) &&
+        sample >= 0 &&
+        sample < 5000 &&
+        !clientStalledSince(Number(m.t))
+      ) {
+        // Trung vị 5 mẫu gần nhất (1 mẫu/giây): phản ánh ngay khi mạng đổi,
+        // 1 cú vọt lẻ không làm ô PING đỏ suốt 10 giây như trung bình trượt cũ.
+        rttSamples.push(sample);
+        if (rttSamples.length > 5) rttSamples.shift();
+        const sorted = [...rttSamples].sort((a, b) => a - b);
+        rttMs = sorted[sorted.length >> 1];
+      }
       serverLagMs = Math.max(0, Number(m.lag) || 0);
       updatePingHud();
       return;
@@ -1549,13 +1562,31 @@ function connect(message) {
 }
 // ---- Đo ping (RTT) — dùng để dự đoán xe và hiện chất lượng mạng cho người chơi ----
 let rttMs = 0,
+  rttSamples = [],
   serverLagMs = 0, // server báo mình bị nghẽn CPU bao nhiêu ms (p99)
   pingTimer = null;
+// Phát hiện máy MÌNH bị khựng (luồng chính bận > 100 ms): gói tin tới trong lúc
+// đó phải chờ, nên không được tính là "mạng trễ" (ngưỡng 100 ms để máy yếu
+// ~15 FPS không bị coi là khựng liên tục). Chỉ xét khi đang ở trong
+// trận và tab đang hiện (lúc đó vòng vẽ frame() chạy liên tục).
+let lastFrameAt = 0,
+  lastStallAt = 0;
+function noteFrameStart(now) {
+  if (lastFrameAt && now - lastFrameAt > 100) lastStallAt = now;
+  lastFrameAt = now;
+}
+function clientStalledSince(sinceMs) {
+  if (!renderer || document.hidden || !$("#game")?.classList.contains("active"))
+    return false;
+  const now = performance.now();
+  return now - lastFrameAt > 100 || lastStallAt >= sinceMs;
+}
 function startPingLoop() {
   stopPingLoop();
+  rttSamples = [];
   const ping = () => send({ type: "ping", t: performance.now() });
   ping();
-  pingTimer = setInterval(ping, 2000);
+  pingTimer = setInterval(ping, 1000);
 }
 function stopPingLoop() {
   if (pingTimer) clearInterval(pingTimer);
@@ -1582,7 +1613,9 @@ function updatePingHud() {
       (jitter >= 25 ? ` · ±${jitter}` : "") +
       (serverLagMs >= 15 ? ` · SV+${serverLagMs}` : ""),
   );
-  const level = ms < 80 && jitter < 40 ? "good" : ms < 160 && jitter < 90 ? "ok" : "bad";
+  // Ngưỡng màu: < 100 ms là tốt cho người chơi VN tới server Singapore (đường
+  // mạng thực tế ~60–90 ms); chỉ đổi MÀU hiển thị, không thay đổi độ trễ thật.
+  const level = ms < 100 && jitter < 40 ? "good" : ms < 180 && jitter < 90 ? "ok" : "bad";
   if (el.dataset.level !== level) el.dataset.level = level;
 }
 function send(data) {
@@ -3098,7 +3131,8 @@ const MAX_EXTRAPOLATE_MS = 150;
 // gần đây rồi đặt đệm = nhịp gói + trễ p90 (70–220 ms; server bù trễ bắn
 // 450 ms nên bắn trúng thứ mình thấy vẫn được tính).
 const netTiming = {
-  offsets: [], // (giờ server − giờ máy) của ~60 gói gần nhất
+  offsets: [], // (giờ server − giờ máy) của các gói trong ~4 s gần nhất
+  offsetTimes: [], // giờ máy lúc nhận từng gói (để bỏ mẫu cũ theo thời gian)
   base: null, // offset của gói NHANH nhất trong cửa sổ = trễ mạng tối thiểu
   interval: 60, // khoảng cách trung bình giữa 2 gói state (ms, theo giờ server)
   lastServerT: 0,
@@ -3108,8 +3142,25 @@ const netTiming = {
 function recordSnapshotTiming(serverT) {
   if (!Number.isFinite(serverT)) return;
   const nt = netTiming;
-  nt.offsets.push(serverT - Date.now());
-  if (nt.offsets.length > 60) nt.offsets.shift();
+  const localNow = Date.now();
+  // Máy mình vừa khựng (dựng map lúc lên máy bay, biên dịch shader...): gói
+  // này tới muộn do CHỜ LUỒNG CHÍNH chứ không phải do mạng → không tính, nếu
+  // không sẽ ra "±235" ngay cả khi chạy local và đệm nội suy tăng vọt vô ích.
+  if (clientStalledSince(performance.now() - 150)) {
+    nt.lastServerT = serverT;
+    return;
+  }
+  nt.offsets.push(serverT - localNow);
+  nt.offsetTimes.push(localNow);
+  // Cửa sổ theo THỜI GIAN (4 s, tối đa 80 gói) thay vì số gói: lúc trên máy
+  // bay server gửi thưa, cửa sổ đếm gói sẽ giữ mẫu cũ rất lâu.
+  while (
+    nt.offsets.length > 80 ||
+    (nt.offsets.length > 8 && localNow - nt.offsetTimes[0] > 4000)
+  ) {
+    nt.offsets.shift();
+    nt.offsetTimes.shift();
+  }
   nt.base = Math.max(...nt.offsets);
   if (nt.lastServerT) {
     const gap = serverT - nt.lastServerT;
@@ -3124,6 +3175,7 @@ function recordSnapshotTiming(serverT) {
 }
 function resetNetTiming() {
   netTiming.offsets.length = 0;
+  netTiming.offsetTimes.length = 0;
   netTiming.base = null;
   netTiming.lastServerT = 0;
   netTiming.delay = INTERP_DELAY_MS;
@@ -8120,6 +8172,7 @@ function playJumpReadyBell() {
 }
 function frame() {
   if (!renderer || !$("#game").classList.contains("active")) return;
+  noteFrameStart(performance.now());
   const dt = Math.min(clock.getDelta(), 0.05);
   for (let i = bloodParticles.length - 1; i >= 0; i--) {
     const particle = bloodParticles[i];
