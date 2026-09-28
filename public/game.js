@@ -4174,23 +4174,22 @@ function buildLootAssets() {
       depthWrite: false,
     }),
   });
-  const ringGeometry = new THREE.RingGeometry(0.55, 0.7, 24);
-  ringGeometry.rotateX(-Math.PI / 2);
+  const bodies = {
+    ranger: weapon(false),
+    sniper: weapon(true),
+    medkit: mergeGeometries(medParts, false),
+    ammo: mergeGeometries(ammoParts, false),
+  };
+
+  // Tính bounding box 1 lần cho mỗi loại loot.
+  // Dùng để đặt đáy vật phẩm sát mặt đất, không bị lơ lửng.
+  for (const geometry of Object.values(bodies)) {
+    geometry.computeBoundingBox();
+  }
+
   return {
     bodyMaterial: new THREE.MeshLambertMaterial({ vertexColors: true }),
-    bodies: {
-      ranger: weapon(false),
-      sniper: weapon(true),
-      medkit: mergeGeometries(medParts, false),
-      ammo: mergeGeometries(ammoParts, false),
-    },
-    ringGeometry,
-    beamGeometry: new THREE.CylinderGeometry(0.04, 0.04, 3.2, 6),
-    glow: {
-      medkit: glow(0xff4d5e),
-      weapon: glow(0x7de5ff),
-      ammo: glow(0xffd24a),
-    },
+    bodies,
   };
 }
 function addLootMesh(item) {
@@ -4211,17 +4210,31 @@ function addLootMesh(item) {
     lootAssets.bodies[bodyKey],
     lootAssets.bodyMaterial,
   );
+
   root.add(body);
-  const glow = lootAssets.glow[isMed ? "medkit" : isWeapon ? "weapon" : "ammo"];
-  // Vòng sáng dưới đất + cột sáng mảnh để dễ thấy từ xa.
-  const ring = new THREE.Mesh(lootAssets.ringGeometry, glow.ring);
-  ring.position.y = 0.06;
-  root.add(ring);
-  const beam = new THREE.Mesh(lootAssets.beamGeometry, glow.beam);
-  beam.position.y = 1.6;
-  root.add(beam);
-  body.position.y = 0.4;
+
+  // Đặt đáy vật phẩm vừa chạm mặt đất.
+  // Không dùng y = 0.4 cố định vì mỗi loại loot có chiều cao khác nhau.
+  const bounds = lootAssets.bodies[bodyKey].boundingBox;
+
+  if (bounds) {
+    body.position.y = -bounds.min.y + 0.015;
+  }
+
+  // Loot đứng yên, không xoay và không nhấp nhô.
+  body.rotation.set(0, 0, 0);
+
+  if (isWeapon) {
+    body.rotation.y = Math.random() * Math.PI * 2;
+  }
+
   root.position.set(item.x, groundHeightAt(item.x, item.z), item.z);
+
+  root.visible = false;
+  scene.add(root);
+
+  item.mesh = root;
+  item.body = body;
   // Chỉ bật khi người chơi tới gần (updateLootVisibility).
   root.visible = false;
   scene.add(root);
@@ -4732,13 +4745,7 @@ function updateGunPose(dt) {
 // Gọi mỗi frame: xoay/nhấp nhô vật phẩm, gợi ý phím F, thanh hồi máu.
 function updateLootHud(dt) {
   updateLootVisibility();
-  const t = performance.now() / 1000;
-  // Chỉ xoay/nhấp nhô những vật phẩm đang hiển thị gần người chơi.
-  for (const item of nearbyLoot) {
-    if (!item.body) continue;
-    item.body.rotation.y += dt * 1.4;
-    item.body.position.y = 0.4 + Math.sin(t * 2 + item.id) * 0.06;
-  }
+  
   const prompt = $("#lootHud .lh-prompt");
   const heal = $("#lootHud .lh-heal");
   if (!prompt || !heal) return;
