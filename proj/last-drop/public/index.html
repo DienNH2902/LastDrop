@@ -13,78 +13,62 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Last Drop">
-  <link rel="stylesheet" href="/style.css?v=ui-home-2">
+  <link rel="stylesheet" href="/style.css?v=loot-crate-transfer-5">
 </head>
 
 <body>
-  <!-- Màn 1: giới thiệu nhà phát triển & studio -->
-  <div id="companySplash" class="ld-splash">
-    <div class="ld-splash-glow" aria-hidden="true"></div>
-    <small class="ld-splash-kicker">TRÂN TRỌNG GIỚI THIỆU</small>
-    <div class="ld-splash-row">
-      <figure class="ld-splash-card">
-        <div class="ld-splash-photo"><img src="/dien.jpg" alt="Nhà phát triển Nguyễn Hoàng Điền"></div>
-        <figcaption><small>NHÀ PHÁT TRIỂN</small><strong>Nguyễn Hoàng Điền</strong><span>Thiết kế · Lập trình</span></figcaption>
-      </figure>
-      <div class="ld-splash-x" aria-hidden="true">×</div>
-      <figure class="ld-splash-card">
-        <div class="ld-splash-photo ld-splash-logo"><img src="/catgrenade.png" alt="Logo studio D.I.E.N"></div>
-        <figcaption><small>STUDIO</small><strong class="ld-studio">D.I.E.N</strong><span>STUDIO: DEBUG IT EVERY NIGHT</span></figcaption>
-      </figure>
+  <div id="companySplash" class="company-splash">
+    <div class="company-presentation">
+      <section class="company-card developer-card"><small class="company-role">DEVELOPER</small>
+        <div class="company-image developer-image"><img src="/dien.jpg" alt="Developer Nguyễn Hoàng Điền"></div>
+        <h1>Nguyễn Hoàng Điền</h1>
+        <p>Created & Presented</p>
+      </section>
+      <div class="company-x" aria-hidden="true">×</div>
+      <section class="company-card studio-card"><small class="company-role">GAME STUDIO</small>
+        <div class="company-image studio-image"><img src="/catgrenade.png" alt="Logo DIEN"></div>
+        <h1>D.I.E.N</h1>
+        <p>Debug&nbsp; It&nbsp; Every&nbsp; Night</p>
+      </section>
     </div>
-    <!-- <div class="ld-splash-line" aria-hidden="true"></div> -->
   </div>
-  <!-- Màn 2: nạp trò chơi -->
-  <div id="loading" class="ld-loader hidden">
-    <div class="ld-loader-bg" aria-hidden="true"><img src="/forest-home-hero.svg" alt=""></div>
-    <div class="ld-loader-center">
-      <img class="ld-loader-logo" src="/logo.svg" alt="">
-      <div class="ld-loader-title">LAST DROP</div>
-      <div class="ld-loader-sub">ĐẤU TRƯỜNG SINH TỒN · MÙA 01</div>
-    </div>
-    <div class="ld-loader-bottom">
-      <div class="ld-loader-status"><span id="loadStatus">Đang khởi tạo đấu trường…</span><b id="loadPercent">0%</b></div>
-      <div class="ld-loader-bar"><i id="loadBar"></i></div>
-      <p class="ld-loader-tip" id="loadTip">Mẹo: nằm sấp giúp bạn khó bị phát hiện giữa bãi cỏ cao.</p>
-    </div>
+  <div id="loading" class="loading hidden"><img src="/logo.svg">
+    <div class="load-title">LAST DROP</div>
+    <div class="load-line"><i></i></div><small>ĐANG KHỞI TẠO ĐẤU TRƯỜNG</small>
   </div>
   <div id="app" class="hidden">
     <header>
-      <div class="brand"><img src="/logo.svg"><span>LAST DROP<small>ĐẤU TRƯỜNG / MÙA 01</small></span></div>
+      <div class="brand"><img src="/logo.svg"><span>LAST DROP<small>ARENA / SEASON 01</small></span></div>
       <div id="status" class="status">● ONLINE</div>
       <button class="icon-btn header-settings" data-screen="settings" aria-label="Cài đặt" title="Cài đặt">⚙</button>
       <button class="icon-btn" id="soundToggle" aria-label="Bật/tắt âm thanh" title="Bật/tắt âm thanh">♫</button>
     </header>
     <main>
-      <section id="menu" class="screen active ld-home">
-        <div class="ld-home-bg" aria-hidden="true"><img src="/forest-home-hero.svg" alt=""></div>
-        <div class="ld-home-grid">
-          <div class="ld-home-hero">
-            <div class="ld-eyebrow">MÙA 01 · ĐẤU TRƯỜNG SINH TỒN</div>
-            <h1>Đấu trường<br><em>Sống sót đến cuối.</em></h1>
-            <p>Mỗi trận tối đa 5 người trên hai bản đồ rộng 400 × 400 m: rừng núi có sông, cầu, đầm lầy và sa mạc đá đỏ. Chọn điểm nhảy, lục soát từng khu nhà tìm AUG, Kar98k, đạn và túi máu, lái xe băng qua đèo — rồi trụ lại đến khi vòng bo khép chặt.</p>
-            <ul class="ld-chips">
-              <li><b>5</b> người / trận</li>
-              <li><b>2</b> bản đồ</li>
-              <li><b>FPP</b> góc nhìn thứ nhất</li>
-              <li>Xe · Vòng bo · Nhảy dù</li>
-            </ul>
-            <div class="ld-controls"><span><kbd>W A S D</kbd> di chuyển</span><span><kbd>Chuột</kbd> ngắm / bắn</span><span><kbd>F</kbd> nhặt đồ · lên xe</span><span><kbd>Tab</kbd> balo</span></div>
+      <section id="menu" class="screen active">
+        <div class="hero">
+          <div class="eyebrow">SURVIVE THE LAST DROP</div>
+          <h1>CHỈ CÒN<br><em>MỘT NGƯỜI.</em></h1>
+          <p>Đấu trường góc nhìn thứ nhất dành cho 4–5 người.<br>Sinh tồn, nhặt vật phẩm, trở thành người sống sót cuối
+            cùng.</p><label class="home-player-name">TÊN NGƯỜI CHƠI<input id="nameInput" value="Rookie" maxlength="18"
+              autocomplete="nickname" placeholder="Nhập tên trước khi vào phòng"></label>
+          <div class="actions"><button class="primary" id="createBtn">TẠO PHÒNG <b>→</b></button>
+            <div class="join"><input id="codeInput" maxlength="6" inputmode="numeric"
+                placeholder="MÃ PHÒNG 6 SỐ"><button id="joinBtn">THAM GIA</button></div>
           </div>
-          <div class="ld-home-panel">
-            <label class="ld-field"><span>1 · TÊN CỦA BẠN</span><input id="nameInput" value="Rookie" maxlength="18" autocomplete="nickname" placeholder="Nhập tên trước khi vào phòng"></label>
-            <div class="ld-field"><span>2 · CHỌN BẢN ĐỒ <b id="mapCount">01 / 02</b></span>
-              <div class="map-art ld-map-art" id="mapArt"><span class="map-label" id="mapName">VERDANT WILDS</span></div>
-              <div class="ld-map-desc" id="mapDescription">CỎ XANH · HỒ · SÔNG · ĐỒI</div>
-              <div class="map-select"><button type="button" data-map-choice="forest">RỪNG</button><button type="button" data-map-choice="desert">SA MẠC</button></div>
+          <div class="map-card">
+            <div class="map-title">KHU VỰC TÁC CHIẾN <b id="mapCount">01 / 02</b></div>
+            <div class="map-art" id="mapArt">
+              <div class="grid"></div><div class="ring"></div><div class="pin">✦</div>
+              <span class="map-label" id="mapName">VERDANT WILDS</span>
             </div>
-            <div class="ld-field"><span>3 · VÀO TRẬN</span>
-              <button class="primary ld-create" id="createBtn">TẠO PHÒNG MỚI <b>→</b></button>
-              <div class="ld-or">hoặc vào phòng của bạn bè</div>
-              <div class="join ld-join"><input id="codeInput" maxlength="6" inputmode="numeric" placeholder="MÃ PHÒNG 6 SỐ"><button id="joinBtn">THAM GIA</button></div>
-            </div>
+            <div class="map-info"><span>HỆ SINH THÁI <b id="mapDescription">CỎ XANH · HỒ · SÔNG · ĐỒI</b></span><span>QUY MÔ <b>400 × 400 M</b></span></div>
+            <div class="map-select"><button type="button" data-map-choice="forest">RỪNG</button><button type="button" data-map-choice="desert">SA MẠC</button></div>
           </div>
+          <div class="stats"><span><b>05</b> NGƯỜI TỐI ĐA</span><span><b>01</b> ĐẤU TRƯỜNG</span><span><b>FPP</b> GÓC
+              NHÌN</span></div>
         </div>
+        <div class="home-backdrop" aria-hidden="true"><img src="/forest-home-hero.svg" alt=""></div>
+        <div class="tip home-tip">W A S D <span>DI CHUYỂN</span> &nbsp; • &nbsp; CHUỘT <span>NGẮM / BẮN</span></div>
       </section>
       <section id="lobby" class="screen">
         <div class="panel">
@@ -154,7 +138,7 @@
           <div class="eyebrow">LOADOUT / PRE-MATCH</div>
           <h2>KHO <em>TRANG BỊ</em></h2>
           <div class="gear"><b>01</b>
-            <div><strong>AUG</strong><small>SÚNG TRƯỜNG TẤN CÔNG · 5.56 MM · RED DOT</small></div><span>ĐANG DÙNG</span>
+            <div><strong>RANGER-9</strong><small>SÚNG TRƯỜNG TẤN CÔNG · 5.56 MM</small></div><span>ĐANG DÙNG</span>
           </div>
           <div class="gear"><b>02</b>
             <div><strong>ÁO GIÁP MK I</strong><small>GIẢM SÁT THƯƠNG CƠ BẢN</small></div><span>TRANG BỊ</span>
@@ -180,7 +164,7 @@
           </div>
           <div id="chuteOverlay" class="chute-overlay hidden"></div>
           <div class="hud-top">
-            <div class="alive"><b id="aliveCount">0</b> <small>/ <span id="totalCount">0</span> CÒN SỐNG</small><span class="kill-hud">ĐÃ HẠ: <b id="killHud">0</b></span></div>
+            <div class="alive"><b id="aliveCount">0</b> <small>/ <span id="totalCount">0</span> CÒN SỐNG</small></div>
             <div id="matchClock">00:00</div>
             <div id="hudRoom">ROOM ------</div>
           </div>
@@ -203,7 +187,7 @@
             <div class="health"><span>HP</span>
               <div><i id="healthBar"></i></div><b id="healthText">100</b>
             </div>
-            <div class="weapon"><small>SÚNG TRƯỜNG TẤN CÔNG · RED DOT</small><b>AUG</b><span id="ammo">30 <i>/ 90</i></span></div>
+            <div class="weapon"><small>RIFLE / ASSAULT</small><b>RANGER-9</b><span id="ammo">30 <i>/ 90</i></span></div>
             <div id="swimHint" class="swim-hint hidden">SPACE BƠI LÊN · SHIFT LẶN XUỐNG</div>
             <div class="controls">WASD DI CHUYỂN · SPACE NHẢY · CHUỘT TRÁI BẮN · CHUỘT PHẢI SCOPE · F NHẶT ĐỒ · TAB BALO
               · Q/E NGHIÊNG NGƯỜI · ESC TẠM DỪNG</div>
@@ -247,22 +231,12 @@
             <div><b id="placeResult">—</b><small>XẾP HẠNG</small></div>
             <div><b id="surviveResult">00:00</b><small>THỜI GIAN SỐNG</small></div>
           </div>
-          <p id="resultDetail">Kết quả trận đấu của bạn.</p><button id="returnBtn" class="primary">XEM CHIẾN TÍCH
+          <p id="resultDetail">Kết quả trận đấu của bạn.</p><button id="returnBtn" class="primary">VỀ SẢNH
             <b>→</b></button>
         </div>
       </section>
-      <section id="trophies" class="screen">
-        <div class="panel narrow trophy-panel">
-          <div class="eyebrow">SAU TRẬN ĐẤU</div>
-          <h2>CHIẾN <em>TÍCH</em></h2>
-          <div class="trophy-total"><b id="trophyKills">0</b><small>TỔNG SỐ ĐỐI THỦ ĐÃ HẠ</small></div>
-          <div class="trophy-sub" id="trophySub"></div>
-          <ol id="trophyList" class="trophy-list"></ol>
-          <button id="trophyHomeBtn" class="primary">VỀ TRANG CHỦ <b>→</b></button>
-        </div>
-      </section>
     </main>
-    <footer><span>LAST DROP © 2026 · SẢN PHẨM CỦA D.I.E.N STUDIO</span><span>0.1.0 &nbsp; / &nbsp; <i>CHIẾN ĐẤU ĐỂ SINH TỒN</i></span></footer>
+    <footer><span>LASTDROP © 2026 · SẢN PHẨM CỦA D.I.E.N STUDIO</span><span>PHIÊN BẢN 0.1.0 &nbsp; / &nbsp; <i>CHIẾN ĐẤU ĐỂ SINH TỒN</i></span></footer>
   </div>
     <script type="importmap">
     {
@@ -272,8 +246,7 @@
       }
     }
   </script>
-  <script src="/terrain.js?v=natural-map-1"></script>
-  <script type="module" src="/game.js?v=ui-home-2"></script>
+  <script type="module" src="/game.js?v=vehicle-killfeed-1"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

@@ -60,41 +60,6 @@ Khi deploy xong, mở URL HTTPS Render cấp và chia sẻ cho bạn bè. Trình
 
 Không có cam kết “miễn phí không giới hạn”. Không thể đảm bảo không lag qua Internet vì còn phụ thuộc ping, Wi-Fi, vị trí server và máy người chơi. Với 4–5 người, một server gần người chơi và gửi trạng thái khoảng 10 lần/giây thường là điểm khởi đầu hợp lý; prototype này gửi vị trí theo nhịp khoảng 11 lần/giây. Các bước deploy dựa trên hướng dẫn chính thức của [Render Web Services](https://render.com/docs/web-services), [Render free instances](https://render.com/docs/free) và [Render WebSockets](https://render.com/docs/websocket).
 
-## Hiệu năng & mạng — quy tắc bắt buộc giữ
-
-Server Render **không render đồ họa** (không cần GPU); đồ họa chạy trên máy từng người chơi. Gói free của Render chỉ có ~0.1 CPU nên mọi phép tính trong vòng lặp trận phải rẻ. Các lỗi đã gặp và cách đã sửa — khi thêm tính năng mới đừng lặp lại:
-
-**Server (`server/server.js`)**
-- Vật cản tĩnh được tra qua lưới 16 m (`attachObstacleGrid` / `nearObstacles`). Đừng viết lại vòng `for (const o of room.obstacles)` cho truy vấn theo điểm (va chạm, độ cao, nước, cầu).
-- Bắn súng: dò địa hình **một lần** dọc tia và lọc thô vật cản theo khoảng cách tới tia. Bản cũ dò lại cho từng ngọn đồi → 6,3 ms/phát, bắn auto làm server đứng; nay ~0,1 ms/phát.
-- Gói `state` gửi 20 lần/giây, số được làm tròn, không gửi trường nội bộ (`controls`, `lastTickAt`...). Client đang nghẽn mạng thì bỏ gói cũ thay vì xếp hàng.
-- Lỗi trong một gói tin / một tick được bắt lại (không làm sập cả server); kết nối chết được dọn bằng ping 15 giây.
-- File tĩnh được nén gzip và cache trong RAM (tự làm mới khi file đổi).
-
-**Client (`public/game.js`)**
-- Người chơi khác và xe được **nội suy theo mốc thời gian server**, vẽ trễ `INTERP_DELAY_MS` (100 ms) — không đặt thẳng vị trí từ gói tin (gây giật/tele).
-- Xe mình lái được **mô phỏng ngay trên máy** (`stepCar`, cùng công thức với server) và hiệu chỉnh mềm khi có gói server (`reconcileDrive`). Nếu sửa vật lý xe ở server thì sửa y hệt `stepCar`.
-- Không tạo/xóa đèn (`PointLight`) giữa trận: đổi số đèn buộc biên dịch lại shader của mọi vật liệu (khựng khi bắn phát đầu, khi máy bay hiện/ẩn). Đèn chớp nòng và đèn máy bay luôn có sẵn, chỉ đổi cường độ.
-- Không `dispose()` material lấy từ `makeMat()` (dùng chung); loot/vệt đạn/hạt máu dùng geometry + material chung và bể đối tượng, không tạo mới mỗi phát bắn.
-- Loot chỉ vẽ trong 75 m, cỏ chia ô 50 m và tắt ngoài 120 m, đường xá gộp chung một mesh theo màu; minimap vẽ lớp địa hình tĩnh một lần.
-- DOM trong vòng lặp khung hình chỉ ghi khi giá trị đổi (`setText`, `setHtml`, `setStyle`); không ghi `localStorage` trong xử lý gói tin.
-- Bắn liên thanh được nhịp theo khung hình (`updateAutoFire`), mỗi phát gửi **một** gói `shoot`.
-- Độ phân giải render tự hạ khi FPS < 45 (`adaptResolution`); góc phải HUD hiện PING (xanh/vàng/đỏ).
-
-## Bản đồ tự nhiên (rừng / sa mạc)
-
-- `server/mapgen.js` sinh map từ seed: dãy núi (chuỗi khối núi elip xoay, phủ ~40% rừng / ~60% sa mạc), viền map là núi uốn lượn nên không lộ mép vuông; sông + hồ + đầm lầy (rừng); làng gom cụm, nhà quay cửa ra đường; đường cong nối các làng, cắt nhau trên đất liền, luôn có ít nhất một cầu qua sông, lan can + rào bờ sông quanh cầu; làng / điểm ngắm trên núi có đường đèo lên. Mọi vật thể kiểm tra chồng lấp bằng lưới chiếm chỗ.
-- `public/terrain.js` dùng chung cho server và client: dựng lưới độ cao 2 m (tra O(1)), san nền đường theo mặt cắt dọc giới hạn độ dốc, san nền nhà, cao nguyên. Sửa hình dạng địa hình chỉ sửa ở file này để server/client luôn khớp.
-- Vật phẩm chỉ sinh **trong nhà** (`createLoot`), mỗi ô sàn tối đa một món. Xe giữ nguyên logic spawn.
-- Client vẽ mặt đất liền khối chia 6×6 ô (GPU bỏ phần ngoài tầm nhìn), đường/sông là dải băng bám địa hình, cỏ là bụi lá mảnh chỉ vẽ trong ~75 m (50 m ở chế độ Performance).
-
-## Súng, nhân vật và hitbox
-
-- `public/weapons.js`: mô hình AUG (red dot) và Kar98k (ống ngắm 8x, khóa nòng kéo sau mỗi phát), dùng chung cho súng cầm tay, súng trên tay người khác và súng rơi dưới đất; tia lửa đầu nòng dựng sẵn, chỉ bật/tắt khi bắn.
-- `public/avatar.js`: nhân vật có khớp (hông, gối, vai, khuỷu), hai tay cầm súng bằng IK, hoạt ảnh đứng / đi chậm / chạy / khom / nằm / peek / bơi / rơi / dù / ngồi xe; giữ đầu mèo, nón, giáp.
-- **Hitbox** (`HITBOX` trong avatar.js và `HIT_STAND/CROUCH/PRONE/SEAT/FREEFALL` trong server.js) bao trọn nón (tính là đầu) và giáp (tính là thân). Sửa kích thước nhân vật thì sửa cả hai nơi.
-- Âm thanh AUG / Kar98k, kéo khóa nòng, nạp đạn theo từng thao tác, và bước chân theo bề mặt (cỏ, cát, đường, sàn gỗ, bùn, nước) đều tổng hợp bằng Web Audio trong `game.js`.
-
 ## Tự tạo và import đồ họa
 
 Map hiện sinh trực tiếp từ hình khối trong `public/game.js` (`initWorld`). Để tự làm asset miễn phí, dựng model trong Blender, export `.glb`, đặt file vào `public/assets/`, rồi import `GLTFLoader` từ Three.js và thêm model vào scene trong `initWorld`. Giữ texture nhỏ, gộp vật thể tĩnh và dùng ít polygon để tối ưu. Có thể thay các khối người chơi trong `renderPlayers()` bằng model nhân vật. Không dùng ảnh khuôn mặt nếu chưa có đồng ý rõ ràng; upload ảnh và phân phối ảnh cần thêm kiểm soát quyền riêng tư/bảo mật.

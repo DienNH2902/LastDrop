@@ -3,11 +3,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
-const zlib = require("node:zlib");
-const crypto = require("node:crypto");
 const { WebSocketServer } = require("ws");
-const Terrain = require("../public/terrain.js");
-const { createObstacles } = require("./mapgen.js");
 
 const ROOT = path.join(__dirname, "..", "public");
 const PORT = Number(process.env.PORT || 3000);
@@ -39,15 +35,13 @@ const STAGING_TIMEOUT_MS = 20000; // chờ tối đa bấy nhiêu ms cho máy ch
 // cũ; càng về sau vòng càng nhỏ và sát thương mỗi giây cho người đứng ngoài
 // càng cao.
 const ZONE_STAGES = [
-  // Vòng đầu chờ lâu (người chơi vừa tiếp đất, cần thời gian nhặt đồ / tìm xe),
-  // các vòng sau cũng thu chậm hơn trước khoảng gấp đôi.
-  { radiusRatio: 0.62, waitMs: 90000, shrinkMs: 60000, damage: 1.5 },
-  { radiusRatio: 0.55, waitMs: 70000, shrinkMs: 50000, damage: 3 },
-  { radiusRatio: 0.5, waitMs: 60000, shrinkMs: 45000, damage: 5 },
-  { radiusRatio: 0.45, waitMs: 50000, shrinkMs: 40000, damage: 8 },
-  { radiusRatio: 0.4, waitMs: 45000, shrinkMs: 35000, damage: 11 },
-  { radiusRatio: 0.35, waitMs: 40000, shrinkMs: 30000, damage: 15 },
-  { radiusRatio: 0.3, waitMs: 35000, shrinkMs: 25000, damage: 20 },
+  { radiusRatio: 0.62, waitMs: 35000, shrinkMs: 26000, damage: 2 },
+  { radiusRatio: 0.55, waitMs: 28000, shrinkMs: 22000, damage: 4 },
+  { radiusRatio: 0.5, waitMs: 24000, shrinkMs: 18000, damage: 6 },
+  { radiusRatio: 0.45, waitMs: 20000, shrinkMs: 15000, damage: 9 },
+  { radiusRatio: 0.4, waitMs: 16000, shrinkMs: 12000, damage: 13 },
+  { radiusRatio: 0.35, waitMs: 14000, shrinkMs: 10000, damage: 18 },
+  { radiusRatio: 0.3, waitMs: 12000, shrinkMs: 8000, damage: 25 },
 ];
 const ZONE_FULL_RADIUS = MAP_HALF * Math.SQRT2; // đủ phủ hết bản đồ hình vuông
 const ZONE_TICK_SECONDS = 0.1; // tickRoom chạy mỗi 100ms
@@ -106,11 +100,10 @@ function claimAlong(q, part, origin, dir, now) {
   const tolerance = part === "head" ? 0.8 : 1.1;
   let best = null;
   for (const s of samples) {
+    const crouchScale = s.crouching ? 0.68 : 1;
     const py = s.prone
-      ? s.baseY + 0.35
-      : s.baseY +
-        s.jumpY +
-        (part === "head" ? (s.crouching ? 1.34 : 1.8) : s.crouching ? 0.65 : 1.0);
+      ? s.baseY + (part === "head" ? 0.5 : 0.35)
+      : s.baseY + s.jumpY + (part === "head" ? 1.72 : 1.0) * crouchScale;
     const vx = s.x - origin.x,
       vy = py - origin.y,
       vz = s.z - origin.z;
@@ -124,50 +117,6 @@ function claimAlong(q, part, origin, dir, now) {
     if (perp <= tolerance && (best === null || along < best)) best = along;
   }
   return best;
-}
-// Bộ hộp hitbox theo tư thế (đơn vị mét, chân ở y = 0; y cộng thêm độ cao nền).
-// Số liệu giống HITBOX trong public/avatar.js — sửa một bên thì sửa cả hai.
-const HIT_STAND = [
-  { part: "head", c: [0, 1.8, 0], h: [0.28, 0.3, 0.27], peek: 0.32 },
-  { part: "body", c: [0, 1.14, 0], h: [0.31, 0.36, 0.21], peek: 0.2 },
-  { part: "body", c: [0, 0.45, 0], h: [0.2, 0.45, 0.15], peek: 0 },
-];
-const HIT_CROUCH = [
-  { part: "head", c: [0, 1.34, -0.25], h: [0.28, 0.3, 0.27], peek: 0.24 },
-  { part: "body", c: [0, 0.8, -0.08], h: [0.31, 0.3, 0.24], peek: 0.14 },
-  { part: "body", c: [0, 0.3, -0.15], h: [0.2, 0.3, 0.3], peek: 0 },
-];
-// Nằm sấp: mô hình đứng xoay nằm xuống (trục cao → hướng trước mặt), tâm cao 0.35 m.
-const HIT_PRONE = [
-  { part: "head", c: [0, 0.35, -1.8], h: [0.28, 0.27, 0.3] },
-  { part: "body", c: [0, 0.35, -1.14], h: [0.31, 0.21, 0.36] },
-  { part: "body", c: [0, 0.35, -0.45], h: [0.2, 0.15, 0.45] },
-];
-const HIT_SEAT = [
-  { part: "head", c: [0, 1.38, 0.06], h: [0.28, 0.3, 0.27] },
-  { part: "body", c: [0, 0.87, 0.02], h: [0.31, 0.3, 0.21] },
-  { part: "body", c: [0, 0.45, -0.25], h: [0.2, 0.18, 0.3] },
-];
-const HIT_FREEFALL = [
-  { part: "head", c: [0, 0.5 + Math.cos(1.35) * 1.8, -1.8], h: [0.28, 0.27, 0.3] },
-  { part: "body", c: [0, 0.5 + Math.cos(1.35) * 1.14, -1.14], h: [0.31, 0.21, 0.36] },
-  { part: "body", c: [0, 0.5 + Math.cos(1.35) * 0.45, -0.45], h: [0.2, 0.15, 0.45] },
-];
-function playerHitboxes(q) {
-  if (q.vehicleId) return { boxes: HIT_SEAT };
-  if (q.state === "freefall") return { boxes: HIT_FREEFALL };
-  if (q.prone) return { boxes: HIT_PRONE };
-  const base = q.crouching ? HIT_CROUCH : HIT_STAND;
-  const jump = q.jumpY || 0;
-  const peek = Math.max(-1, Math.min(1, Number(q.peek) || 0));
-  if (!jump && !peek) return { boxes: base };
-  // Peek nghiêng người sang phải/trái quanh bàn chân: đầu và thân dịch ngang.
-  return {
-    boxes: base.map((b) => ({
-      ...b,
-      c: [b.c[0] + peek * (b.peek || 0), b.c[1] + jump, b.c[2]],
-    })),
-  };
 }
 const isGrounded = (p) => p.state === "lobby" || p.state === "ground";
 // Đi lại: đứng chờ trong map (staging/countdown) hoặc đã tiếp đất.
@@ -193,46 +142,10 @@ const types = {
   ".webmanifest": "application/manifest+json",
   ".json": "application/json",
 };
-// File tĩnh được đọc + nén gzip MỘT lần rồi giữ trong RAM. Trước đây mỗi lượt
-// tải trang lại đọc đĩa và gửi nguyên 245 KB game.js chưa nén — trên gói free
-// (CPU/băng thông thấp) việc này tranh CPU với vòng lặp trận đấu.
-const staticCache = new Map();
-const COMPRESSIBLE = new Set([".html", ".js", ".css", ".svg", ".json", ".webmanifest", ".txt"]);
-function loadStatic(file, done) {
-  // stat() rất rẻ; nhờ nó sửa file khi đang chạy vẫn có hiệu lực ngay.
-  fs.stat(file, (statErr, stat) => {
-    if (statErr || !stat.isFile()) return done(statErr || new Error("not a file"));
-    const cached = staticCache.get(file);
-    if (cached && cached.mtimeMs === stat.mtimeMs) return done(null, cached);
-    readStatic(file, stat.mtimeMs, done);
-  });
-}
-function readStatic(file, mtimeMs, done) {
-  fs.readFile(file, (err, data) => {
-    if (err) return done(err);
-    const ext = path.extname(file);
-    const entry = {
-      mtimeMs,
-      data,
-      gz: COMPRESSIBLE.has(ext) ? zlib.gzipSync(data, { level: 9 }) : null,
-      etag: `"${crypto.createHash("sha1").update(data).digest("base64url").slice(0, 16)}"`,
-      type: types[ext] || "application/octet-stream",
-      // Mã nguồn / trang luôn kiểm tra lại (ETag → 304) để bản cập nhật có hiệu lực
-      // ngay; ảnh/âm thanh ít đổi nên cho trình duyệt giữ 1 ngày.
-      cacheControl: COMPRESSIBLE.has(ext) ? "no-cache" : "public, max-age=86400",
-    };
-    staticCache.set(file, entry);
-    done(null, entry);
-  });
-}
 const server = http.createServer((req, res) => {
-  let urlPath;
-  try {
-    urlPath = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
-  } catch {
-    res.writeHead(400).end();
-    return;
-  }
+  const urlPath = decodeURIComponent(
+    new URL(req.url, "http://localhost").pathname,
+  );
   const file = path.resolve(
     ROOT,
     "." + (urlPath === "/" ? "/index.html" : urlPath),
@@ -244,37 +157,21 @@ const server = http.createServer((req, res) => {
     res.writeHead(403).end();
     return;
   }
-  loadStatic(file, (err, entry) => {
+  fs.readFile(file, (err, data) => {
     if (err) {
       res.writeHead(404).end("Not found");
       return;
     }
-    const headers = {
-      "Content-Type": entry.type,
-      "Cache-Control": entry.cacheControl,
-      ETag: entry.etag,
-      Vary: "Accept-Encoding",
-    };
-    if (req.headers["if-none-match"] === entry.etag) {
-      res.writeHead(304, headers).end();
-      return;
-    }
-    const useGzip =
-      entry.gz && /\bgzip\b/.test(req.headers["accept-encoding"] || "");
-    if (useGzip) headers["Content-Encoding"] = "gzip";
-    res.writeHead(200, headers);
-    res.end(useGzip ? entry.gz : entry.data);
+    res.writeHead(200, {
+      "Content-Type": types[path.extname(file)] || "application/octet-stream",
+    });
+    res.end(data);
   });
 });
-// Nén từng gói WebSocket tốn CPU server và thêm độ trễ; gói state đã được làm gọn.
-const wss = new WebSocketServer({ server, perMessageDeflate: false });
+const wss = new WebSocketServer({ server });
 const send = (ws, data) => {
   if (ws.readyState === 1) ws.send(JSON.stringify(data));
 };
-// Làm tròn số trước khi gửi: JSON của 20 gói/giây × mỗi người chơi ngắn đi
-// gần một nửa (tọa độ 1 cm, góc 0.001 rad là quá đủ cho hiển thị và hitbox).
-const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : v);
-const r3 = (v) => (Number.isFinite(v) ? Math.round(v * 1000) / 1000 : v);
 const snapshot = (room) => ({
   type: "state",
   phase: room.phase,
@@ -284,23 +181,7 @@ const snapshot = (room) => ({
   mapSeed: room.mapSeed,
   mapId: room.mapId,
   // weatherActive: Boolean(room.weather?.active), // weather sync disabled
-  vehicles: (room.vehicles || []).map((v) => ({
-    id: v.id,
-    color: v.color,
-    x: r2(v.x),
-    z: r2(v.z),
-    yaw: r3(v.yaw),
-    speed: r2(v.speed),
-    // Điều khiển hiện tại giúp client dự đoán xe người khác giữa hai gói tin.
-    steer: v.controls?.steer || 0,
-    throttle: v.controls?.throttle || 0,
-    brake: Boolean(v.controls?.brake),
-    hp: v.hp,
-    destroyed: v.destroyed,
-    smoke: v.smoke,
-    submerged: v.submerged,
-    sinkDepth: r2(v.sinkDepth || 0),
-  })),
+  vehicles: (room.vehicles || []).map((v) => ({ ...v })),
   zone: room.zone || null,
   hostId: [...room.players.keys()][0] || null,
   lastElimination: room.lastElimination || null,
@@ -309,17 +190,17 @@ const snapshot = (room) => ({
   players: [...room.players.values()].map((p) => ({
     id: p.id,
     name: p.name,
-    x: r2(p.x),
-    z: r2(p.z),
-    groundY: r2(p.groundY || 0),
+    x: p.x,
+    z: p.z,
+    groundY: p.groundY || 0,
     state: p.state || "lobby",
     seat: p.seat || 0,
-    y: p.state === "freefall" || p.state === "parachute" ? r2(p.y) : null,
+    y: p.state === "freefall" || p.state === "parachute" ? p.y : null,
     ready: Boolean(p.ready),
     swimming: Boolean(p.swimming),
-    swimY: p.swimming ? r2(p.swimY) : null,
-    yaw: r3(p.yaw),
-    peek: r2(p.peek || 0),
+    swimY: p.swimming ? p.swimY : null,
+    yaw: p.yaw,
+    peek: p.peek || 0,
     hp: Math.round(p.hp),
     kills: p.kills,
     placement: p.placement || 0,
@@ -329,13 +210,14 @@ const snapshot = (room) => ({
     slowWalking: p.slowWalking,
     vehicleId: p.vehicleId || null,
     vehicleSeat: Number.isInteger(p.vehicleSeat) ? p.vehicleSeat : -1,
-    jumpY: r2(p.jumpY),
+    jumpY: p.jumpY,
     ammo: p.ammo,
     weapon: p.weapon || "ranger",
     reserveAmmo: p.reserveAmmo,
     medkits: p.medkits || 0,
     healing: p.alive && p.healingUntil > Date.now(),
     healLeftMs: p.alive ? Math.max(0, (p.healingUntil || 0) - Date.now()) : 0,
+    reloadingUntil: p.reloadingUntil,
     reloading: p.reloadingUntil > Date.now(),
     shotId: p.shotId || 0,
     shooting: Date.now() - (p.lastShotAt || 0) < 150,
@@ -358,16 +240,8 @@ function flushRoomState(room) {
   if (!room.dirty) return;
   room.dirty = false;
   const data = JSON.stringify(snapshot(room));
-  for (const p of room.players.values()) {
-    if (p.ws.readyState !== 1) continue;
-    // Mạng của người này đang nghẽn: bỏ qua gói cũ thay vì xếp hàng thêm —
-    // gói sau (50 ms nữa) đã chứa trạng thái mới nhất, nên họ đỡ bị trễ dồn.
-    if (p.ws.bufferedAmount > 64 * 1024) {
-      room.dirty = true;
-      continue;
-    }
-    p.ws.send(data);
-  }
+  for (const p of room.players.values())
+    if (p.ws.readyState === 1) p.ws.send(data);
 }
 function broadcastRaw(room, payload) {
   const data = JSON.stringify(payload);
@@ -381,7 +255,243 @@ function roomCode() {
   } while (rooms.has(n));
   return n;
 }
-// Map được sinh trong server/mapgen.js (địa hình tự nhiên, làng, đường cong, cầu có rào).
+function createObstacles(seed, mapId) {
+  let state = seed >>> 0;
+  const random = () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const forest = mapId === "forest";
+  const spawns = [
+    [-3, 8],
+    [0, 8],
+    [3, 8],
+    [-3, -8],
+    [0, -8],
+  ];
+  const obstacles = [];
+  // Mặt sông uốn quanh bản đồ. Tuyến đường cắt ngang con sông sẽ thành cầu.
+  const riverZ = (x) =>
+    (-7 + Math.sin((x + 12 * MAP_SCALE) / (13 * MAP_SCALE)) * 13) * MAP_SCALE;
+  const roads = [];
+  const roadPaths = [
+    (x) => 24 * MAP_SCALE + Math.sin(x / (30 * MAP_SCALE)) * 1.5 * MAP_SCALE,
+    (x) =>
+      -29 * MAP_SCALE +
+      Math.sin((x + 17 * MAP_SCALE) / (34 * MAP_SCALE)) * 1.5 * MAP_SCALE,
+  ];
+  const crossRoadPaths = [
+    (z) => -18 * MAP_SCALE + Math.sin(z / (28 * MAP_SCALE)) * 1.2 * MAP_SCALE,
+    (z) =>
+      20 * MAP_SCALE +
+      Math.sin((z + 14 * MAP_SCALE) / (31 * MAP_SCALE)) * 1.2 * MAP_SCALE,
+  ];
+  const addRoadPath = (points) => {
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i],
+        b = points[i + 1];
+      const dx = b.x - a.x,
+        dz = b.z - a.z;
+      const segment = {
+        type: "road",
+        x: (a.x + b.x) / 2,
+        z: (a.z + b.z) / 2,
+        w: 9,
+        length: Math.hypot(dx, dz),
+        h: 0.12,
+        yaw: Math.atan2(dx, dz),
+        solid: false,
+        bridge:
+          forest &&
+          Array.from({ length: 5 }, (_, n) => n / 4).some((t) => {
+            const x = a.x + dx * t,
+              z = a.z + dz * t;
+            return Math.abs(z - riverZ(x)) < 13;
+          }),
+      };
+      roads.push(segment);
+      obstacles.push(segment);
+    }
+  };
+  for (const pathZ of roadPaths) {
+    const points = [];
+    for (let x = -MAP_HALF; x <= MAP_HALF; x += 20)
+      points.push({ x, z: pathZ(x) });
+    addRoadPath(points);
+  }
+  for (const pathX of crossRoadPaths) {
+    const points = [];
+    for (let z = -MAP_HALF; z <= MAP_HALF; z += 20)
+      points.push({ x: pathX(z), z });
+    addRoadPath(points);
+  }
+  const nearRoad = (x, z, clearance = 0) =>
+    roads.some((road) => {
+      const dx = (Math.sin(road.yaw) * road.length) / 2;
+      const dz = (Math.cos(road.yaw) * road.length) / 2;
+      const ax = road.x - dx,
+        az = road.z - dz;
+      const bx = road.x + dx,
+        bz = road.z + dz;
+      const vx = bx - ax,
+        vz = bz - az;
+      const t = Math.max(
+        0,
+        Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)),
+      );
+      return (
+        Math.hypot(x - (ax + t * vx), z - (az + t * vz)) <
+        road.w / 2 + clearance
+      );
+    });
+  if (forest) {
+    // Deep water volumes follow the winding stream and can be traversed by swimmers.
+    for (let i = 0; i < 10; i++) {
+      const x = (-45 + i * 10) * MAP_SCALE;
+      const z = riverZ(x);
+      const yaw = Math.atan2(2, riverZ(x + 1) - riverZ(x - 1));
+      obstacles.push({
+        type: "river",
+        x,
+        z,
+        w: 5.2 * MAP_SCALE,
+        length: 12 * MAP_SCALE,
+        h: 0.08,
+        depth: 4.5,
+        yaw,
+        solid: false,
+      });
+    }
+    obstacles.push({
+      type: "lake",
+      x: 22 * MAP_SCALE,
+      z: -3 * MAP_SCALE,
+      w: 12 * MAP_SCALE,
+      length: 17 * MAP_SCALE,
+      h: 0.08,
+      depth: 5.5,
+      solid: false,
+    });
+    // Mark bridge segments by testing the actual rotated river/lake volumes,
+    // rather than approximating the stream centerline.
+    const rawWaterAt = (water, x, z) => {
+      const dx = x - water.x,
+        dz = z - water.z;
+      const c = Math.cos(water.yaw || 0),
+        s = Math.sin(water.yaw || 0);
+      const localX = c * dx - s * dz,
+        localZ = s * dx + c * dz;
+      return water.type === "lake"
+        ? (localX / water.w) ** 2 + (localZ / water.length) ** 2 <= 1
+        : Math.abs(localX) <= water.w / 2 &&
+            Math.abs(localZ) <= water.length / 2;
+    };
+    for (const road of roads) {
+      road.bridge = false;
+      const steps = Math.max(1, Math.ceil(road.length * 2));
+      for (let i = 0; i <= steps && !road.bridge; i++) {
+        const along = (i / steps - 0.5) * road.length;
+        const x = road.x + Math.sin(road.yaw) * along;
+        const z = road.z + Math.cos(road.yaw) * along;
+        road.bridge = obstacles.some(
+          (water) =>
+            (water.type === "river" || water.type === "lake") &&
+            rawWaterAt(water, x, z),
+        );
+      }
+    }
+  }
+  const overlapsWater = (x, z, radius) =>
+    forest &&
+    (Math.hypot(x - 22 * MAP_SCALE, z + 3 * MAP_SCALE) <
+      radius + 11 * MAP_SCALE ||
+      Array.from({ length: 10 }, (_, i) => (-45 + i * 10) * MAP_SCALE).some(
+        (rx) => Math.hypot(x - rx, z - riverZ(rx)) < radius + 3,
+      ));
+  function add(type, count, minW, maxW, minH, maxH, gap = 1.2) {
+    let made = 0;
+    for (let attempt = 0; attempt < count * 30 && made < count; attempt++) {
+      const x = (random() - 0.5) * (MAP_HALF * 2 - 16);
+      const z = (random() - 0.5) * (MAP_HALF * 2 - 16);
+      const w = minW + random() * (maxW - minW);
+      const h = minH + random() * (maxH - minH);
+      const spawnClearance = type === "hill" ? w / 2 + 8 : w / 2 + 5;
+      if (
+        spawns.some(([sx, sz]) => Math.hypot(x - sx, z - sz) < spawnClearance)
+      )
+        continue;
+      if (overlapsWater(x, z, w / 2)) continue;
+      if (nearRoad(x, z, w / 2 + 1.5)) continue;
+      if (
+        obstacles.some((o) => {
+          if (o.solid === false && o.type !== "hill") return false;
+          if (o.type === "hill") {
+            const rx = o.w / 2 + w / 2 + gap;
+            const rz = (o.length || o.w) / 2 + w / 2 + gap;
+            return ((x - o.x) / rx) ** 2 + ((z - o.z) / rz) ** 2 < 1;
+          }
+          return Math.hypot(x - o.x, z - o.z) < (w + o.w) / 2 + gap;
+        })
+      )
+        continue;
+      obstacles.push({
+        type,
+        x,
+        z,
+        w,
+        h,
+        solid: type !== "hill",
+        yaw:
+          type === "house" || type === "hut" || type === "hill"
+            ? 0
+            : random() * Math.PI * 2,
+      });
+      made++;
+    }
+  }
+  if (forest) {
+    add("hill", 16, 18, 25, 6, 11, 5);
+  } else {
+    add("hill", 12, 20, 28, 7, 13, 5);
+  }
+  // A long elevated ridge makes the terrain read as mountains instead of
+  // scattered low bumps. The two overlapping crests form a broad ridgeline.
+  obstacles.push(
+    {
+      type: "hill",
+      x: 0,
+      z: 124,
+      w: 62,
+      length: 142,
+      h: forest ? 27 : 30,
+      solid: false,
+    },
+    {
+      type: "hill",
+      x: 22,
+      z: 126,
+      w: 42,
+      length: 118,
+      h: forest ? 23 : 26,
+      solid: false,
+    },
+  );
+  // Shelters are larger now and remain on flatter ground around the hills.
+  add("house", 44, 6.5, 8.5, 4.2, 5.4, 3);
+  add("hut", 32, 4.5, 6, 3, 3.8, 2.2);
+  if (forest) {
+    add("rock", 120, 1.3, 3.2, 1, 3.2, 0.8);
+    add("tree", 192, 0.65, 1.15, 3.8, 7.2, 0.6);
+  } else {
+    add("rock", 152, 1.4, 3.8, 1, 3.5, 0.8);
+    add("cactus", 96, 0.55, 1.1, 2, 4.2, 0.7);
+    add("deadTree", 60, 0.6, 1.1, 3, 5.5, 0.8);
+  }
+  return obstacles;
+}
 function createVehicles(obstacles) {
   const roads = obstacles.filter(
     (item) =>
@@ -549,59 +659,8 @@ const MAX_HP = 100;
 // Sức chứa balo (đạn dự trữ và bịch máu). Không tính đạn đang lắp trong súng.
 const MAX_RESERVE_AMMO = 210;
 const MAX_MEDKITS = 5;
-// ---------------------------------------------------------------------------
-// LƯỚI KHÔNG GIAN (spatial grid) cho vật cản tĩnh
-// ---------------------------------------------------------------------------
-// Map có ~500 vật cản. Trước đây MỌI phép kiểm tra va chạm / độ cao / nước đều
-// quét hết cả 500 cái, và mỗi gói "move" gọi hàng chục phép như vậy. Chia map
-// thành ô 16 m; mỗi vật cản được ghi vào mọi ô mà nó (cộng biên an toàn) chạm
-// tới, nên một điểm chỉ cần xét vài vật cản trong đúng ô của nó.
-const GRID_CELL = 16;
-const GRID_MARGIN = 3; // > khoảng hở lớn nhất khi truy vấn (loot cách đường 2.5, nằm sấp 1.15, mái +0.6, cầu +1.2)
-const EMPTY_CELL = Object.freeze([]);
-function obstacleBoundRadius(o) {
-  const w = o.w || 1;
-  const length = o.length || w;
-  if (o.type === "lake") return Math.max(w, length);
-  // Đường được đo như hình con nhộng (đoạn thẳng + nửa bề rộng ở hai đầu).
-  if (o.type === "road" || o.type === "river") return (length + w) / 2;
-  return Math.hypot(w, length) * 0.6;
-}
-// Gắn hàm tra ô trực tiếp lên mảng obstacles (JSON.stringify bỏ qua thuộc tính
-// không phải chỉ số nên dữ liệu gửi cho client không đổi).
-const TERRAIN_ONLY = new Set(["hill", "terrain", "plateau", "pad", "swamp"]);
-function attachObstacleGrid(obstacles) {
-  const cells = new Map();
-  const key = (ix, iz) => (ix + 512) * 1024 + (iz + 512);
-  for (const o of obstacles) {
-    // Đồi / cao nguyên / nền nhà / đầm lầy chỉ dùng để dựng địa hình.
-    if (TERRAIN_ONLY.has(o.type) || !Number.isFinite(o.x)) continue;
-    const r = obstacleBoundRadius(o) + GRID_MARGIN;
-    const x0 = Math.floor((o.x - r) / GRID_CELL),
-      x1 = Math.floor((o.x + r) / GRID_CELL);
-    const z0 = Math.floor((o.z - r) / GRID_CELL),
-      z1 = Math.floor((o.z + r) / GRID_CELL);
-    for (let ix = x0; ix <= x1; ix++)
-      for (let iz = z0; iz <= z1; iz++) {
-        const k = key(ix, iz);
-        let cell = cells.get(k);
-        if (!cell) cells.set(k, (cell = []));
-        cell.push(o);
-      }
-  }
-  Object.defineProperty(obstacles, "cellAt", {
-    value: (x, z) =>
-      cells.get(key(Math.floor(x / GRID_CELL), Math.floor(z / GRID_CELL))) ||
-      EMPTY_CELL,
-    enumerable: false,
-  });
-  return obstacles;
-}
-// Vật cản có thể ảnh hưởng tới điểm (x, z); rơi về toàn bộ danh sách khi chưa có lưới.
-const nearObstacles = (obstacles, x, z) =>
-  obstacles.cellAt ? obstacles.cellAt(x, z) : obstacles;
 function isNearRoad(obstacles, x, z, clearance = 0) {
-  return nearObstacles(obstacles, x, z).some((road) => {
+  return obstacles.some((road) => {
     if (road.type !== "road") return false;
     const dx = (Math.sin(road.yaw || 0) * road.length) / 2;
     const dz = (Math.cos(road.yaw || 0) * road.length) / 2;
@@ -621,7 +680,7 @@ function isNearRoad(obstacles, x, z, clearance = 0) {
   });
 }
 function isOnBridge(obstacles, x, z, clearance = 0) {
-  return nearObstacles(obstacles, x, z).some((road) => {
+  return obstacles.some((road) => {
     if (road.type !== "road" || !road.bridge) return false;
     const dx = (Math.sin(road.yaw || 0) * road.length) / 2;
     const dz = (Math.cos(road.yaw || 0) * road.length) / 2;
@@ -640,59 +699,34 @@ function isOnBridge(obstacles, x, z, clearance = 0) {
     );
   });
 }
-// Vật phẩm chỉ nằm TRONG các căn nhà/chòi: mỗi nhà có một lưới ô trên sàn
-// (cách tường ≥ 0.8 m, chừa lối cửa), mỗi ô tối đa một món → không chồng lên nhau.
-// Vật phẩm được chia vòng quanh các nhà theo thứ tự ngẫu nhiên nên nhà nào cũng có đồ.
 function createLoot(room) {
   const items = [];
   let nextId = 1;
-  const houses = room.obstacles.filter(
-    (o) => o.type === "house" || o.type === "hut",
-  );
-  const slots = houses.map((house) => {
-    const inner = house.w / 2 - 0.8;
-    const cells = [];
-    for (let lx = -inner; lx <= inner + 1e-6; lx += 1.2)
-      for (let lz = -inner; lz <= inner + 1e-6; lz += 1.2) {
-        // Lối vào ngay sau cửa (mặt -Z) để trống cho người chơi đi vào.
-        if (lz < -inner + 1.3 && Math.abs(lx) < 1.3) continue;
-        const c = Math.cos(house.yaw || 0),
-          sn = Math.sin(house.yaw || 0);
-        // Toạ độ cục bộ → thế giới (nghịch đảo phép xoay dùng trong blockedByBuilding).
-        cells.push({
-          x: house.x + c * lx + sn * lz,
-          z: house.z - sn * lx + c * lz,
-        });
-      }
-    for (let i = cells.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [cells[i], cells[j]] = [cells[j], cells[i]];
-    }
-    return cells;
-  });
-  const order = houses.map((_, i) => i);
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [order[i], order[j]] = [order[j], order[i]];
-  }
-  let cursor = 0;
   const place = (type, count, amount) => {
-    let made = 0,
-      misses = 0;
-    while (made < count && misses < order.length) {
-      const cells = slots[order[cursor % order.length]];
-      cursor++;
-      const cell = cells?.pop();
-      if (!cell) {
-        misses++;
+    let made = 0;
+    for (let attempt = 0; attempt < count * 80 && made < count; attempt++) {
+      const x = (Math.random() - 0.5) * (MAP_HALF * 2 - 8);
+      const z = (Math.random() - 0.5) * (MAP_HALF * 2 - 8);
+      if (isNearRoad(room.obstacles, x, z, 2.5)) continue;
+      if (blockedPosition(room, x, z, null)) continue; // cây, đá, tường nhà...
+      // Không đặt trong nước (kể cả sát mép sông/hồ).
+      if (
+        [
+          [0, 0],
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ].some(([ox, oz]) => waterAt(room, x + ox, z + oz))
+      )
         continue;
-      }
-      misses = 0;
+      // Rải đều, tránh các vật phẩm chồng lên nhau.
+      if (items.some((i) => Math.hypot(i.x - x, i.z - z) < 5)) continue;
       items.push({
         id: nextId++,
         type,
-        x: Math.round(cell.x * 100) / 100,
-        z: Math.round(cell.z * 100) / 100,
+        x: Math.round(x * 100) / 100,
+        z: Math.round(z * 100) / 100,
         amount,
       });
       made++;
@@ -700,7 +734,7 @@ function createLoot(room) {
   };
   place("ammo", AMMO_BOX_COUNT, AMMO_PER_BOX);
   place("medkit", MEDKIT_COUNT, 1);
-  // Two sniper rifles spawn in two different houses each round.
+  // Two sniper rifles spawn at separate, walkable positions each round.
   place("weapon", 2, 1);
   for (const item of items.filter((entry) => entry.type === "weapon")) {
     item.weapon = "sniper";
@@ -722,10 +756,17 @@ function obstacleBaseY(room, o) {
   return base;
 }
 
-// Độ cao nền: tra lưới địa hình dùng chung (public/terrain.js), O(1).
 function groundHeightAt(room, x, z) {
-  room.terrain ||= Terrain.build(room.obstacles || []);
-  let height = room.terrain.heightAt(x, z);
+  let height = 0;
+  for (const hill of room.hills || room.obstacles) {
+    if (hill.type !== "hill") continue;
+    const radiusX = hill.w / 2;
+    const radiusZ = (hill.length || hill.w) / 2;
+    const distanceSquared =
+      ((x - hill.x) / radiusX) ** 2 + ((z - hill.z) / radiusZ) ** 2;
+    if (distanceSquared >= 1) continue;
+    height = Math.max(height, hill.h * Math.pow(1 - distanceSquared, 1.4));
+  }
   if (isOnBridge(room.obstacles || [], x, z, 0.2))
     height = Math.max(height, 0.3);
   return height;
@@ -733,7 +774,7 @@ function groundHeightAt(room, x, z) {
 // Walkable upper surfaces: the pitched roof and the safe crown of large rocks.
 function raisedSurfaceAt(room, x, z) {
   let best = null;
-  for (const o of nearObstacles(room.obstacles, x, z)) {
+  for (const o of room.obstacles) {
     // Chỉ nhà, chòi và đá mới có mặt "đứng được".
     if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
     if (o.type === "house" || o.type === "hut") {
@@ -788,7 +829,7 @@ function standingHeightAt(room, x, z, previousGroundY) {
     : terrain;
 }
 function waterAt(room, x, z) {
-  for (const water of nearObstacles(room.obstacles, x, z)) {
+  for (const water of room.obstacles) {
     if (water.type !== "river" && water.type !== "lake") continue;
     const dx = x - water.x;
     const dz = z - water.z;
@@ -829,17 +870,6 @@ function blockedByBuilding(o, x, z, radius) {
     lz < 0 && Math.abs(lx) < 1.05 && Math.abs(lz) >= half - 0.16 - radius;
   return (sideWall || endWall) && !frontDoor;
 }
-// Hàng rào / lan can cầu: hộp mỏng xoay theo yaw, dài theo trục length.
-function blockedByFence(o, x, z, radius) {
-  const dx = x - o.x,
-    dz = z - o.z;
-  const c = Math.cos(o.yaw || 0),
-    s = Math.sin(o.yaw || 0);
-  return (
-    Math.abs(c * dx - s * dz) < o.w / 2 + radius &&
-    Math.abs(s * dx + c * dz) < o.length / 2 + radius
-  );
-}
 const PLAYER_RADIUS = 0.38;
 // Keep server movement blockers aligned with the visible prop footprints.
 function obstacleFootprintRadius(o) {
@@ -871,7 +901,7 @@ function blockedPosition(
   // trên mái/đá nào, không dùng điểm đến — tránh chặn nhầm khi đi xuống.
   const support =
     mover?.groundY > 0.45 ? raisedSurfaceAt(room, mover.x, mover.z) : null;
-  for (const o of nearObstacles(room.obstacles, x, z)) {
+  for (const o of room.obstacles) {
     if (o.solid === false) continue;
     if (o.type === "house" || o.type === "hut") {
       const moverIsOnRoof =
@@ -881,10 +911,6 @@ function blockedPosition(
         mover.groundY > support.base + o.h * 0.72 + 0.1;
       if (moverIsOnRoof) continue;
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
-      continue;
-    }
-    if (o.type === "fence") {
-      if (blockedByFence(o, x, z, obstacleRadius)) return true;
       continue;
     }
     const footprint = obstacleFootprintRadius(o);
@@ -1205,7 +1231,6 @@ function killByVehicle(
     victimName: victim.name,
     killerId: killer?.id || null,
     cause,
-    weapon: "XE",
     killerName:
       cause === "explosion"
         ? "Nổ xe"
@@ -1305,12 +1330,6 @@ function tickVehicles(room, now) {
     const driver = [...room.players.values()].find(
       (p) => p.vehicleId === vehicle.id && p.vehicleSeat === 0,
     );
-    // Xe đỗ, không tài xế: không có gì để mô phỏng (trước đây vẫn quét va chạm
-    // 8 góc xe cho mọi xe đứng yên, 20 lần/giây).
-    if (!driver && Math.abs(vehicle.speed) < 0.01) {
-      vehicle.speed = 0;
-      continue;
-    }
     const controls = driver
       ? vehicle.controls
       : { throttle: 0, steer: 0, brake: false };
@@ -1319,12 +1338,7 @@ function tickVehicles(room, now) {
     else if (controls.throttle) {
       vehicle.speed += controls.throttle * 8 * dt;
       vehicle.speed = Math.max(-7, Math.min(22, vehicle.speed));
-    } else {
-      // Nhả ga: xe trôi theo quán tính, chậm dần vì ma sát lăn + lực cản gió
-      // (từ 80 km/h mất ~10 s mới dừng), thay vì khựng lại gần như ngay.
-      const drag = (0.9 + 0.08 * Math.abs(vehicle.speed)) * dt;
-      vehicle.speed -= Math.sign(vehicle.speed) * Math.min(Math.abs(vehicle.speed), drag);
-    }
+    } else vehicle.speed *= Math.max(0, 1 - 0.8 * dt);
     const speedFactor = Math.min(1, Math.abs(vehicle.speed) / 4);
     vehicle.yaw +=
       controls.steer * 1.35 * speedFactor * dt * (vehicle.speed < 0 ? -1 : 1);
@@ -1468,16 +1482,13 @@ function tickRoom(room) {
 }
 wss.on("connection", (ws) => {
   let room;
-  const handleMessage = (raw) => {
+  ws.on("message", (raw) => {
     let m;
     try {
       m = JSON.parse(raw);
     } catch {
       return;
     }
-    if (!m || typeof m !== "object") return;
-    // Đo độ trễ khứ hồi: client dùng để dự đoán xe và hiển thị ping.
-    if (m.type === "ping") return send(ws, { type: "pong", t: m.t });
     if (m.type === "create" || m.type === "join") {
       if (room) return;
       const code = m.type === "create" ? roomCode() : String(m.code || "");
@@ -1487,8 +1498,7 @@ wss.on("connection", (ws) => {
       if (!room) {
         const mapId = m.mapId === "desert" ? "desert" : "forest";
         const mapSeed = Math.floor(Math.random() * 0xffffffff);
-        const obstacles = attachObstacleGrid(createObstacles(mapSeed, mapId));
-        const terrain = Terrain.build(obstacles);
+        const obstacles = createObstacles(mapSeed, mapId);
         room = {
           code,
           phase: "waiting",
@@ -1496,7 +1506,6 @@ wss.on("connection", (ws) => {
           mapSeed,
           mapId,
           obstacles,
-          terrain,
           vehicles: createVehicles(obstacles),
           hills: obstacles.filter((obstacle) => obstacle.type === "hill"),
           crates: [],
@@ -1509,11 +1518,7 @@ wss.on("connection", (ws) => {
         // sảnh (có người vào/ra) chỉ đánh dấu "dirty" mà không ai thực sự gửi
         // đi, khiến chủ phòng và người mới vào bị lệch danh sách người chơi.
         room.timer = setInterval(() => {
-          try {
-            tickRoom(room);
-          } catch (error) {
-            console.error("tick error:", error);
-          }
+          tickRoom(room);
           flushRoomState(room);
         }, 50);
       }
@@ -1986,7 +1991,7 @@ wss.on("connection", (ws) => {
         broadcastRaw(room, { type: "lootAdded", item: dropped });
         send(ws, {
           type: "toast",
-          text: `ĐÃ ĐỔI SANG ${p.weapon === "sniper" ? "KAR98K" : "AUG"}`,
+          text: `ĐÃ ĐỔI SANG ${p.weapon === "sniper" ? "SNIPER" : "RANGER-9"}`,
         });
       } else {
         if ((p.medkits || 0) >= MAX_MEDKITS) {
@@ -2281,61 +2286,21 @@ wss.on("connection", (ws) => {
         ].filter((distance) => distance !== null);
         return distances.length ? Math.min(...distances) : null;
       };
-      // Mặt đất / đồi chắn đạn. Trước đây vòng dò 0.5 m này bị lặp lại cho
-      // TỪNG ngọn đồi (18 lần, mỗi bước lại quét toàn bộ vật cản để tìm cầu)
-      // → vài triệu phép tính cho MỖI viên đạn, bắn auto là server đứng hình.
-      // Dò đúng một lần cho kết quả y hệt; tia đã bay lên cao hơn mọi ngọn
-      // đồi thì không thể chạm đất nữa nên dừng sớm.
-      room.terrain ||= Terrain.build(room.obstacles);
-      const terrainTop = room.terrain.maxHeight;
-      for (let distance = 0.5; distance < nearest; distance += 0.5) {
-        const y = origin.y + dir.y * distance;
-        if (dir.y >= 0 && y > terrainTop + 0.1) break;
-        const x = origin.x + dir.x * distance;
-        const z = origin.z + dir.z * distance;
-        if (y <= groundHeightAt(room, x, z) + 0.08) {
-          nearest = distance;
-          break;
-        }
-      }
-      // Lọc thô trên mặt phẳng XZ: vật cản cách xa đường đạn thì bỏ qua,
-      // không cần dựng các hộp va chạm chi tiết của nó.
-      const flatLength = Math.hypot(dir.x, dir.z);
-      const ux = flatLength > 1e-6 ? dir.x / flatLength : 0;
-      const uz = flatLength > 1e-6 ? dir.z / flatLength : 0;
-      const farOnRay = (o) => {
-        const r = obstacleBoundRadius(o) + 0.5;
-        const vx = o.x - origin.x,
-          vz = o.z - origin.z;
-        if (flatLength <= 1e-6) return Math.hypot(vx, vz) > r;
-        const along = vx * ux + vz * uz;
-        if (along < -r || along > nearest * flatLength + r) return true;
-        return Math.abs(vx * uz - vz * ux) > r;
-      };
-      // Hitbox người chơi theo tư thế — trùng khớp public/avatar.js (HITBOX), bao
-      // trọn nón (đầu) và áo giáp (thân). Toạ độ cục bộ: mặt nhìn về -Z.
-      const playerHitboxHit = (q, baseY) => {
-        const set = playerHitboxes(q);
-        const c = Math.cos(q.yaw || 0),
-          sn = Math.sin(q.yaw || 0);
-        let best = null;
-        for (const box of set.boxes) {
-          const [lx, ly, lz] = box.c;
-          const center = {
-            x: q.x + c * lx + sn * lz,
-            y: baseY + ly,
-            z: q.z - sn * lx + c * lz,
-          };
-          const t = rayBox(center, q.yaw || 0, { x: box.h[0], y: box.h[1], z: box.h[2] });
-          if (t !== null && (!best || t < best.distance))
-            best = { distance: t, part: box.part };
-        }
-        return best;
-      };
       // A solid map box blocks shots to anything behind it.
       for (const o of room.obstacles) {
-        if (o.type === "hill" || o.solid === false) continue;
-        if (farOnRay(o)) continue;
+        if (o.type === "hill") {
+          for (let distance = 0.5; distance < nearest; distance += 0.5) {
+            const x = origin.x + dir.x * distance;
+            const y = origin.y + dir.y * distance;
+            const z = origin.z + dir.z * distance;
+            if (y <= groundHeightAt(room, x, z) + 0.08) {
+              nearest = distance;
+              break;
+            }
+          }
+          continue;
+        }
+        if (o.solid === false) continue;
         const baseY = obstacleBaseY(room, o);
         let wallDistance;
         if (o.type === "house" || o.type === "hut") {
@@ -2358,12 +2323,6 @@ wss.on("connection", (ws) => {
             x: o.w * 0.48,
             y: o.h / 2,
             z: o.w * 0.27,
-          });
-        } else if (o.type === "fence") {
-          wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, o.yaw || 0, {
-            x: o.w / 2,
-            y: o.h / 2,
-            z: o.length / 2,
           });
         } else if (o.type === "rock") {
           wallDistance = rayBox(
@@ -2436,12 +2395,163 @@ wss.on("connection", (ws) => {
             : q.swimming
               ? q.swimY || 0
               : q.groundY || 0;
-          const hit = playerHitboxHit(q, targetBaseY);
-          if (hit && hit.distance < nearest) {
-            nearest = hit.distance;
-            struckVehicle = null;
-            target = q;
-            targetPart = hit.part;
+          if (q.vehicleId) {
+            const bodyDistance = rayBox(
+              { x: q.x, y: targetBaseY + 1.03, z: q.z },
+              q.yaw,
+              { x: 0.29, y: 0.39, z: 0.23 },
+            );
+            const headDistance = raySphere(
+              { x: q.x, y: targetBaseY + 1.55, z: q.z },
+              0.23,
+            );
+            const distance =
+              bodyDistance === null
+                ? headDistance
+                : headDistance === null
+                  ? bodyDistance
+                  : Math.min(bodyDistance, headDistance);
+            if (distance !== null && distance < nearest) {
+              nearest = distance;
+              struckVehicle = null;
+              target = q;
+              targetPart =
+                headDistance !== null && headDistance <= distance
+                  ? "head"
+                  : "body";
+            }
+            continue;
+          }
+          if (q.state === "freefall") {
+            // Freefall avatars lie face-down at a -1.35 rad X rotation.
+            // Match their visible horizontal body and forward-positioned head.
+            const front = (distance) => ({
+              x: q.x - Math.sin(q.yaw) * distance,
+              y: targetBaseY + 0.5 + Math.cos(1.35) * distance,
+              z: q.z - Math.cos(q.yaw) * distance,
+            });
+            const bodyDistances = [
+              rayBox(front(1.05), q.yaw, { x: 0.325, y: 0.22, z: 0.5 }),
+              rayBox(front(0.4), q.yaw, { x: 0.24, y: 0.2, z: 0.34 }),
+            ].filter((distance) => distance !== null);
+            const bodyDistance = bodyDistances.length
+              ? Math.min(...bodyDistances)
+              : null;
+            const headDistance = raySphere(front(1.72), 0.24);
+            const distance =
+              headDistance === null
+                ? bodyDistance
+                : bodyDistance === null
+                  ? headDistance
+                  : Math.min(headDistance, bodyDistance);
+            if (distance !== null && distance < nearest) {
+              nearest = distance;
+              struckVehicle = null;
+              target = q;
+              targetPart =
+                headDistance !== null && headDistance <= distance
+                  ? "head"
+                  : "body";
+            }
+            continue;
+          }
+          // Bounds mirror game.js: torso .65×1×.38, legs .48×.65×.34, head radius .24.
+          if (q.prone) {
+            const front = (length) => ({
+              x: q.x - Math.sin(q.yaw) * length,
+              y: targetBaseY + 0.35,
+              z: q.z - Math.cos(q.yaw) * length,
+            });
+            const bodyDistances = [
+              rayBox(front(1.05), q.yaw, { x: 0.325, y: 0.19, z: 0.5 }),
+              rayBox(front(0.4), q.yaw, { x: 0.24, y: 0.17, z: 0.325 }),
+            ].filter((t) => t !== null);
+            const bodyDistance = bodyDistances.length
+              ? Math.min(...bodyDistances)
+              : null;
+            const headDistance = raySphere(front(1.72), 0.24);
+            const distance =
+              headDistance === null
+                ? bodyDistance
+                : bodyDistance === null
+                  ? headDistance
+                  : Math.min(headDistance, bodyDistance);
+            if (distance !== null) {
+              if (distance < nearest) {
+                nearest = distance;
+                struckVehicle = null;
+                target = q;
+                targetPart =
+                  headDistance !== null && headDistance <= distance
+                    ? "head"
+                    : "body";
+              }
+            }
+            continue;
+          }
+          const crouchScale = q.crouching ? 0.68 : 1;
+          const jumpY = q.jumpY || 0;
+          // Leaning moves the shoulders/head sideways around the feet pivot.
+          const peek = Math.max(-1, Math.min(1, Number(q.peek) || 0));
+          const leanRightX = Math.cos(q.yaw) * peek;
+          const leanRightZ = -Math.sin(q.yaw) * peek;
+
+          const bodyDistances = [
+            rayBox(
+              {
+                x: q.x + leanRightX * 0.19 * crouchScale,
+                y: targetBaseY + 1.05 * crouchScale + jumpY,
+                z: q.z + leanRightZ * 0.19 * crouchScale,
+              },
+              q.yaw,
+              {
+                x: 0.325,
+                y: 0.5 * crouchScale,
+                z: 0.19,
+              },
+            ),
+            rayBox(
+              {
+                x: q.x,
+                y: targetBaseY + 0.4 * crouchScale + jumpY,
+                z: q.z,
+              },
+              q.yaw,
+              {
+                x: 0.24,
+                y: 0.325 * crouchScale,
+                z: 0.17,
+              },
+            ),
+          ].filter((t) => t !== null);
+          const bodyDistance = bodyDistances.length
+            ? Math.min(...bodyDistances)
+            : null;
+          const headDistance = raySphere(
+            {
+              x: q.x + leanRightX * 0.31 * crouchScale,
+              y: targetBaseY + 1.72 * crouchScale + jumpY,
+              z: q.z + leanRightZ * 0.31 * crouchScale,
+            },
+            0.24,
+            crouchScale,
+          );
+          const distance =
+            headDistance === null
+              ? bodyDistance
+              : bodyDistance === null
+                ? headDistance
+                : Math.min(headDistance, bodyDistance);
+          if (distance !== null) {
+            if (distance < nearest) {
+              nearest = distance;
+              struckVehicle = null;
+              target = q;
+              targetPart =
+                headDistance !== null && headDistance <= distance
+                  ? "head"
+                  : "body";
+            }
           }
         }
       // Red dot dính địch trên màn hình = chắc chắn trúng: nếu cách xét cũ trượt
@@ -2515,10 +2625,6 @@ wss.on("connection", (ws) => {
             victimName: target.name,
             killerId: p.id,
             killerName: p.name,
-            // Cho màn Chiến tích: hạ bằng súng gì, headshot, khoảng cách.
-            weapon: p.weapon === "sniper" ? "KAR98K" : "AUG",
-            headshot: targetPart === "head",
-            distance: Math.round(nearest),
           };
           room.crates ||= [];
           room.crates.push({
@@ -2548,20 +2654,7 @@ wss.on("connection", (ws) => {
       broadcast(room);
       return;
     }
-  };
-  // Một gói tin lỗi của MỘT người chơi không được phép làm sập cả server
-  // (trước đây ném lỗi ở đây là mọi phòng đều mất kết nối).
-  ws.on("message", (raw) => {
-    ws.isAlive = true;
-    try {
-      handleMessage(raw);
-    } catch (error) {
-      console.error("message handler error:", error);
-    }
   });
-  ws.isAlive = true;
-  ws.on("pong", () => (ws.isAlive = true));
-  ws.on("error", (error) => console.warn("socket error:", error.message));
   ws.on("close", () => {
     if (room && ws.player) {
       room.players.delete(ws.player.id);
@@ -2572,18 +2665,6 @@ wss.on("connection", (ws) => {
     }
   });
 });
-// Kết nối "chết" (Wi-Fi rớt, đóng nắp laptop) không tự gửi close; nếu không dọn,
-// người chơi ma vẫn nằm trong phòng và server vẫn gửi state cho họ.
-setInterval(() => {
-  for (const ws of wss.clients) {
-    if (!ws.isAlive) {
-      ws.terminate();
-      continue;
-    }
-    ws.isAlive = false;
-    ws.ping();
-  }
-}, 15000);
 server.listen(PORT, () =>
   console.log(`Last Drop Arena listening on http://localhost:${PORT}`),
 );

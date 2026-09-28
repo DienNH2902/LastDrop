@@ -1,0 +1,9 @@
+Home menu background music
+
+Title: Deep Ambient Dramatic Background Music
+Artist: Alexander
+Source: https://orangefreesounds.com/deep-ambient-dramatic-background-music/
+License: CC BY-NC 4.0 (non-commercial use; attribution required)
+
+The game streams the MP3 from the source URL in public/game.js. Internet access is
+required to load the music. Replace the URL with a locally hosted file if needed.
