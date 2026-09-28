@@ -178,7 +178,7 @@ let keys = {},
   vehicleMeshes = new Map(),
   vehicleAudioNodes = new Map(),
   vehicleFireAudioNodes = new Map(),
-  steeringWheel = null,
+
   lastVehicleControlAt = 0,
   lastVehicleControlKey = "",
   cameraBaseY = 1.65,
@@ -2804,13 +2804,51 @@ function buildCarMesh(vehicle, forest) {
   addBox(1.35, 0.09, 0.12, 0, 0.9, -1.58, trim);
   for (const x of [-0.58, 0.58])
     addBox(0.28, 0.14, 0.06, x, 0.78, -1.58, lampMat);
-  const steering = new THREE.Mesh(
-    new THREE.TorusGeometry(0.22, 0.035, 8, 20),
-    trim,
+  // Vô lăng thật của xe: trụ lái nghiêng về phía tài xế; nhóm "steering" quay
+  // quanh trục vô lăng. Hai bàn tay (găng + cẳng tay) của tài xế là con của
+  // vô lăng nên xoay theo khi đánh lái — chỉ hiện khi CHÍNH mình cầm lái xe này.
+  const steeringPivot = new THREE.Group();
+  steeringPivot.position.set(-0.43, 1.03, -0.26);
+  steeringPivot.rotation.set(-0.42, Math.PI, 0);
+  root.add(steeringPivot);
+  const steering = new THREE.Group();
+  steeringPivot.add(steering);
+  steering.add(new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.03, 8, 24), trim));
+  for (const angle of [Math.PI / 2, (Math.PI * 7) / 6, -Math.PI / 6]) {
+    const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.03, 0.02), trim);
+    spoke.position.set(Math.cos(angle) * 0.1, Math.sin(angle) * 0.1, 0.01);
+    spoke.rotation.z = angle;
+    steering.add(spoke);
+  }
+  const hub = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.055, 0.055, 0.05, 12).rotateX(Math.PI / 2),
+    makeMat("#3a3d38"),
   );
-  steering.position.set(-0.43, 1.03, -0.26);
-  steering.rotation.y = Math.PI;
-  root.add(steering);
+  hub.position.z = 0.015;
+  steering.add(hub);
+  // Găng tay nắm vành ở 9 giờ / 3 giờ: là con của vô lăng nên xoay theo vành.
+  // Cẳng tay KHÔNG xoay theo vô lăng: mỗi khung hình được nối lại từ khuỷu tay
+  // (cố định, phía dưới – sau vô lăng, về phía người lái) tới đúng găng tay.
+  const driverHands = new THREE.Group();
+  const gloveMat = makeMat("#26261f");
+  const sleeveMat = makeMat("#5a5f48");
+  const gloves = [],
+    forearms = [];
+  for (const side of [-1, 1]) {
+    const glove = new THREE.Mesh(new THREE.SphereGeometry(0.046, 10, 8), gloveMat);
+    glove.scale.set(1, 1.2, 1.1);
+    glove.position.set(side * 0.22, 0, 0);
+    steering.add(glove);
+    gloves.push(glove);
+    const forearm = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.04, 0.3, 4, 8).rotateX(Math.PI / 2),
+      sleeveMat,
+    );
+    driverHands.add(forearm);
+    forearms.push({ mesh: forearm, side });
+  }
+  driverHands.visible = false;
+  steeringPivot.add(driverHands);
   const smokeGroup = new THREE.Group();
   for (let i = 0; i < 4; i++) {
     const puff = new THREE.Mesh(
@@ -2864,6 +2902,10 @@ function buildCarMesh(vehicle, forest) {
     smokeGroup,
     fireGroup,
     steering,
+    driverHands,
+    gloves,
+    forearms,
+    steerSpin: 0,
     explosion,
     explosionUntil: 0,
     destroyed: false,
@@ -3023,6 +3065,24 @@ function tiltCarToGround(mesh, x, z, yaw) {
   mesh.rotation.x = Math.atan2(front - back, 3);
   mesh.rotation.z = Math.atan2(right - left, 1.8);
 }
+// Cẳng tay tài xế (góc nhìn thứ nhất): từ khuỷu cố định tới găng trên vành.
+// Toạ độ trong khung trụ lái: +Z hướng ra đầu xe, người lái ở phía -Z.
+const _elbow = new THREE.Vector3(),
+  _grip = new THREE.Vector3(),
+  _armDir = new THREE.Vector3(),
+  _armAxis = new THREE.Vector3(0, 0, 1);
+function poseDriverForearms(ud) {
+  const spin = ud.steerSpin;
+  ud.forearms.forEach(({ mesh, side }) => {
+    _grip.set(side * 0.22 * Math.cos(spin), side * 0.22 * Math.sin(spin), 0);
+    _elbow.set(side * 0.27, -0.2, -0.36);
+    _armDir.subVectors(_grip, _elbow);
+    const length = _armDir.length();
+    mesh.position.addVectors(_grip, _elbow).multiplyScalar(0.5);
+    mesh.quaternion.setFromUnitVectors(_armAxis, _armDir.normalize());
+    mesh.scale.set(1, 1, length / 0.38);
+  });
+}
 function updateVehicleMeshes(dt) {
   const vehicles = gameState?.vehicles || [];
   const liveIds = new Set();
@@ -3075,14 +3135,17 @@ function updateVehicleMeshes(dt) {
     if (!vehicle.destroyed && !vehicle.submerged)
       tiltCarToGround(mesh, targetX, targetZ, targetYaw);
     const ud = mesh.userData;
-    ud.steering.rotation.z =
-      local.vehicleId === vehicle.id && local.vehicleSeat === 0
-        ? keys.KeyA
-          ? 0.42
-          : keys.KeyD
-            ? -0.42
-            : 0
-        : 0;
+    // Đánh lái: vô lăng quay tối đa ~100°, về giữa mượt khi thả phím.
+    const iDrive = local.vehicleId === vehicle.id && local.vehicleSeat === 0;
+    const steerInput = iDrive ? carInputs().steer : vehicle.steer || 0;
+    // Vô lăng quay mặt về tài xế: rẽ trái (steer +1) = quay NGƯỢC chiều kim đồng hồ
+    // khi tài xế nhìn vào, tức góc âm quanh trục cục bộ của vô lăng.
+    ud.steerSpin += (-steerInput * 1.75 - ud.steerSpin) * Math.min(1, 7 * dt);
+    ud.steering.rotation.z = ud.steerSpin;
+    const showHands = iDrive && !deathView;
+    ud.driverHands.visible = showHands;
+    for (const glove of ud.gloves) glove.visible = showHands;
+    if (showHands) poseDriverForearms(ud);
     ud.smokeGroup.visible = !vehicle.destroyed && vehicle.smoke > 0;
     ud.fireGroup.visible = Boolean(vehicle.destroyed);
     if (vehicle.smoke > (ud.smoke || 0)) playVehicleSmokeAudio(vehicle);
@@ -3123,6 +3186,13 @@ function updateVehicleMeshes(dt) {
   }
   updateLocalVehicleView();
 }
+const vehicleEye = new THREE.Vector3(),
+  vehicleTilt = new THREE.Quaternion(),
+  vehicleYawInv = new THREE.Quaternion(),
+  vehicleLook = new THREE.Quaternion(),
+  vehicleEuler = new THREE.Euler(),
+  UP_AXIS = new THREE.Vector3(0, 1, 0);
+let vehiclePitch = 0; // góc cúi/ngửa của hành khách, tách khỏi độ nghiêng xe
 function updateLocalVehicleView() {
   const vehicle = gameState?.vehicles?.find((v) => v.id === local.vehicleId);
   const hud = $("#vehicleHud");
@@ -3133,31 +3203,44 @@ function updateLocalVehicleView() {
         !deathView &&
         local.state === "ground" &&
         (!scoped || local.weapon !== "sniper");
-    if (steeringWheel) steeringWheel.visible = false;
     return;
   }
   const carMesh = vehicleMeshes.get(vehicle.id);
   const yaw = carMesh?.rotation.y ?? vehicle.yaw;
-  const carX = carMesh?.position.x ?? vehicle.x;
-  const carZ = carMesh?.position.z ?? vehicle.z;
   const seatX = local.vehicleSeat === 0 ? -0.43 : 0.43;
-  const seatZ = 0.18;
-  const x = carX + Math.cos(yaw) * seatX + Math.sin(yaw) * seatZ;
-  const z = carZ - Math.sin(yaw) * seatX + Math.cos(yaw) * seatZ;
-  local.x = x;
-  local.z = z;
-  local.groundY = carMesh?.position.y ?? groundHeightAt(vehicle.x, vehicle.z);
-  camera.position.set(
-    x,
-    local.groundY + (local.vehicleSeat === 0 ? 1.32 : 1.28),
-    z,
-  );
-  if (local.vehicleSeat === 0) local.yaw = yaw;
+  const eyeY = local.vehicleSeat === 0 ? 1.32 : 1.28;
   camera.rotation.order = "YXZ";
-  camera.rotation.y = local.yaw;
-  if (local.vehicleSeat === 0) camera.rotation.x = 0;
+  if (carMesh) {
+    // Mắt đặt đúng ghế theo khung xe (đã nghiêng theo dốc), camera nghiêng
+    // cùng thân xe: lên dốc thấy đầu xe ngóc lên, qua sườn đồi thấy xe nghiêng.
+    carMesh.updateMatrixWorld();
+    vehicleEye.set(seatX, eyeY, 0.18);
+    carMesh.localToWorld(vehicleEye);
+    camera.position.copy(vehicleEye);
+    local.x = vehicleEye.x;
+    local.z = vehicleEye.z;
+    local.groundY = carMesh.position.y;
+    if (local.vehicleSeat === 0) {
+      local.yaw = yaw;
+      camera.quaternion.copy(carMesh.quaternion);
+    } else {
+      // Hành khách nhìn tự do (yaw/pitch riêng) nhưng vẫn nghiêng theo khung xe.
+      vehicleTilt.copy(carMesh.quaternion).premultiply(
+        vehicleYawInv.setFromAxisAngle(UP_AXIS, -yaw),
+      );
+      vehicleLook.setFromEuler(vehicleEuler.set(vehiclePitch, local.yaw, 0, "YXZ"));
+      camera.quaternion.copy(vehicleYawInv.setFromAxisAngle(UP_AXIS, yaw))
+        .multiply(vehicleTilt)
+        .multiply(vehicleYawInv.setFromAxisAngle(UP_AXIS, -yaw))
+        .multiply(vehicleLook);
+    }
+  } else {
+    local.groundY = groundHeightAt(vehicle.x, vehicle.z);
+    camera.position.set(vehicle.x, local.groundY + eyeY, vehicle.z);
+    if (local.vehicleSeat === 0) local.yaw = yaw;
+    camera.rotation.set(local.vehicleSeat === 0 ? 0 : vehiclePitch, local.yaw, 0);
+  }
   if (gun) gun.visible = false;
-  if (steeringWheel) steeringWheel.visible = local.vehicleSeat === 0;
   if (hud) {
     hud.classList.remove("hidden");
     // Tốc độ hiển thị theo xe đang vẽ (dự đoán) để khớp cảm giác lái.
@@ -3285,30 +3368,7 @@ function initWorld() {
   gun.userData.boltAt = 0;
   gun.visible = false; // phòng chờ / máy bay / đang nhảy dù: tay không, chỉ cầm súng sau khi tiếp đất
   camera.add(gun);
-  steeringWheel = new THREE.Group();
-  const wheelMesh = new THREE.Mesh(
-    new THREE.TorusGeometry(0.26, 0.026, 8, 24),
-    makeMat("#20231e"),
-  );
-  wheelMesh.position.set(0, -0.42, -0.72);
-  steeringWheel.add(wheelMesh);
-  const wheelHub = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.035, 0.035, 0.12, 8),
-    makeMat("#77796d"),
-  );
-  wheelHub.rotation.x = Math.PI / 2;
-  wheelHub.position.set(0, -0.42, -0.72);
-  steeringWheel.add(wheelHub);
-  for (const side of [-1, 1]) {
-    const hand = new THREE.Mesh(
-      new THREE.SphereGeometry(0.09, 8, 7),
-      makeMat("#343830"),
-    );
-    hand.position.set(side * 0.22, -0.39, -0.7);
-    steeringWheel.add(hand);
-  }
-  steeringWheel.visible = false;
-  camera.add(steeringWheel);
+  // (Vô lăng giả gắn vào camera đã bỏ: tài xế nhìn thấy và cầm vô lăng THẬT của xe.)
   // Đèn chớp nòng tạo SẴN (cường độ 0). Số lượng đèn trong scene phải cố định
   // suốt trận, nếu không mỗi lần đổi Three.js phải biên dịch lại shader.
   muzzleFlash = new THREE.PointLight(0xffc66b, 0, 3);
@@ -3688,6 +3748,7 @@ function renderPlayers(state) {
         keys.KeyQ = false;
         keys.KeyE = false;
         if (camera) camera.rotation.z = 0;
+        vehiclePitch = 0;
         const vehicle = gameState?.vehicles?.find(
           (v) => v.id === local.vehicleId,
         );
@@ -3695,14 +3756,14 @@ function renderPlayers(state) {
         localFootstepDistance = 0;
         stopFiring();
         if (scoped) setScope(false);
-        if (steeringWheel) steeringWheel.visible = local.vehicleSeat === 0;
       } else if (!local.vehicleId && previousVehicleId) {
         // Snap to the server-confirmed exit point beside the occupied seat.
         local.x = p.x;
         local.z = p.z;
         local.yaw = p.yaw;
         localFootstepDistance = 0;
-        if (steeringWheel) steeringWheel.visible = false;
+        // Ra khỏi xe: camera thẳng lại (bỏ độ nghiêng của khung xe).
+        if (camera) camera.rotation.set(0, local.yaw, 0, "YXZ");
       }
       const serverReloading = Boolean(p.reloading);
       ammo = Math.max(0, Number(p.ammo) || 0);
@@ -4568,7 +4629,6 @@ function updateGunPose(dt) {
   if (!gun) return;
   if (deathView) {
     gun.visible = false;
-    if (steeringWheel) steeringWheel.visible = false;
     return;
   }
   const aimTarget =
@@ -5413,6 +5473,12 @@ function onMouse(e) {
   if (local.vehicleId && local.vehicleSeat === 0) return;
   if (document.pointerLockElement !== renderer?.domElement) return;
   if (!saneMouseDelta(e)) return;
+  if (local.vehicleId) {
+    const sens = Number($("#sensitivity").value) || 50;
+    local.yaw -= e.movementX * sens * 0.000055;
+    vehiclePitch = clamp(vehiclePitch - e.movementY * sens * 0.000036, -1.2, 1.2);
+    return;
+  }
   const sniperZoomScale =
     scoped && local.weapon === "sniper"
       ? clamp(sniperZoomFov / baseFov, 0.12, 1)
@@ -6120,6 +6186,7 @@ function animateAvatars(dt) {
         slow: ud.slowWalking,
         reloading: ud.reloading,
         driver: ud.driver,
+        steerSpin: ud.steerSpin || 0,
         kick:
           now < ud.kickUntil ? (ud.weaponKind === "sniper" ? 0.16 : 0.06) : 0,
         weaponGrip: armed ? WEAPON_GRIPS[ud.weaponKind || "ranger"] : null,
@@ -6146,15 +6213,13 @@ function updateRemoteMotion(dt) {
     } else if (ud.motionMode === "vehicle") {
       const car = vehicleMeshes.get(ud.vehicleId);
       if (car) {
-        const yaw = car.rotation.y;
-        const seatX = ud.vehicleSeat === 0 ? -0.43 : 0.43;
-        const seatZ = 0.18;
-        mesh.position.set(
-          car.position.x + Math.cos(yaw) * seatX + Math.sin(yaw) * seatZ,
-          car.position.y + 0.08,
-          car.position.z - Math.sin(yaw) * seatX + Math.cos(yaw) * seatZ,
-        );
-        mesh.rotation.y = yaw;
+        // Ngồi đúng ghế theo khung xe và nghiêng cùng xe khi lên dốc / qua sườn đồi.
+        car.updateMatrixWorld();
+        vehicleEye.set(ud.vehicleSeat === 0 ? -0.43 : 0.43, 0.08, 0.18);
+        car.localToWorld(vehicleEye);
+        mesh.position.copy(vehicleEye);
+        mesh.quaternion.copy(car.quaternion);
+        ud.steerSpin = car.userData.steerSpin || 0;
       }
     } else if (ud.snaps?.length) {
       const s = sampleSnapshots(ud.snaps, renderT, remoteSample);
@@ -7660,7 +7725,6 @@ function frame() {
   updateGunPose(dt);
   if (deathView) {
     if (gun) gun.visible = false;
-    if (steeringWheel) steeringWheel.visible = false;
   }
   updatePhaseOverlay();
   updatePlaneObject(dt);

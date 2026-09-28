@@ -449,12 +449,15 @@ export function poseAvatar(rig, pose, state, dt) {
         .applyEuler(rig.weaponMount.rotation)
         .add(rig.weaponMount.position);
       solveArm(arm, _t);
+    } else if (stance === "seat" && state.driver) {
+      // Tay nắm vành vô lăng thật (tâm vô lăng so với thân: cao 0.45, trước 0.42),
+      // quay theo góc đánh lái.
+      // Nhìn từ sau lưng tài xế, rẽ trái = vô lăng quay ngược kim đồng hồ.
+      const a = -(state.steerSpin || 0);
+      _t.set(arm.side * 0.21 * Math.cos(a), 0.45 + arm.side * 0.21 * Math.sin(a), -0.4);
+      solveArm(arm, _t, "free");
     } else if (stance === "seat") {
-      _t.set(
-        arm.side * (state.driver ? 0.2 : 0.18),
-        state.driver ? 0.34 : 0.02,
-        state.driver ? -0.42 : -0.3,
-      );
+      _t.set(arm.side * 0.18, 0.02, -0.3);
       solveArm(arm, _t, "free");
     } else if (stance === "chute") {
       _t.set(arm.side * 0.3, 0.98, -0.05);
