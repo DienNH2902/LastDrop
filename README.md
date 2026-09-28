@@ -88,6 +88,13 @@ Server Render **không render đồ họa** (không cần GPU); đồ họa ch�
 - Vật phẩm chỉ sinh **trong nhà** (`createLoot`), mỗi ô sàn tối đa một món. Xe giữ nguyên logic spawn.
 - Client vẽ mặt đất liền khối chia 6×6 ô (GPU bỏ phần ngoài tầm nhìn), đường/sông là dải băng bám địa hình, cỏ là bụi lá mảnh chỉ vẽ trong ~75 m (50 m ở chế độ Performance).
 
+## Súng, nhân vật và hitbox
+
+- `public/weapons.js`: mô hình AUG (red dot) và Kar98k (ống ngắm 8x, khóa nòng kéo sau mỗi phát), dùng chung cho súng cầm tay, súng trên tay người khác và súng rơi dưới đất; tia lửa đầu nòng dựng sẵn, chỉ bật/tắt khi bắn.
+- `public/avatar.js`: nhân vật có khớp (hông, gối, vai, khuỷu), hai tay cầm súng bằng IK, hoạt ảnh đứng / đi chậm / chạy / khom / nằm / peek / bơi / rơi / dù / ngồi xe; giữ đầu mèo, nón, giáp.
+- **Hitbox** (`HITBOX` trong avatar.js và `HIT_STAND/CROUCH/PRONE/SEAT/FREEFALL` trong server.js) bao trọn nón (tính là đầu) và giáp (tính là thân). Sửa kích thước nhân vật thì sửa cả hai nơi.
+- Âm thanh AUG / Kar98k, kéo khóa nòng, nạp đạn theo từng thao tác, và bước chân theo bề mặt (cỏ, cát, đường, sàn gỗ, bùn, nước) đều tổng hợp bằng Web Audio trong `game.js`.
+
 ## Tự tạo và import đồ họa
 
 Map hiện sinh trực tiếp từ hình khối trong `public/game.js` (`initWorld`). Để tự làm asset miễn phí, dựng model trong Blender, export `.glb`, đặt file vào `public/assets/`, rồi import `GLTFLoader` từ Three.js và thêm model vào scene trong `initWorld`. Giữ texture nhỏ, gộp vật thể tĩnh và dùng ít polygon để tối ưu. Có thể thay các khối người chơi trong `renderPlayers()` bằng model nhân vật. Không dùng ảnh khuôn mặt nếu chưa có đồng ý rõ ràng; upload ảnh và phân phối ảnh cần thêm kiểm soát quyền riêng tư/bảo mật.

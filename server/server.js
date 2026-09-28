@@ -104,10 +104,11 @@ function claimAlong(q, part, origin, dir, now) {
   const tolerance = part === "head" ? 0.8 : 1.1;
   let best = null;
   for (const s of samples) {
-    const crouchScale = s.crouching ? 0.68 : 1;
     const py = s.prone
-      ? s.baseY + (part === "head" ? 0.5 : 0.35)
-      : s.baseY + s.jumpY + (part === "head" ? 1.72 : 1.0) * crouchScale;
+      ? s.baseY + 0.35
+      : s.baseY +
+        s.jumpY +
+        (part === "head" ? (s.crouching ? 1.34 : 1.8) : s.crouching ? 0.65 : 1.0);
     const vx = s.x - origin.x,
       vy = py - origin.y,
       vz = s.z - origin.z;
@@ -121,6 +122,50 @@ function claimAlong(q, part, origin, dir, now) {
     if (perp <= tolerance && (best === null || along < best)) best = along;
   }
   return best;
+}
+// Bộ hộp hitbox theo tư thế (đơn vị mét, chân ở y = 0; y cộng thêm độ cao nền).
+// Số liệu giống HITBOX trong public/avatar.js — sửa một bên thì sửa cả hai.
+const HIT_STAND = [
+  { part: "head", c: [0, 1.8, 0], h: [0.28, 0.3, 0.27], peek: 0.32 },
+  { part: "body", c: [0, 1.14, 0], h: [0.31, 0.36, 0.21], peek: 0.2 },
+  { part: "body", c: [0, 0.45, 0], h: [0.2, 0.45, 0.15], peek: 0 },
+];
+const HIT_CROUCH = [
+  { part: "head", c: [0, 1.34, -0.25], h: [0.28, 0.3, 0.27], peek: 0.24 },
+  { part: "body", c: [0, 0.8, -0.08], h: [0.31, 0.3, 0.24], peek: 0.14 },
+  { part: "body", c: [0, 0.3, -0.15], h: [0.2, 0.3, 0.3], peek: 0 },
+];
+// Nằm sấp: mô hình đứng xoay nằm xuống (trục cao → hướng trước mặt), tâm cao 0.35 m.
+const HIT_PRONE = [
+  { part: "head", c: [0, 0.35, -1.8], h: [0.28, 0.27, 0.3] },
+  { part: "body", c: [0, 0.35, -1.14], h: [0.31, 0.21, 0.36] },
+  { part: "body", c: [0, 0.35, -0.45], h: [0.2, 0.15, 0.45] },
+];
+const HIT_SEAT = [
+  { part: "head", c: [0, 1.38, 0.06], h: [0.28, 0.3, 0.27] },
+  { part: "body", c: [0, 0.87, 0.02], h: [0.31, 0.3, 0.21] },
+  { part: "body", c: [0, 0.45, -0.25], h: [0.2, 0.18, 0.3] },
+];
+const HIT_FREEFALL = [
+  { part: "head", c: [0, 0.5 + Math.cos(1.35) * 1.8, -1.8], h: [0.28, 0.27, 0.3] },
+  { part: "body", c: [0, 0.5 + Math.cos(1.35) * 1.14, -1.14], h: [0.31, 0.21, 0.36] },
+  { part: "body", c: [0, 0.5 + Math.cos(1.35) * 0.45, -0.45], h: [0.2, 0.15, 0.45] },
+];
+function playerHitboxes(q) {
+  if (q.vehicleId) return { boxes: HIT_SEAT };
+  if (q.state === "freefall") return { boxes: HIT_FREEFALL };
+  if (q.prone) return { boxes: HIT_PRONE };
+  const base = q.crouching ? HIT_CROUCH : HIT_STAND;
+  const jump = q.jumpY || 0;
+  const peek = Math.max(-1, Math.min(1, Number(q.peek) || 0));
+  if (!jump && !peek) return { boxes: base };
+  // Peek nghiêng người sang phải/trái quanh bàn chân: đầu và thân dịch ngang.
+  return {
+    boxes: base.map((b) => ({
+      ...b,
+      c: [b.c[0] + peek * (b.peek || 0), b.c[1] + jump, b.c[2]],
+    })),
+  };
 }
 const isGrounded = (p) => p.state === "lobby" || p.state === "ground";
 // Đi lại: đứng chờ trong map (staging/countdown) hoặc đã tiếp đất.
@@ -1933,7 +1978,7 @@ wss.on("connection", (ws) => {
         broadcastRaw(room, { type: "lootAdded", item: dropped });
         send(ws, {
           type: "toast",
-          text: `ĐÃ ĐỔI SANG ${p.weapon === "sniper" ? "SNIPER" : "RANGER-9"}`,
+          text: `ĐÃ ĐỔI SANG ${p.weapon === "sniper" ? "KAR98K" : "AUG"}`,
         });
       } else {
         if ((p.medkits || 0) >= MAX_MEDKITS) {
@@ -2259,6 +2304,26 @@ wss.on("connection", (ws) => {
         if (along < -r || along > nearest * flatLength + r) return true;
         return Math.abs(vx * uz - vz * ux) > r;
       };
+      // Hitbox người chơi theo tư thế — trùng khớp public/avatar.js (HITBOX), bao
+      // trọn nón (đầu) và áo giáp (thân). Toạ độ cục bộ: mặt nhìn về -Z.
+      const playerHitboxHit = (q, baseY) => {
+        const set = playerHitboxes(q);
+        const c = Math.cos(q.yaw || 0),
+          sn = Math.sin(q.yaw || 0);
+        let best = null;
+        for (const box of set.boxes) {
+          const [lx, ly, lz] = box.c;
+          const center = {
+            x: q.x + c * lx + sn * lz,
+            y: baseY + ly,
+            z: q.z - sn * lx + c * lz,
+          };
+          const t = rayBox(center, q.yaw || 0, { x: box.h[0], y: box.h[1], z: box.h[2] });
+          if (t !== null && (!best || t < best.distance))
+            best = { distance: t, part: box.part };
+        }
+        return best;
+      };
       // A solid map box blocks shots to anything behind it.
       for (const o of room.obstacles) {
         if (o.type === "hill" || o.solid === false) continue;
@@ -2363,163 +2428,12 @@ wss.on("connection", (ws) => {
             : q.swimming
               ? q.swimY || 0
               : q.groundY || 0;
-          if (q.vehicleId) {
-            const bodyDistance = rayBox(
-              { x: q.x, y: targetBaseY + 1.03, z: q.z },
-              q.yaw,
-              { x: 0.29, y: 0.39, z: 0.23 },
-            );
-            const headDistance = raySphere(
-              { x: q.x, y: targetBaseY + 1.55, z: q.z },
-              0.23,
-            );
-            const distance =
-              bodyDistance === null
-                ? headDistance
-                : headDistance === null
-                  ? bodyDistance
-                  : Math.min(bodyDistance, headDistance);
-            if (distance !== null && distance < nearest) {
-              nearest = distance;
-              struckVehicle = null;
-              target = q;
-              targetPart =
-                headDistance !== null && headDistance <= distance
-                  ? "head"
-                  : "body";
-            }
-            continue;
-          }
-          if (q.state === "freefall") {
-            // Freefall avatars lie face-down at a -1.35 rad X rotation.
-            // Match their visible horizontal body and forward-positioned head.
-            const front = (distance) => ({
-              x: q.x - Math.sin(q.yaw) * distance,
-              y: targetBaseY + 0.5 + Math.cos(1.35) * distance,
-              z: q.z - Math.cos(q.yaw) * distance,
-            });
-            const bodyDistances = [
-              rayBox(front(1.05), q.yaw, { x: 0.325, y: 0.22, z: 0.5 }),
-              rayBox(front(0.4), q.yaw, { x: 0.24, y: 0.2, z: 0.34 }),
-            ].filter((distance) => distance !== null);
-            const bodyDistance = bodyDistances.length
-              ? Math.min(...bodyDistances)
-              : null;
-            const headDistance = raySphere(front(1.72), 0.24);
-            const distance =
-              headDistance === null
-                ? bodyDistance
-                : bodyDistance === null
-                  ? headDistance
-                  : Math.min(headDistance, bodyDistance);
-            if (distance !== null && distance < nearest) {
-              nearest = distance;
-              struckVehicle = null;
-              target = q;
-              targetPart =
-                headDistance !== null && headDistance <= distance
-                  ? "head"
-                  : "body";
-            }
-            continue;
-          }
-          // Bounds mirror game.js: torso .65×1×.38, legs .48×.65×.34, head radius .24.
-          if (q.prone) {
-            const front = (length) => ({
-              x: q.x - Math.sin(q.yaw) * length,
-              y: targetBaseY + 0.35,
-              z: q.z - Math.cos(q.yaw) * length,
-            });
-            const bodyDistances = [
-              rayBox(front(1.05), q.yaw, { x: 0.325, y: 0.19, z: 0.5 }),
-              rayBox(front(0.4), q.yaw, { x: 0.24, y: 0.17, z: 0.325 }),
-            ].filter((t) => t !== null);
-            const bodyDistance = bodyDistances.length
-              ? Math.min(...bodyDistances)
-              : null;
-            const headDistance = raySphere(front(1.72), 0.24);
-            const distance =
-              headDistance === null
-                ? bodyDistance
-                : bodyDistance === null
-                  ? headDistance
-                  : Math.min(headDistance, bodyDistance);
-            if (distance !== null) {
-              if (distance < nearest) {
-                nearest = distance;
-                struckVehicle = null;
-                target = q;
-                targetPart =
-                  headDistance !== null && headDistance <= distance
-                    ? "head"
-                    : "body";
-              }
-            }
-            continue;
-          }
-          const crouchScale = q.crouching ? 0.68 : 1;
-          const jumpY = q.jumpY || 0;
-          // Leaning moves the shoulders/head sideways around the feet pivot.
-          const peek = Math.max(-1, Math.min(1, Number(q.peek) || 0));
-          const leanRightX = Math.cos(q.yaw) * peek;
-          const leanRightZ = -Math.sin(q.yaw) * peek;
-
-          const bodyDistances = [
-            rayBox(
-              {
-                x: q.x + leanRightX * 0.19 * crouchScale,
-                y: targetBaseY + 1.05 * crouchScale + jumpY,
-                z: q.z + leanRightZ * 0.19 * crouchScale,
-              },
-              q.yaw,
-              {
-                x: 0.325,
-                y: 0.5 * crouchScale,
-                z: 0.19,
-              },
-            ),
-            rayBox(
-              {
-                x: q.x,
-                y: targetBaseY + 0.4 * crouchScale + jumpY,
-                z: q.z,
-              },
-              q.yaw,
-              {
-                x: 0.24,
-                y: 0.325 * crouchScale,
-                z: 0.17,
-              },
-            ),
-          ].filter((t) => t !== null);
-          const bodyDistance = bodyDistances.length
-            ? Math.min(...bodyDistances)
-            : null;
-          const headDistance = raySphere(
-            {
-              x: q.x + leanRightX * 0.31 * crouchScale,
-              y: targetBaseY + 1.72 * crouchScale + jumpY,
-              z: q.z + leanRightZ * 0.31 * crouchScale,
-            },
-            0.24,
-            crouchScale,
-          );
-          const distance =
-            headDistance === null
-              ? bodyDistance
-              : bodyDistance === null
-                ? headDistance
-                : Math.min(headDistance, bodyDistance);
-          if (distance !== null) {
-            if (distance < nearest) {
-              nearest = distance;
-              struckVehicle = null;
-              target = q;
-              targetPart =
-                headDistance !== null && headDistance <= distance
-                  ? "head"
-                  : "body";
-            }
+          const hit = playerHitboxHit(q, targetBaseY);
+          if (hit && hit.distance < nearest) {
+            nearest = hit.distance;
+            struckVehicle = null;
+            target = q;
+            targetPart = hit.part;
           }
         }
       // Red dot dính địch trên màn hình = chắc chắn trúng: nếu cách xét cũ trượt
