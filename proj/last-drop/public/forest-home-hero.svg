@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1100" fill="none">
+  <defs>
+    <linearGradient id="sky" x2="0" y2="1"><stop stop-color="#78958f"/><stop offset=".55" stop-color="#c0c29c"/><stop offset="1" stop-color="#e2c38c"/></linearGradient>
+    <linearGradient id="hill" x2=".7" y2="1"><stop stop-color="#71885b"/><stop offset="1" stop-color="#344a35"/></linearGradient>
+    <linearGradient id="river" x2="0" y2="1"><stop stop-color="#75a8a2"/><stop offset="1" stop-color="#355e63"/></linearGradient>
+    <linearGradient id="fade"><stop stop-color="#11130f"/><stop offset=".5" stop-color="#11130f" stop-opacity=".36"/><stop offset="1" stop-color="#11130f" stop-opacity="0"/></linearGradient>
+    <linearGradient id="shade" x2="1" y2="0"><stop stop-color="#11130f" stop-opacity=".18"/><stop offset="1" stop-color="#11130f" stop-opacity=".25"/></linearGradient>
+    <filter id="soft"><feGaussianBlur stdDeviation="18"/></filter>
+  </defs>
+  <path fill="url(#sky)" d="M0 0h1600v1100H0z"/>
+  <circle cx="1240" cy="186" r="74" fill="#f0dcaa" opacity=".45" filter="url(#soft)"/>
+  <circle cx="1240" cy="186" r="35" fill="#f5e8bf" opacity=".55"/>
+  <!-- Distant ridges and mist echo the playable forest map. -->
+  <path fill="#84998a" d="m0 390 180-115 148 73 210-202 210 191 176-124 184 170 200-149 292 153v310H0z"/>
+  <path fill="#687e68" d="m0 510 220-178 130 92 202-142 174 184 182-127 196 133 206-199 290 184v290H0z"/>
+  <path fill="url(#hill)" d="M0 604q187-135 349-49t298-31q188-152 385-31t307-12q151-83 261 2v617H0z"/>
+  <path fill="#526e47" d="M0 702q198-83 352 6t318-42q190-114 374-20t290 20q155-69 266 8v426H0z"/>
+  <!-- Winding river and lake, corresponding to the forest terrain. -->
+  <path fill="url(#river)" d="M1194 520q-90 117-215 160t-162 134q-37 80 94 142t116 144q-5 56-136 121l260 36q137-98 135-187-3-115-163-171-120-42-104-102 13-49 165-102 121-42 191-126z" opacity=".94"/>
+  <path fill="#a8c1ac" d="M1134 568q-99 106-226 146t-149 111q-17 59 118 117t155 129q17 70-88 139" stroke="#b4c8ad" stroke-opacity=".42" stroke-width="9"/>
+  <ellipse cx="1090" cy="883" rx="154" ry="77" fill="#4c7775" opacity=".85"/>
+  <ellipse cx="1081" cy="871" rx="123" ry="52" fill="#719b91" opacity=".58"/>
+  <!-- Hillside paths and grass patches. -->
+  <path d="M120 918q173-110 316-48t278-54q99-89 207-62" stroke="#b5a579" stroke-width="13" opacity=".66"/>
+  <path d="M85 980q135-54 240-20m438-178q87-53 165-34m337-91q88-45 172-19" stroke="#a1b76f" stroke-width="18" stroke-linecap="round" opacity=".34"/>
+  <!-- Small walkable houses and sheds placed in clearings. -->
+  <g stroke="#302f27" stroke-width="7" stroke-linejoin="round">
+    <g transform="translate(365 650)"><path fill="#8c7959" d="M0 57 85 7l90 50v92H0z"/><path fill="#483f32" d="m-13 58 98-67 103 67-13 17L85 11 0 75z"/><path fill="#26302b" d="M23 83h32v48H23zm82 2h39v29h-39z"/><path fill="#b9a77b" d="M4 144h165v12H4z"/></g>
+    <g transform="translate(805 723) scale(.82)"><path fill="#9b8158" d="M0 57 85 7l90 50v92H0z"/><path fill="#514331" d="m-13 58 98-67 103 67-13 17L85 11 0 75z"/><path fill="#28322b" d="M23 83h32v48H23zm82 2h39v29h-39z"/><path fill="#c0aa75" d="M4 144h165v12H4z"/></g>
+    <g transform="translate(1285 647) scale(.72)"><path fill="#897856" d="M0 57 85 7l90 50v92H0z"/><path fill="#463e30" d="m-13 58 98-67 103 67-13 17L85 11 0 75z"/><path fill="#26312c" d="M23 83h32v48H23zm82 2h39v29h-39z"/></g>
+  </g>
+  <!-- Low-poly evergreens with trunks; a few broadleaf trees match the map palette. -->
+  <g>
+    <g fill="#253c30"><path d="m180 660 54-148 55 148h-32l55 102H157l54-102z"/><path d="m240 544 37-112 42 112h-24l42 75h-113l39-75z"/><path d="m535 686 62-172 62 172h-36l58 105H506l60-105z"/><path d="m660 567 49-139 52 139h-30l45 86h-136l47-86z"/><path d="m1430 618 53-160 56 160h-33l48 91h-144l48-91z"/></g>
+    <g fill="#416045"><path d="m130 678 42-113 43 113h-24l41 75H112l38-75z"/><path d="m478 631 43-126 47 126h-27l43 80H450l42-80z"/><path d="m748 708 51-143 52 143h-31l49 89H724l48-89z"/><path d="m1360 683 42-119 46 119h-26l40 74h-116l38-74z"/></g>
+    <g fill="#604a32"><path d="M229 751h13v72h-13zm48-133h11v63h-11zm309 206h14v74h-14zm171-105h12v67h-12zm691-62h12v66h-12z"/></g>
+    <g fill="#6d8450"><circle cx="93" cy="785" r="35"/><circle cx="320" cy="748" r="28"/><circle cx="696" cy="809" r="37"/><circle cx="1248" cy="752" r="30"/><circle cx="1512" cy="787" r="39"/></g>
+  </g>
+  <!-- Foreground rocks and grasses give the same readable stylized scale as play. -->
+  <path fill="#555849" d="m30 1010 42-76 76 24 38 69-28 73H23zm540-31 49-63 81 16 38 75-34 62H558zm850-26 48-76 88 22 35 80-38 71h-145z"/>
+  <path fill="#777966" d="m59 990 24-39 42 14-27 36zm574 10 30-42 46 10-28 39zm837-17 27-43 44 12-29 40z"/>
+  <g stroke="#9fb36d" stroke-width="5" stroke-linecap="round" opacity=".72"><path d="m260 1084 13-49m0 49 22-38m0 38 6-55m366 65 17-53m0 53 25-41m610 34 11-50m0 50 25-40m182 23 18-51m0 51 24-37"/></g>
+  <!-- Directional composition leaves the action and readable scenery on the right. -->
+  <path fill="url(#fade)" d="M0 0h850v1100H0z"/>
+  <path fill="url(#shade)" d="M0 0h1600v1100H0z"/>
+</svg>

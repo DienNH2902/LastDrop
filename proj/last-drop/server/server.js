@@ -3,8 +3,6 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
-const zlib = require("node:zlib");
-const crypto = require("node:crypto");
 const { WebSocketServer } = require("ws");
 
 const ROOT = path.join(__dirname, "..", "public");
@@ -144,46 +142,10 @@ const types = {
   ".webmanifest": "application/manifest+json",
   ".json": "application/json",
 };
-// File tĩnh được đọc + nén gzip MỘT lần rồi giữ trong RAM. Trước đây mỗi lượt
-// tải trang lại đọc đĩa và gửi nguyên 245 KB game.js chưa nén — trên gói free
-// (CPU/băng thông thấp) việc này tranh CPU với vòng lặp trận đấu.
-const staticCache = new Map();
-const COMPRESSIBLE = new Set([".html", ".js", ".css", ".svg", ".json", ".webmanifest", ".txt"]);
-function loadStatic(file, done) {
-  // stat() rất rẻ; nhờ nó sửa file khi đang chạy vẫn có hiệu lực ngay.
-  fs.stat(file, (statErr, stat) => {
-    if (statErr || !stat.isFile()) return done(statErr || new Error("not a file"));
-    const cached = staticCache.get(file);
-    if (cached && cached.mtimeMs === stat.mtimeMs) return done(null, cached);
-    readStatic(file, stat.mtimeMs, done);
-  });
-}
-function readStatic(file, mtimeMs, done) {
-  fs.readFile(file, (err, data) => {
-    if (err) return done(err);
-    const ext = path.extname(file);
-    const entry = {
-      mtimeMs,
-      data,
-      gz: COMPRESSIBLE.has(ext) ? zlib.gzipSync(data, { level: 9 }) : null,
-      etag: `"${crypto.createHash("sha1").update(data).digest("base64url").slice(0, 16)}"`,
-      type: types[ext] || "application/octet-stream",
-      // Mã nguồn / trang luôn kiểm tra lại (ETag → 304) để bản cập nhật có hiệu lực
-      // ngay; ảnh/âm thanh ít đổi nên cho trình duyệt giữ 1 ngày.
-      cacheControl: COMPRESSIBLE.has(ext) ? "no-cache" : "public, max-age=86400",
-    };
-    staticCache.set(file, entry);
-    done(null, entry);
-  });
-}
 const server = http.createServer((req, res) => {
-  let urlPath;
-  try {
-    urlPath = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
-  } catch {
-    res.writeHead(400).end();
-    return;
-  }
+  const urlPath = decodeURIComponent(
+    new URL(req.url, "http://localhost").pathname,
+  );
   const file = path.resolve(
     ROOT,
     "." + (urlPath === "/" ? "/index.html" : urlPath),
@@ -195,37 +157,21 @@ const server = http.createServer((req, res) => {
     res.writeHead(403).end();
     return;
   }
-  loadStatic(file, (err, entry) => {
+  fs.readFile(file, (err, data) => {
     if (err) {
       res.writeHead(404).end("Not found");
       return;
     }
-    const headers = {
-      "Content-Type": entry.type,
-      "Cache-Control": entry.cacheControl,
-      ETag: entry.etag,
-      Vary: "Accept-Encoding",
-    };
-    if (req.headers["if-none-match"] === entry.etag) {
-      res.writeHead(304, headers).end();
-      return;
-    }
-    const useGzip =
-      entry.gz && /\bgzip\b/.test(req.headers["accept-encoding"] || "");
-    if (useGzip) headers["Content-Encoding"] = "gzip";
-    res.writeHead(200, headers);
-    res.end(useGzip ? entry.gz : entry.data);
+    res.writeHead(200, {
+      "Content-Type": types[path.extname(file)] || "application/octet-stream",
+    });
+    res.end(data);
   });
 });
-// Nén từng gói WebSocket tốn CPU server và thêm độ trễ; gói state đã được làm gọn.
-const wss = new WebSocketServer({ server, perMessageDeflate: false });
+const wss = new WebSocketServer({ server });
 const send = (ws, data) => {
   if (ws.readyState === 1) ws.send(JSON.stringify(data));
 };
-// Làm tròn số trước khi gửi: JSON của 20 gói/giây × mỗi người chơi ngắn đi
-// gần một nửa (tọa độ 1 cm, góc 0.001 rad là quá đủ cho hiển thị và hitbox).
-const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : v);
-const r3 = (v) => (Number.isFinite(v) ? Math.round(v * 1000) / 1000 : v);
 const snapshot = (room) => ({
   type: "state",
   phase: room.phase,
@@ -235,23 +181,7 @@ const snapshot = (room) => ({
   mapSeed: room.mapSeed,
   mapId: room.mapId,
   // weatherActive: Boolean(room.weather?.active), // weather sync disabled
-  vehicles: (room.vehicles || []).map((v) => ({
-    id: v.id,
-    color: v.color,
-    x: r2(v.x),
-    z: r2(v.z),
-    yaw: r3(v.yaw),
-    speed: r2(v.speed),
-    // Điều khiển hiện tại giúp client dự đoán xe người khác giữa hai gói tin.
-    steer: v.controls?.steer || 0,
-    throttle: v.controls?.throttle || 0,
-    brake: Boolean(v.controls?.brake),
-    hp: v.hp,
-    destroyed: v.destroyed,
-    smoke: v.smoke,
-    submerged: v.submerged,
-    sinkDepth: r2(v.sinkDepth || 0),
-  })),
+  vehicles: (room.vehicles || []).map((v) => ({ ...v })),
   zone: room.zone || null,
   hostId: [...room.players.keys()][0] || null,
   lastElimination: room.lastElimination || null,
@@ -260,17 +190,17 @@ const snapshot = (room) => ({
   players: [...room.players.values()].map((p) => ({
     id: p.id,
     name: p.name,
-    x: r2(p.x),
-    z: r2(p.z),
-    groundY: r2(p.groundY || 0),
+    x: p.x,
+    z: p.z,
+    groundY: p.groundY || 0,
     state: p.state || "lobby",
     seat: p.seat || 0,
-    y: p.state === "freefall" || p.state === "parachute" ? r2(p.y) : null,
+    y: p.state === "freefall" || p.state === "parachute" ? p.y : null,
     ready: Boolean(p.ready),
     swimming: Boolean(p.swimming),
-    swimY: p.swimming ? r2(p.swimY) : null,
-    yaw: r3(p.yaw),
-    peek: r2(p.peek || 0),
+    swimY: p.swimming ? p.swimY : null,
+    yaw: p.yaw,
+    peek: p.peek || 0,
     hp: Math.round(p.hp),
     kills: p.kills,
     placement: p.placement || 0,
@@ -280,13 +210,14 @@ const snapshot = (room) => ({
     slowWalking: p.slowWalking,
     vehicleId: p.vehicleId || null,
     vehicleSeat: Number.isInteger(p.vehicleSeat) ? p.vehicleSeat : -1,
-    jumpY: r2(p.jumpY),
+    jumpY: p.jumpY,
     ammo: p.ammo,
     weapon: p.weapon || "ranger",
     reserveAmmo: p.reserveAmmo,
     medkits: p.medkits || 0,
     healing: p.alive && p.healingUntil > Date.now(),
     healLeftMs: p.alive ? Math.max(0, (p.healingUntil || 0) - Date.now()) : 0,
+    reloadingUntil: p.reloadingUntil,
     reloading: p.reloadingUntil > Date.now(),
     shotId: p.shotId || 0,
     shooting: Date.now() - (p.lastShotAt || 0) < 150,
@@ -309,16 +240,8 @@ function flushRoomState(room) {
   if (!room.dirty) return;
   room.dirty = false;
   const data = JSON.stringify(snapshot(room));
-  for (const p of room.players.values()) {
-    if (p.ws.readyState !== 1) continue;
-    // Mạng của người này đang nghẽn: bỏ qua gói cũ thay vì xếp hàng thêm —
-    // gói sau (50 ms nữa) đã chứa trạng thái mới nhất, nên họ đỡ bị trễ dồn.
-    if (p.ws.bufferedAmount > 64 * 1024) {
-      room.dirty = true;
-      continue;
-    }
-    p.ws.send(data);
-  }
+  for (const p of room.players.values())
+    if (p.ws.readyState === 1) p.ws.send(data);
 }
 function broadcastRaw(room, payload) {
   const data = JSON.stringify(payload);
@@ -736,57 +659,8 @@ const MAX_HP = 100;
 // Sức chứa balo (đạn dự trữ và bịch máu). Không tính đạn đang lắp trong súng.
 const MAX_RESERVE_AMMO = 210;
 const MAX_MEDKITS = 5;
-// ---------------------------------------------------------------------------
-// LƯỚI KHÔNG GIAN (spatial grid) cho vật cản tĩnh
-// ---------------------------------------------------------------------------
-// Map có ~500 vật cản. Trước đây MỌI phép kiểm tra va chạm / độ cao / nước đều
-// quét hết cả 500 cái, và mỗi gói "move" gọi hàng chục phép như vậy. Chia map
-// thành ô 16 m; mỗi vật cản được ghi vào mọi ô mà nó (cộng biên an toàn) chạm
-// tới, nên một điểm chỉ cần xét vài vật cản trong đúng ô của nó.
-const GRID_CELL = 16;
-const GRID_MARGIN = 3; // > khoảng hở lớn nhất khi truy vấn (loot cách đường 2.5, nằm sấp 1.15, mái +0.6, cầu +1.2)
-const EMPTY_CELL = Object.freeze([]);
-function obstacleBoundRadius(o) {
-  const w = o.w || 1;
-  const length = o.length || w;
-  if (o.type === "lake") return Math.max(w, length);
-  // Đường được đo như hình con nhộng (đoạn thẳng + nửa bề rộng ở hai đầu).
-  if (o.type === "road" || o.type === "river") return (length + w) / 2;
-  return Math.hypot(w, length) * 0.6;
-}
-// Gắn hàm tra ô trực tiếp lên mảng obstacles (JSON.stringify bỏ qua thuộc tính
-// không phải chỉ số nên dữ liệu gửi cho client không đổi).
-function attachObstacleGrid(obstacles) {
-  const cells = new Map();
-  const key = (ix, iz) => (ix + 512) * 1024 + (iz + 512);
-  for (const o of obstacles) {
-    if (o.type === "hill") continue; // đồi xử lý riêng qua room.hills
-    const r = obstacleBoundRadius(o) + GRID_MARGIN;
-    const x0 = Math.floor((o.x - r) / GRID_CELL),
-      x1 = Math.floor((o.x + r) / GRID_CELL);
-    const z0 = Math.floor((o.z - r) / GRID_CELL),
-      z1 = Math.floor((o.z + r) / GRID_CELL);
-    for (let ix = x0; ix <= x1; ix++)
-      for (let iz = z0; iz <= z1; iz++) {
-        const k = key(ix, iz);
-        let cell = cells.get(k);
-        if (!cell) cells.set(k, (cell = []));
-        cell.push(o);
-      }
-  }
-  Object.defineProperty(obstacles, "cellAt", {
-    value: (x, z) =>
-      cells.get(key(Math.floor(x / GRID_CELL), Math.floor(z / GRID_CELL))) ||
-      EMPTY_CELL,
-    enumerable: false,
-  });
-  return obstacles;
-}
-// Vật cản có thể ảnh hưởng tới điểm (x, z); rơi về toàn bộ danh sách khi chưa có lưới.
-const nearObstacles = (obstacles, x, z) =>
-  obstacles.cellAt ? obstacles.cellAt(x, z) : obstacles;
 function isNearRoad(obstacles, x, z, clearance = 0) {
-  return nearObstacles(obstacles, x, z).some((road) => {
+  return obstacles.some((road) => {
     if (road.type !== "road") return false;
     const dx = (Math.sin(road.yaw || 0) * road.length) / 2;
     const dz = (Math.cos(road.yaw || 0) * road.length) / 2;
@@ -806,7 +680,7 @@ function isNearRoad(obstacles, x, z, clearance = 0) {
   });
 }
 function isOnBridge(obstacles, x, z, clearance = 0) {
-  return nearObstacles(obstacles, x, z).some((road) => {
+  return obstacles.some((road) => {
     if (road.type !== "road" || !road.bridge) return false;
     const dx = (Math.sin(road.yaw || 0) * road.length) / 2;
     const dz = (Math.cos(road.yaw || 0) * road.length) / 2;
@@ -900,7 +774,7 @@ function groundHeightAt(room, x, z) {
 // Walkable upper surfaces: the pitched roof and the safe crown of large rocks.
 function raisedSurfaceAt(room, x, z) {
   let best = null;
-  for (const o of nearObstacles(room.obstacles, x, z)) {
+  for (const o of room.obstacles) {
     // Chỉ nhà, chòi và đá mới có mặt "đứng được".
     if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
     if (o.type === "house" || o.type === "hut") {
@@ -955,7 +829,7 @@ function standingHeightAt(room, x, z, previousGroundY) {
     : terrain;
 }
 function waterAt(room, x, z) {
-  for (const water of nearObstacles(room.obstacles, x, z)) {
+  for (const water of room.obstacles) {
     if (water.type !== "river" && water.type !== "lake") continue;
     const dx = x - water.x;
     const dz = z - water.z;
@@ -1027,7 +901,7 @@ function blockedPosition(
   // trên mái/đá nào, không dùng điểm đến — tránh chặn nhầm khi đi xuống.
   const support =
     mover?.groundY > 0.45 ? raisedSurfaceAt(room, mover.x, mover.z) : null;
-  for (const o of nearObstacles(room.obstacles, x, z)) {
+  for (const o of room.obstacles) {
     if (o.solid === false) continue;
     if (o.type === "house" || o.type === "hut") {
       const moverIsOnRoof =
@@ -1456,12 +1330,6 @@ function tickVehicles(room, now) {
     const driver = [...room.players.values()].find(
       (p) => p.vehicleId === vehicle.id && p.vehicleSeat === 0,
     );
-    // Xe đỗ, không tài xế: không có gì để mô phỏng (trước đây vẫn quét va chạm
-    // 8 góc xe cho mọi xe đứng yên, 20 lần/giây).
-    if (!driver && Math.abs(vehicle.speed) < 0.01) {
-      vehicle.speed = 0;
-      continue;
-    }
     const controls = driver
       ? vehicle.controls
       : { throttle: 0, steer: 0, brake: false };
@@ -1614,16 +1482,13 @@ function tickRoom(room) {
 }
 wss.on("connection", (ws) => {
   let room;
-  const handleMessage = (raw) => {
+  ws.on("message", (raw) => {
     let m;
     try {
       m = JSON.parse(raw);
     } catch {
       return;
     }
-    if (!m || typeof m !== "object") return;
-    // Đo độ trễ khứ hồi: client dùng để dự đoán xe và hiển thị ping.
-    if (m.type === "ping") return send(ws, { type: "pong", t: m.t });
     if (m.type === "create" || m.type === "join") {
       if (room) return;
       const code = m.type === "create" ? roomCode() : String(m.code || "");
@@ -1633,7 +1498,7 @@ wss.on("connection", (ws) => {
       if (!room) {
         const mapId = m.mapId === "desert" ? "desert" : "forest";
         const mapSeed = Math.floor(Math.random() * 0xffffffff);
-        const obstacles = attachObstacleGrid(createObstacles(mapSeed, mapId));
+        const obstacles = createObstacles(mapSeed, mapId);
         room = {
           code,
           phase: "waiting",
@@ -1653,11 +1518,7 @@ wss.on("connection", (ws) => {
         // sảnh (có người vào/ra) chỉ đánh dấu "dirty" mà không ai thực sự gửi
         // đi, khiến chủ phòng và người mới vào bị lệch danh sách người chơi.
         room.timer = setInterval(() => {
-          try {
-            tickRoom(room);
-          } catch (error) {
-            console.error("tick error:", error);
-          }
+          tickRoom(room);
           flushRoomState(room);
         }, 50);
       }
@@ -2425,43 +2286,21 @@ wss.on("connection", (ws) => {
         ].filter((distance) => distance !== null);
         return distances.length ? Math.min(...distances) : null;
       };
-      // Mặt đất / đồi chắn đạn. Trước đây vòng dò 0.5 m này bị lặp lại cho
-      // TỪNG ngọn đồi (18 lần, mỗi bước lại quét toàn bộ vật cản để tìm cầu)
-      // → vài triệu phép tính cho MỖI viên đạn, bắn auto là server đứng hình.
-      // Dò đúng một lần cho kết quả y hệt; tia đã bay lên cao hơn mọi ngọn
-      // đồi thì không thể chạm đất nữa nên dừng sớm.
-      const terrainTop = (room.maxHillHeight ??= Math.max(
-        0.3,
-        ...(room.hills || []).map((hill) => hill.h),
-      ));
-      for (let distance = 0.5; distance < nearest; distance += 0.5) {
-        const y = origin.y + dir.y * distance;
-        if (dir.y >= 0 && y > terrainTop + 0.1) break;
-        const x = origin.x + dir.x * distance;
-        const z = origin.z + dir.z * distance;
-        if (y <= groundHeightAt(room, x, z) + 0.08) {
-          nearest = distance;
-          break;
-        }
-      }
-      // Lọc thô trên mặt phẳng XZ: vật cản cách xa đường đạn thì bỏ qua,
-      // không cần dựng các hộp va chạm chi tiết của nó.
-      const flatLength = Math.hypot(dir.x, dir.z);
-      const ux = flatLength > 1e-6 ? dir.x / flatLength : 0;
-      const uz = flatLength > 1e-6 ? dir.z / flatLength : 0;
-      const farOnRay = (o) => {
-        const r = obstacleBoundRadius(o) + 0.5;
-        const vx = o.x - origin.x,
-          vz = o.z - origin.z;
-        if (flatLength <= 1e-6) return Math.hypot(vx, vz) > r;
-        const along = vx * ux + vz * uz;
-        if (along < -r || along > nearest * flatLength + r) return true;
-        return Math.abs(vx * uz - vz * ux) > r;
-      };
       // A solid map box blocks shots to anything behind it.
       for (const o of room.obstacles) {
-        if (o.type === "hill" || o.solid === false) continue;
-        if (farOnRay(o)) continue;
+        if (o.type === "hill") {
+          for (let distance = 0.5; distance < nearest; distance += 0.5) {
+            const x = origin.x + dir.x * distance;
+            const y = origin.y + dir.y * distance;
+            const z = origin.z + dir.z * distance;
+            if (y <= groundHeightAt(room, x, z) + 0.08) {
+              nearest = distance;
+              break;
+            }
+          }
+          continue;
+        }
+        if (o.solid === false) continue;
         const baseY = obstacleBaseY(room, o);
         let wallDistance;
         if (o.type === "house" || o.type === "hut") {
@@ -2815,20 +2654,7 @@ wss.on("connection", (ws) => {
       broadcast(room);
       return;
     }
-  };
-  // Một gói tin lỗi của MỘT người chơi không được phép làm sập cả server
-  // (trước đây ném lỗi ở đây là mọi phòng đều mất kết nối).
-  ws.on("message", (raw) => {
-    ws.isAlive = true;
-    try {
-      handleMessage(raw);
-    } catch (error) {
-      console.error("message handler error:", error);
-    }
   });
-  ws.isAlive = true;
-  ws.on("pong", () => (ws.isAlive = true));
-  ws.on("error", (error) => console.warn("socket error:", error.message));
   ws.on("close", () => {
     if (room && ws.player) {
       room.players.delete(ws.player.id);
@@ -2839,18 +2665,6 @@ wss.on("connection", (ws) => {
     }
   });
 });
-// Kết nối "chết" (Wi-Fi rớt, đóng nắp laptop) không tự gửi close; nếu không dọn,
-// người chơi ma vẫn nằm trong phòng và server vẫn gửi state cho họ.
-setInterval(() => {
-  for (const ws of wss.clients) {
-    if (!ws.isAlive) {
-      ws.terminate();
-      continue;
-    }
-    ws.isAlive = false;
-    ws.ping();
-  }
-}, 15000);
 server.listen(PORT, () =>
   console.log(`Last Drop Arena listening on http://localhost:${PORT}`),
 );
