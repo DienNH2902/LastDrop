@@ -2325,7 +2325,7 @@ wss.on("connection", (ws) => {
           eyeY <= 20
             ? eyeY
             : (p.swimming ? p.swimY || 0 : p.groundY || 0) +
-              (p.prone ? 0.48 : p.crouching ? 1.05 : 1.65),
+              (p.prone ? 0.48 : p.crouching ? 1.34 : 1.8), // khớp độ cao mắt ở client
         z: freshPosition ? sz : p.z,
       };
       // Ray tests cover the full playable map (the previous 32-unit cap made

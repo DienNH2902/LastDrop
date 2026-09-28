@@ -183,7 +183,7 @@ let keys = {},
 
   lastVehicleControlAt = 0,
   lastVehicleControlKey = "",
-  cameraBaseY = 1.65,
+  cameraBaseY = 1.8,
   headBob = 0,
   snapshotServerTime = 0;
 // Slightly above the server's 120 ms cadence so timer/network jitter won't
@@ -284,8 +284,10 @@ let backpackOpen = false,
   packLimits = { ammo: 210, medkits: 5 }; // sức chứa balo, server gửi lại khi bắt đầu trận
 
 // Movement
-const STAND_HEIGHT = 1.65;
-const CROUCH_HEIGHT = 1.05;
+// Độ cao MẮT = tâm đầu nhân vật (HITBOX trong avatar.js: đứng 1.8, khom 1.34).
+// Trước đây 1.65 / 1.05 → camera ở ngang cằm-cổ, nhìn đối phương như từ ngực.
+const STAND_HEIGHT = 1.8;
+const CROUCH_HEIGHT = 1.34;
 const PRONE_HEIGHT = 0.48;
 
 const NORMAL_SPEED = 7;
@@ -3539,7 +3541,7 @@ function initWorld() {
   );
   camera.position.set(
     local.x,
-    1.65 + groundHeightAt(local.x, local.z),
+    STAND_HEIGHT + groundHeightAt(local.x, local.z),
     local.z,
   );
   camera.rotation.order = "YXZ";
@@ -6419,6 +6421,8 @@ function landNow() {
   local.x = spot.x;
   local.z = spot.z;
   local.groundY = standingHeightAt(local.x, local.z, local.groundY);
+  // Mắt đặt ngay đúng độ cao đứng tại chỗ tiếp đất (không trượt từ độ cao cũ ở sảnh).
+  cameraBaseY = local.groundY + STAND_HEIGHT;
   stopLoop("wind", 0.6);
   setMode("ground");
   grounded = true;
@@ -6493,11 +6497,11 @@ function updateAir(dt) {
   if (local.y <= ground) {
     local.y = ground;
     local.groundY = ground;
-    camera.position.set(local.x, local.y + 1.6, local.z);
+    camera.position.set(local.x, local.y + STAND_HEIGHT, local.z);
     landNow();
     return;
   }
-  camera.position.set(local.x, local.y + 1.6, local.z);
+  camera.position.set(local.x, local.y + STAND_HEIGHT, local.z);
   camera.rotation.z = chute
     ? Math.sin(performance.now() / 900) * 0.03 - r * 0.05
     : -r * 0.08;
