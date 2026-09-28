@@ -108,7 +108,7 @@ let keys = {},
   lastVehicleControlAt = 0;
 // Slightly above the server's 120 ms cadence so timer/network jitter won't
 // cause valid automatic shots to be rejected by the server.
-const FIRE_INTERVAL_MS = 130;
+const FIRE_INTERVAL_MS = 80;
 const SNIPER_FIRE_INTERVAL_MS = 2500;
 
 const STATE_ORDER = {
@@ -2258,9 +2258,9 @@ function initWorld() {
   const holoLens = new THREE.Mesh(
     new THREE.CircleGeometry(0.078, 20),
     new THREE.MeshBasicMaterial({
-      color: 0x82abb0,
+      color: 0x1d3134, // kính tối hơn để chấm đỏ nổi rõ trên mọi nền
       transparent: true,
-      opacity: 0.28,
+      opacity: 0.34,
       side: THREE.DoubleSide,
     }),
   );
@@ -3001,13 +3001,13 @@ function renderPlayers(state) {
         playSpatialGunshot(
           { x: p.x, y: muzzleY, z: p.z },
           0.78,
-          i * 0.12,
+          i * 0.06,
           p.weapon === "sniper" ? "sniper" : "rifle",
         );
         playSpatialGunshot(
           { x: p.x, y: muzzleY, z: p.z },
           0.78,
-          i * 0.12,
+          i * 0.06,
           p.weapon === "sniper" ? "sniper" : "rifle",
         );
       }
@@ -4389,16 +4389,16 @@ function onMouse(e) {
     scoped && local.weapon === "sniper"
       ? clamp(sniperZoomFov / baseFov, 0.12, 1)
       : 1;
-  local.yaw -=
-    e.movementX *
-    (Number($("#sensitivity").value) || 50) *
-    0.000055 *
-    sniperZoomScale;
+  // Cùng một độ nhạy + hệ số zoom cho cả 2 trục (trước đây trục dọc dùng hằng
+  // số cố định nên zoom không làm chậm chuột dọc). 0.000036 × 50 = 0.0018, nên
+  // ở độ nhạy mặc định cảm giác chuột dọc vẫn y như cũ khi không zoom.
+  const lookSens = (Number($("#sensitivity").value) || 50) * sniperZoomScale;
+  local.yaw -= e.movementX * lookSens * 0.000055;
   camera.rotation.order = "YXZ";
   camera.rotation.y = local.yaw + recoilYaw;
   camera.rotation.x = Math.max(
     -1.35,
-    Math.min(1.35, camera.rotation.x - e.movementY * 0.0018),
+    Math.min(1.35, camera.rotation.x - e.movementY * lookSens * 0.000036),
   );
 }
 function onFire(e) {
@@ -4485,6 +4485,9 @@ function findAimedPlayer(eye, dir) {
   return best;
 }
 
+let muzzleFlash = null,
+  muzzleFlashTimer = null;
+
 function shootOnce() {
   if (
     !triggerHeld ||
@@ -4517,10 +4520,16 @@ function shootOnce() {
     0,
     local.weapon === "sniper" ? "sniper" : "rifle",
   );
-  const flash = new THREE.PointLight(0xffc66b, 2, 3);
-  flash.position.set(0.28, -0.22, -1);
-  camera.add(flash);
-  setTimeout(() => camera.remove(flash), 45);
+  if (!muzzleFlash || muzzleFlash.parent !== camera) {
+    muzzleFlash = new THREE.PointLight(0xffc66b, 0, 3);
+    muzzleFlash.position.set(0.28, -0.22, -1);
+    camera.add(muzzleFlash);
+  }
+  muzzleFlash.intensity = 2;
+  clearTimeout(muzzleFlashTimer);
+  muzzleFlashTimer = setTimeout(() => {
+    if (muzzleFlash) muzzleFlash.intensity = 0;
+  }, 45);
   makeTracer();
   // Use Three.js's actual camera ray for both the visible tracer and server hit test.
   const aim = new THREE.Vector3();
@@ -4546,10 +4555,10 @@ function shootOnce() {
   // afterward so it moves the aim for the next shot instead of deflecting this one.
   const stanceScale = local.prone ? 0.35 : local.crouching ? 0.65 : 1;
   const recoilScale = (scoped ? 0.72 : 1) * stanceScale;
-  const pitchKick = (local.weapon === "sniper" ? 0.105 : 0.05) * recoilScale;
+  const pitchKick = (local.weapon === "sniper" ? 0.105 : 0.032) * recoilScale;
   const yawKick =
     (Math.random() - 0.5) *
-    (local.weapon === "sniper" ? 0.018 : 0.04) *
+    (local.weapon === "sniper" ? 0.018 : 0.026) *
     recoilScale;
   camera.rotation.x = clamp(camera.rotation.x + pitchKick, -1.35, 1.35);
   recoilPitch += pitchKick;

@@ -2159,7 +2159,7 @@ wss.on("connection", (ws) => {
         p.healingUntil > shotTime ||
         p.reloadingUntil > shotTime ||
         p.ammo <= 0 ||
-        shotTime - p.lastShotAt < (p.weapon === "sniper" ? 1500 : 120)
+        shotTime - p.lastShotAt < (p.weapon === "sniper" ? 1500 : 55)
       ) {
         broadcast(room);
         return;
