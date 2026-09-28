@@ -783,8 +783,7 @@ function syncPauseSettings() {
     if (input) syncSettingControl(key, input.value);
   }
   const fullscreen = document.getElementById("pauseFullscreen");
-  if (fullscreen)
-    fullscreen.value = document.fullscreenElement ? "on" : "off";
+  if (fullscreen) fullscreen.value = document.fullscreenElement ? "on" : "off";
 }
 function saveSettings() {
   localStorage.setItem(
@@ -818,18 +817,20 @@ for (const [key, binding] of Object.entries(settingsBindings)) {
       );
   }
 }
-document.getElementById("pauseFullscreen")?.addEventListener("change", async (event) => {
-  const enabled = event.currentTarget.value === "on";
-  try {
-    if (enabled && !document.fullscreenElement)
-      await document.documentElement.requestFullscreen?.();
-    else if (!enabled && document.fullscreenElement)
-      await document.exitFullscreen?.();
-  } catch {
-    // The browser may deny fullscreen; keep the selector in sync with reality.
-  }
-  syncPauseSettings();
-});
+document
+  .getElementById("pauseFullscreen")
+  ?.addEventListener("change", async (event) => {
+    const enabled = event.currentTarget.value === "on";
+    try {
+      if (enabled && !document.fullscreenElement)
+        await document.documentElement.requestFullscreen?.();
+      else if (!enabled && document.fullscreenElement)
+        await document.exitFullscreen?.();
+    } catch {
+      // The browser may deny fullscreen; keep the selector in sync with reality.
+    }
+    syncPauseSettings();
+  });
 document.addEventListener("fullscreenchange", () => {
   const fullscreen = document.getElementById("pauseFullscreen");
   if (fullscreen) fullscreen.value = document.fullscreenElement ? "on" : "off";
@@ -2593,8 +2594,8 @@ function renderPlayers(state) {
       event.cause === "collision"
         ? `${event.killerName} đã tông ${event.victimName} không thương tiếc`
         : event.killerName === "Nổ xe"
-        ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn`
-        : `${event.killerName} đã chịch ${event.victimName} đến chết`;
+          ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn`
+          : `${event.killerName} đã chịch ${event.victimName} đến chết`;
     $("#killFeed")?.prepend(row);
     const timer = setTimeout(() => row.remove(), 20000);
     killFeedTimers.push(timer);
@@ -2603,8 +2604,8 @@ function renderPlayers(state) {
         event.cause === "collision"
           ? `${event.killerName} đã lỡ tông bạn.`
           : event.killerName === "Nổ xe"
-          ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn.`
-          : `Bạn đã bị chịch đến chết bởi ${event.killerName}.`;
+            ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn.`
+            : `Bạn đã bị chịch đến chết bởi ${event.killerName}.`;
       $("#resultDetail").textContent = localEliminationMessage;
     }
     if (event.killerId === playerId && event.killerName !== "Nổ xe") {
@@ -2678,6 +2679,7 @@ function renderPlayers(state) {
       if (local.reloading && !wasLocalReloading) {
         local.reloadStartedAt = performance.now();
         startReloadSounds(null);
+        if (scoped) setScope(false); // đang nạp đạn thì không thể ngắm bắn
       }
       if (!local.reloading) local.reloadStartedAt = 0;
       updateAmmoHud();
@@ -3620,7 +3622,11 @@ function showLootToast(text) {
   clearTimeout(lootToastTimer);
   lootToastTimer = setTimeout(() => el.classList.add("hidden"), 10000);
 }
-// Súng hạ/gập khi hồi máu và có động tác tháo lắp băng đạn khi nạp.
+// Súng hạ/gập khi hồi máu; khi nạp đạn súng được kéo vào giữa và lại gần màn
+// hình (không còn nép sát mép phải như trước), rung/lắc liên tục suốt quá
+// trình, kèm 3 cú giật rõ rệt (rút băng đạn / lắp băng đạn mới / lên đạn) —
+// và băng đạn cũ rơi hẳn ra ngoài tầm nhìn rồi biến mất trước khi băng đạn
+// mới trượt lên lắp vào, thay vì chỉ nhấp nhô nhẹ tại chỗ như trước.
 function updateGunPose(dt) {
   if (!gun) return;
   if (deathView) {
@@ -3639,20 +3645,58 @@ function updateGunPose(dt) {
     local.reloading && local.reloadStartedAt
       ? clamp((performance.now() - local.reloadStartedAt) / 1800, 0, 1)
       : 0;
-  const reloadDip = local.reloading ? Math.sin(reloadProgress * Math.PI) : 0;
+  const reloading = local.reloading && reloadProgress < 1;
+  const reloadBlend = reloading ? Math.sin(reloadProgress * Math.PI) : 0;
+  const phase = (start, end) =>
+    clamp((reloadProgress - start) / (end - start), 0, 1);
   gun.rotation.set(0.15 * gunBusy, 1.35 * gunBusy, -0.12 * gunBusy);
   gun.position.set(
     0.3 * gunBusy - 0.28 * gunAimBlend,
     -0.14 * gunBusy + 0.075 * gunAimBlend,
     0.05 * gunBusy,
   );
+  if (reloading) {
+    // Kéo súng vào giữa và lại gần camera để thấy rõ thao tác nạp đạn.
+    gun.position.x -= 0.16 * reloadBlend;
+    gun.position.y -= 0.2 * reloadBlend;
+    gun.position.z += 0.09 * reloadBlend;
+    // Rung/lắc liên tục trong suốt quá trình nạp đạn (2 tần số chồng lên
+    // nhau cho cảm giác lộn xộn tự nhiên hơn một dao động đơn thuần).
+    const wobble = reloadBlend * 0.03;
+    gun.rotation.x +=
+      Math.sin(reloadProgress * 26) * wobble +
+      Math.sin(reloadProgress * 71) * wobble * 0.4;
+    gun.rotation.z += Math.cos(reloadProgress * 19) * wobble * 0.7;
+    // 3 cú giật rõ rệt: rút băng đạn cũ, lắp băng đạn mới vào, rồi lên đạn.
+    const grabKick = Math.sin(phase(0.03, 0.14) * Math.PI);
+    const seatKick = Math.sin(phase(0.56, 0.68) * Math.PI);
+    const chargeKick = Math.sin(phase(0.86, 0.97) * Math.PI);
+    gun.rotation.x += grabKick * 0.16 + seatKick * 0.1 - chargeKick * 0.22;
+    gun.rotation.y += grabKick * 0.05 - seatKick * 0.04;
+    gun.position.z += grabKick * 0.03 + seatKick * 0.05 - chargeKick * 0.07;
+  }
   const magazine = gun.userData.magazine;
   if (magazine) {
-    const down = local.reloading
-      ? clamp((reloadProgress - 0.12) / 0.2, 0, 1) *
-        (1 - clamp((reloadProgress - 0.56) / 0.22, 0, 1))
-      : 0;
-    magazine.position.set(0.28 - 0.04 * down, -0.36 - 0.34 * down, -0.55);
+    if (reloading) {
+      const eject = phase(0.06, 0.32); // rút băng đạn cũ ra
+      const insert = phase(0.5, 0.66); // lắp băng đạn mới vào
+      const settle = phase(0.66, 0.8); // ổn định lại sau khi lắp
+      const overshoot = Math.sin(settle * Math.PI) * 0.05;
+      // outFactor: băng đạn đang "ở ngoài" gắn được bao nhiêu (0 = đã lắp
+      // hẳn, 1 = đã rút hẳn ra) — đảm bảo luôn quay lại đúng vị trí gốc.
+      const outFactor = eject * (1 - insert);
+      magazine.visible = !(reloadProgress > 0.32 && reloadProgress < 0.5);
+      magazine.position.set(
+        0.28 - 0.05 * outFactor,
+        -0.36 - 0.62 * outFactor + overshoot,
+        -0.55 - 0.08 * outFactor,
+      );
+      magazine.rotation.set(outFactor * 0.55, 0, outFactor * 0.9);
+    } else {
+      magazine.visible = true;
+      magazine.position.set(0.28, -0.36, -0.55);
+      magazine.rotation.set(0, 0, 0);
+    }
   }
 }
 // Gọi mỗi frame: xoay/nhấp nhô vật phẩm, gợi ý phím F, thanh hồi máu.
