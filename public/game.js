@@ -1132,7 +1132,7 @@ function isOnBridgeAt(x, z, clearance = 0) {
 function raisedSurfaceAt(x, z) {
   let best = null;
   for (const o of mapObstacles) {
-    const base = groundHeightAt(o.x, o.z);
+    if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
     if (o.type === "house" || o.type === "hut") {
       const dx = x - o.x,
         dz = z - o.z;
@@ -1147,6 +1147,7 @@ function raisedSurfaceAt(x, z) {
       const halfX = Math.max(o.w * 0.53, o.w / 2 + 0.6);
       const halfZ = o.w / 2 + 0.6;
       if (Math.abs(lx) > halfX || Math.abs(lz) > halfZ) continue;
+      const base = groundHeightAt(o.x, o.z);
       const wallH = o.h * 0.72;
       const height =
         base +
@@ -1164,6 +1165,7 @@ function raisedSurfaceAt(x, z) {
       // (o.w * 0.46) của chính khối đá đó, để tránh dải kẹt ở mép đá.
       const topRadius = o.w * 0.46 + 0.6;
       if (dist > topRadius) continue;
+      const base = groundHeightAt(o.x, o.z);
       const nx = dx / (o.w * 0.48),
         nz = dz / (o.w * 0.4);
       const r2 = Math.min(1, nx * nx + nz * nz);

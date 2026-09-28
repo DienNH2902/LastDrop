@@ -689,6 +689,19 @@ function createLoot(room) {
   return items;
 }
 const magazineSize = (player) => (player.weapon === "sniper" ? 5 : 30);
+
+// Vật thể trên map đứng yên nên độ cao nền dưới chân chúng không bao giờ đổi:
+// tính 1 lần rồi nhớ lại.
+const obstacleBaseCache = new WeakMap();
+function obstacleBaseY(room, o) {
+  let base = obstacleBaseCache.get(o);
+  if (base === undefined) {
+    base = groundHeightAt(room, o.x, o.z);
+    obstacleBaseCache.set(o, base);
+  }
+  return base;
+}
+
 function groundHeightAt(room, x, z) {
   let height = 0;
   for (const hill of room.hills || room.obstacles) {
@@ -708,7 +721,8 @@ function groundHeightAt(room, x, z) {
 function raisedSurfaceAt(room, x, z) {
   let best = null;
   for (const o of room.obstacles) {
-    const base = groundHeightAt(room, o.x, o.z);
+    // Chỉ nhà, chòi và đá mới có mặt "đứng được".
+    if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
     if (o.type === "house" || o.type === "hut") {
       const dx = x - o.x,
         dz = z - o.z;
@@ -716,11 +730,10 @@ function raisedSurfaceAt(room, x, z) {
         s = Math.sin(o.yaw || 0);
       const lx = c * dx - s * dz,
         lz = s * dx + c * dz;
-      // Vùng "trên mái" phải rộng bằng hoặc hơn vùng va chạm của tường nhà
-      // (blockedByBuilding dùng half + obstacleRadius) để tránh dải kẹt ở mép mái.
       const halfX = Math.max(o.w * 0.53, o.w / 2 + 0.6);
       const halfZ = o.w / 2 + 0.6;
       if (Math.abs(lx) > halfX || Math.abs(lz) > halfZ) continue;
+      const base = obstacleBaseY(room, o);
       const wallH = o.h * 0.72;
       const height =
         base +
@@ -736,6 +749,7 @@ function raisedSurfaceAt(room, x, z) {
       const dist = Math.hypot(dx, dz);
       const topRadius = o.w * 0.46 + 0.6;
       if (dist > topRadius) continue;
+      const base = obstacleBaseY(room, o);
       const nx = dx / (o.w * 0.48),
         nz = dz / (o.w * 0.4);
       const r2 = Math.min(1, nx * nx + nz * nz);
@@ -1335,7 +1349,8 @@ function tickVehicles(room, now) {
           killByVehicle(room, victim, vehicle, now, "collision");
         } else {
           victim.hp = Math.max(0, victim.hp - 30);
-          if (victim.hp <= 0) killByVehicle(room, victim, vehicle, now, "collision");
+          if (victim.hp <= 0)
+            killByVehicle(room, victim, vehicle, now, "collision");
           else {
             send(victim.ws, { type: "toast", text: "VA CHẠM XE · -30 HP" });
             changed = true;
@@ -2168,7 +2183,7 @@ wss.on("connection", (ws) => {
         return t >= 0 && t <= nearest ? t : null;
       };
       const rayBuilding = (o) => {
-        const baseY = groundHeightAt(room, o.x, o.z);
+        const baseY = obstacleBaseY(room, o);
         const half = o.w / 2;
         const wallHeight = o.h * 0.72;
         const thickness = 0.16;
@@ -2230,7 +2245,7 @@ wss.on("connection", (ws) => {
           continue;
         }
         if (o.solid === false) continue;
-        const baseY = groundHeightAt(room, o.x, o.z);
+        const baseY = obstacleBaseY(room, o);
         let wallDistance;
         if (o.type === "house" || o.type === "hut") {
           wallDistance = rayBuilding(o);
