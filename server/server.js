@@ -331,7 +331,8 @@ const snapshot = (room) => ({
     vehicleSeat: Number.isInteger(p.vehicleSeat) ? p.vehicleSeat : -1,
     jumpY: r2(p.jumpY),
     ammo: p.ammo,
-    weapon: p.weapon || "ranger",
+    weapon: p.weapon || "none",
+    punchId: p.punchId || 0,
     reserveAmmo: p.reserveAmmo,
     medkits: p.medkits || 0,
     healing: p.alive && p.healingUntil > Date.now(),
@@ -698,17 +699,32 @@ function createLoot(room) {
       made++;
     }
   };
+  // Súng đặt trước (luôn đủ chỗ), rồi tới đạn và bịch máu. Mọi người tiếp
+  // đất tay không → phải vào nhà tìm súng; mỗi khẩu nằm ngang, hướng ngẫu nhiên.
+  for (const [weapon, count] of Object.entries(WEAPON_SPAWNS)) {
+    const before = items.length;
+    place("weapon", count, 1);
+    for (const item of items.slice(before)) {
+      item.weapon = weapon;
+      item.ammo = WEAPON_STATS[weapon].mag;
+      item.yaw = Math.round(Math.random() * 628) / 100;
+    }
+  }
   place("ammo", AMMO_BOX_COUNT, AMMO_PER_BOX);
   place("medkit", MEDKIT_COUNT, 1);
-  // Two sniper rifles spawn in two different houses each round.
-  place("weapon", 2, 1);
-  for (const item of items.filter((entry) => entry.type === "weapon")) {
-    item.weapon = "sniper";
-    item.ammo = 5;
-  }
   return items;
 }
-const magazineSize = (player) => (player.weapon === "sniper" ? 5 : 30);
+// Thông số vũ khí (server là nơi quyết định). "none" = tay không.
+const WEAPON_STATS = {
+  none: { name: "TAY KHÔNG", mag: 0, cooldown: 450, head: 50, body: 5, range: 1.9 },
+  ranger: { name: "AUG", mag: 30, cooldown: 55, head: 50, body: 10, range: 140 },
+  beryl: { name: "BERYL M762", mag: 30, cooldown: 65, head: 60, body: 13, range: 140 },
+  sniper: { name: "KAR98K", mag: 5, cooldown: 1500, head: 100, body: 60, range: 140 },
+};
+// Số súng rải trong các khu nhà mỗi trận (sniper tăng từ 2 lên 7 cho dễ tìm hơn).
+const WEAPON_SPAWNS = { ranger: 14, beryl: 10, sniper: 7 };
+const weaponStats = (player) => WEAPON_STATS[player.weapon] || WEAPON_STATS.none;
+const magazineSize = (player) => weaponStats(player).mag;
 
 // Vật thể trên map đứng yên nên độ cao nền dưới chân chúng không bao giờ đổi:
 // tính 1 lần rồi nhớ lại.
@@ -1128,6 +1144,16 @@ function tickZone(room, now) {
     }
   }
   if (changed) broadcast(room);
+}
+// Sự kiện âm thanh loot (nhặt / thả) — client phát tiếng theo loại vật phẩm.
+function lootSfx(room, p, sound, x = p.x, z = p.z) {
+  broadcastRaw(room, {
+    type: "lootSfx",
+    sound,
+    by: p.id,
+    x: Math.round(x * 100) / 100,
+    z: Math.round(z * 100) / 100,
+  });
 }
 function startPlane(room) {
   room.phase = "plane";
@@ -1549,9 +1575,9 @@ wss.on("connection", (ws) => {
         vehicleSeat: -1,
         jumpY: 0,
         lastMoveAt: Date.now(),
-        ammo: 30,
-        weapon: "ranger",
-        reserveAmmo: 90,
+        ammo: 0,
+        weapon: "none", // tiếp đất tay không, phải tự tìm súng
+        reserveAmmo: 0, // balo rỗng: đạn phải tự nhặt trong nhà
         medkits: 0,
         healingUntil: 0,
         reloadingUntil: 0,
@@ -1870,7 +1896,14 @@ wss.on("connection", (ws) => {
       if (!Number.isFinite(dx)) dx = 0;
       if (!Number.isFinite(dz)) dz = 0;
       const distance = Math.hypot(dx, dz);
-      const maxDistance = moveSpeed * elapsed + 0.15;
+      // "Ngân sách" quãng đường tích luỹ theo thời gian thực (tối đa ~0.35 s
+      // chạy). Wi-Fi hay dồn gói: 2 gói "move" tới cách nhau vài ms — tính riêng
+      // từng gói thì gói sau bị cắt cụt, vị trí server tụt sau client (người
+      // khác thấy trễ, núp rồi vẫn trúng đạn). Ngân sách vẫn chặn chạy nhanh bất thường.
+      const budgetCap = moveSpeed * 0.35 + 0.15;
+      p.moveBudget = Math.min(budgetCap, (p.moveBudget ?? budgetCap) + moveSpeed * elapsed);
+      const maxDistance = Math.max(p.moveBudget, moveSpeed * elapsed) + 0.15;
+      p.moveBudget = Math.max(0, p.moveBudget - Math.min(distance, maxDistance));
       if (distance > maxDistance && distance > 0) {
         dx *= maxDistance / distance;
         dz *= maxDistance / distance;
@@ -1952,6 +1985,7 @@ wss.on("connection", (ws) => {
           room.loot = room.loot.filter((item) => item !== best);
           broadcastRaw(room, { type: "lootRemoved", id: best.id });
         }
+        lootSfx(room, p, "pickup-ammo", best.x, best.z);
         send(ws, {
           type: "toast",
           text:
@@ -1959,18 +1993,24 @@ wss.on("connection", (ws) => {
             (p.reserveAmmo >= MAX_RESERVE_AMMO ? " · BALO ĐẦY ĐẠN" : ""),
         });
       } else if (best.type === "weapon") {
-        const oldWeapon = p.weapon || "ranger";
-        const dropped = {
-          id: room.nextLootId++,
-          type: "weapon",
-          weapon: oldWeapon,
-          x: Math.round(p.x * 100) / 100,
-          z: Math.round(p.z * 100) / 100,
-          amount: 1,
-          ammo: p.ammo,
-        };
-        room.loot.push(dropped);
-        p.weapon = best.weapon === "sniper" ? "sniper" : "ranger";
+        const oldWeapon = p.weapon || "none";
+        // Đang tay không thì chỉ nhặt, không có gì để thả.
+        const dropped =
+          oldWeapon === "none"
+            ? null
+            : {
+                id: room.nextLootId++,
+                type: "weapon",
+                weapon: oldWeapon,
+                x: Math.round(p.x * 100) / 100,
+                z: Math.round(p.z * 100) / 100,
+                yaw: Math.round(Math.random() * 628) / 100,
+                amount: 1,
+                ammo: p.ammo,
+              };
+        if (dropped) room.loot.push(dropped);
+        p.weapon =
+          WEAPON_STATS[best.weapon] && best.weapon !== "none" ? best.weapon : "ranger";
         const storedMagazineAmmo = Number(best.ammo);
         p.ammo = Math.max(
           0,
@@ -1983,10 +2023,14 @@ wss.on("connection", (ws) => {
         );
         room.loot = room.loot.filter((item) => item !== best);
         broadcastRaw(room, { type: "lootRemoved", id: best.id });
-        broadcastRaw(room, { type: "lootAdded", item: dropped });
+        if (dropped) {
+          broadcastRaw(room, { type: "lootAdded", item: dropped });
+          lootSfx(room, p, "drop-" + dropped.weapon);
+        }
+        lootSfx(room, p, "pickup-" + p.weapon, best.x, best.z);
         send(ws, {
           type: "toast",
-          text: `ĐÃ ĐỔI SANG ${p.weapon === "sniper" ? "KAR98K" : "AUG"}`,
+          text: `${dropped ? "ĐÃ ĐỔI SANG" : "ĐÃ NHẶT"} ${weaponStats(p).name}`,
         });
       } else {
         if ((p.medkits || 0) >= MAX_MEDKITS) {
@@ -1998,6 +2042,7 @@ wss.on("connection", (ws) => {
         p.medkits = (p.medkits || 0) + best.amount;
         room.loot = room.loot.filter((item) => item !== best);
         broadcastRaw(room, { type: "lootRemoved", id: best.id });
+        lootSfx(room, p, "pickup-medkit", best.x, best.z);
         send(ws, {
           type: "toast",
           text:
@@ -2038,12 +2083,42 @@ wss.on("connection", (ws) => {
       if (type === "ammo") p.reserveAmmo += amount;
       else p.medkits = (p.medkits || 0) + amount;
       crate.contents[type] -= amount;
+      lootSfx(room, p, "pickup-" + type, crate.x, crate.z);
       send(ws, {
         type: "toast",
         text: `ĐÃ LẤY ${amount} ${type === "ammo" ? "VIÊN ĐẠN" : "BỊCH MÁU"}`,
       });
       if (!crate.contents.ammo && !crate.contents.medkit)
         room.crates = room.crates.filter((item) => item !== crate);
+      broadcast(room);
+      return;
+    }
+    if (m.type === "dropWeapon") {
+      if (!canFight(room, p) || p.vehicleId || p.swimming) return;
+      if (!p.weapon || p.weapon === "none")
+        return send(ws, { type: "toast", text: "BẠN ĐANG TAY KHÔNG" });
+      const now = Date.now();
+      if (p.reloadingUntil > now)
+        return send(ws, { type: "toast", text: "CHỜ NẠP ĐẠN XONG ĐỂ BỎ SÚNG" });
+      if (p.healingUntil > now) return;
+      const dropped = {
+        id: room.nextLootId++,
+        type: "weapon",
+        weapon: p.weapon,
+        x: Math.round(p.x * 100) / 100,
+        z: Math.round(p.z * 100) / 100,
+        yaw: Math.round(Math.random() * 628) / 100,
+        amount: 1,
+        ammo: p.ammo,
+      };
+      room.loot ||= [];
+      room.loot.push(dropped);
+      const name = weaponStats(p).name;
+      p.weapon = "none";
+      p.ammo = 0;
+      broadcastRaw(room, { type: "lootAdded", item: dropped });
+      lootSfx(room, p, "drop-" + dropped.weapon);
+      send(ws, { type: "toast", text: `ĐÃ BỎ ${name} · TAY KHÔNG` });
       broadcast(room);
       return;
     }
@@ -2075,6 +2150,7 @@ wss.on("connection", (ws) => {
       room.loot ||= [];
       room.loot.push(dropped);
       broadcastRaw(room, { type: "lootAdded", item: dropped });
+      lootSfx(room, p, "drop-" + type);
       send(ws, {
         type: "toast",
         text: `ĐÃ THẢ ${requested} ${type === "ammo" ? "VIÊN ĐẠN" : "BỊCH MÁU"}`,
@@ -2118,6 +2194,8 @@ wss.on("connection", (ws) => {
     }
     if (m.type === "reload" && canFight(room, p) && !p.vehicleId) {
       const now = Date.now();
+      if (p.weapon === "none" || !p.weapon)
+        return send(ws, { type: "toast", text: "CHƯA CÓ SÚNG · HÃY VÀO NHÀ TÌM SÚNG" });
       if (
         p.healingUntil > now ||
         p.reloadingUntil > now ||
@@ -2150,18 +2228,24 @@ wss.on("connection", (ws) => {
       const length = Math.hypot(aim.x, aim.y, aim.z);
       if (length < 0.99 || length > 1.01) return;
       const shotTime = Date.now();
+      const stats = weaponStats(p);
+      const melee = stats === WEAPON_STATS.none;
       if (
         p.healingUntil > shotTime ||
         p.reloadingUntil > shotTime ||
-        p.ammo <= 0 ||
-        shotTime - p.lastShotAt < (p.weapon === "sniper" ? 1500 : 55)
+        (!melee && p.ammo <= 0) ||
+        shotTime - p.lastShotAt < stats.cooldown
       ) {
         broadcast(room);
         return;
       }
       p.lastShotAt = shotTime;
-      p.shotId = (p.shotId || 0) + 1;
-      p.ammo--;
+      // Đấm: tăng punchId (client phát hoạt ảnh + tiếng đấm), không tốn đạn.
+      if (melee) p.punchId = (p.punchId || 0) + 1;
+      else {
+        p.shotId = (p.shotId || 0) + 1;
+        p.ammo--;
+      }
       const dir = { x: aim.x / length, y: aim.y / length, z: aim.z / length };
       // Position packets are sent at 20 Hz. Accept the current client position
       // only within a small movement tolerance to avoid stale shooter origins.
@@ -2188,7 +2272,7 @@ wss.on("connection", (ws) => {
       let target = null,
         targetPart = null,
         struckVehicle = null,
-        nearest = 140;
+        nearest = stats.range; // đấm chỉ với tới ~1.9 m
       const rayBox = (center, yaw, half) => {
         const c = Math.cos(yaw),
           s = Math.sin(yaw);
@@ -2244,16 +2328,39 @@ wss.on("connection", (ws) => {
           y: baseY + y,
           z: o.z - Math.sin(o.yaw || 0) * lx + Math.cos(o.yaw || 0) * lz,
         });
+        // Tường hông có CỬA SỔ trống (khớp đúng khung vẽ ở client: bệ cửa
+        // 34% → đỉnh cửa 73% chiều cao tường, rộng ±0.72 m): đạn bay xuyên qua
+        // ô cửa, chỉ phần tường quanh nó chặn đạn. Cửa ra vào có lanh tô phía trên.
+        const sill = wallHeight * 0.34;
+        const windowTop = wallHeight * 0.73;
+        const windowHalf = 0.72;
+        const doorH = Math.min(2.25, wallHeight * 0.78);
+        const sideWalls = [];
+        for (const side of [-1, 1]) {
+          const lx = side * (half - thickness / 2);
+          const hx = thickness / 2;
+          sideWalls.push(
+            rayBox(centerAt(lx, 0, sill / 2), o.yaw || 0, { x: hx, y: sill / 2, z: half }),
+            rayBox(
+              centerAt(lx, 0, (wallHeight + windowTop) / 2),
+              o.yaw || 0,
+              { x: hx, y: (wallHeight - windowTop) / 2, z: half },
+            ),
+            ...[-1, 1].map((end) =>
+              rayBox(
+                centerAt(lx, (end * (half + windowHalf)) / 2, (sill + windowTop) / 2),
+                o.yaw || 0,
+                { x: hx, y: (windowTop - sill) / 2, z: (half - windowHalf) / 2 },
+              ),
+            ),
+          );
+        }
         const distances = [
+          ...sideWalls,
           rayBox(
-            centerAt(-half + thickness / 2, 0, wallHeight / 2),
+            centerAt(0, -half + thickness / 2, (wallHeight + doorH) / 2),
             o.yaw || 0,
-            { x: thickness / 2, y: wallHeight / 2, z: half },
-          ),
-          rayBox(
-            centerAt(half - thickness / 2, 0, wallHeight / 2),
-            o.yaw || 0,
-            { x: thickness / 2, y: wallHeight / 2, z: half },
+            { x: doorHalf, y: (wallHeight - doorH) / 2, z: thickness / 2 },
           ),
           rayBox(
             centerAt(0, half - thickness / 2, wallHeight / 2),
@@ -2383,7 +2490,7 @@ wss.on("connection", (ws) => {
       }
       // Car collider consists of the visible hood, trunk, side rails and wheels;
       // the open seat area remains hittable so occupants are never made invulnerable.
-      for (const vehicle of room.vehicles || []) {
+      for (const vehicle of melee ? [] : room.vehicles || []) {
         if (vehicle.destroyed) continue;
         const baseY = groundHeightAt(room, vehicle.x, vehicle.z);
         const parts = [
@@ -2489,17 +2596,7 @@ wss.on("connection", (ws) => {
             z: origin.z + dir.z * nearest,
           },
         };
-        target.hp = Math.max(
-          0,
-          target.hp -
-            (p.weapon === "sniper"
-              ? targetPart === "head"
-                ? 100
-                : 60
-              : targetPart === "head"
-                ? 70
-                : 10),
-        );
+        target.hp = Math.max(0, target.hp - (targetPart === "head" ? stats.head : stats.body));
         if (!target.hp) {
           target.alive = false;
           detachFromVehicle(room, target);
@@ -2516,7 +2613,7 @@ wss.on("connection", (ws) => {
             killerId: p.id,
             killerName: p.name,
             // Cho màn Chiến tích: hạ bằng súng gì, headshot, khoảng cách.
-            weapon: p.weapon === "sniper" ? "KAR98K" : "AUG",
+            weapon: stats.name,
             headshot: targetPart === "head",
             distance: Math.round(nearest),
           };

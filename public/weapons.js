@@ -28,6 +28,123 @@ const tubeZ = (r1, r2, len, seg = 12) =>
 const box = (x, y, z) => new THREE.BoxGeometry(x, y, z);
 
 // ---------------------------------------------------------------------------
+// Beryl M762 (kiểu AK): thân thép đen, ốp tay có ray, băng đạn cong, loa hãm
+// nòng, báng gập dạng khung; ngắm bằng thước ngắm sau + đầu ruồi (không ống kính).
+// ---------------------------------------------------------------------------
+export function buildBeryl() {
+  const g = new THREE.Group();
+  const black = mat("#1b1c1a");
+  const polymer = mat("#272825");
+  const steel = mat("#343632");
+  const tan = mat("#5c5143"); // ốp tay nhựa màu cát đặc trưng bản PUBG
+  // Hộp khóa nòng + nắp che bụi bo tròn phía trên.
+  part(g, box(0.058, 0.1, 0.36), black, 0, -0.02, 0.02);
+  part(g, tubeZ(0.029, 0.029, 0.32, 12), steel, 0, 0.03, 0.03);
+  part(g, box(0.012, 0.018, 0.05), steel, 0.035, 0.005, -0.06); // tay kéo khóa nòng
+  // Thước ngắm cơ khí (thước sau + đầu ruồi) vẫn giữ, nằm thấp dưới kính ngắm.
+  const ironY = 0.075;
+  part(g, box(0.03, ironY - 0.045, 0.03), black, 0, (ironY + 0.045) / 2 - 0.01, -0.12);
+  part(g, box(0.034, 0.012, 0.02), black, 0, ironY - 0.004, -0.12);
+  for (const side of [-1, 1]) part(g, box(0.008, 0.028, 0.012), black, side * 0.016, ironY + 0.004, -0.57);
+  part(g, box(0.004, 0.022, 0.006), black, 0, ironY - 0.004, -0.57); // đầu ruồi
+  part(g, box(0.03, 0.05, 0.03), black, 0, 0.03, -0.57); // đế đầu ruồi
+  // Kính ngắm toàn ảnh (holographic) trên ray nắp che bụi — khác hẳn ống tròn
+  // của AUG: thân hộp vuông, cửa sổ chữ nhật có mái che, lưới ngắm vòng tròn đỏ
+  // + chấm giữa. Đường ngắm (tâm cửa sổ) ở độ cao sightY.
+  const sightY = 0.132;
+  const sightZ = -0.01;
+  part(g, box(0.026, 0.01, 0.2), black, 0, 0.063, -0.01); // ray Picatinny
+  for (let i = 0; i < 7; i++) part(g, box(0.03, 0.004, 0.008), steel, 0, 0.069, -0.1 + i * 0.03);
+  const winW = 0.058,
+    winH = 0.044,
+    depth = 0.07,
+    frame = 0.006;
+  const bodyTop = sightY - winH / 2;
+  part(g, box(winW + 2 * frame, bodyTop - 0.068, depth + 0.02), polymer, 0, (bodyTop + 0.068) / 2, sightZ); // thân pin/đèn
+  part(g, box(0.014, 0.012, 0.03), steel, (winW + 2 * frame) / 2 + 0.005, bodyTop - 0.012, sightZ); // núm độ sáng
+  for (const side of [-1, 1])
+    part(g, box(frame, winH, depth), black, side * (winW + frame) / 2, sightY, sightZ); // hai vách
+  part(g, box(winW + 2 * frame, frame, depth + 0.012), black, 0, sightY + (winH + frame) / 2, sightZ - 0.004); // mái che
+  // Viền cửa sổ trước (mỏng) để thấy rõ khung chữ nhật khi ngắm.
+  part(g, box(winW + 2 * frame, 0.004, 0.006), black, 0, bodyTop + 0.002, sightZ - depth / 2);
+  const glass = part(
+    g,
+    new THREE.PlaneGeometry(winW, winH),
+    new THREE.MeshBasicMaterial({
+      color: 0x2a4a55,
+      transparent: true,
+      opacity: 0.16,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+    0,
+    sightY,
+    sightZ - depth / 2 + 0.004,
+  );
+  glass.renderOrder = 2;
+  glass.userData.redDot = true;
+  // Lưới ngắm: vòng tròn 65 MOA + chấm giữa, vẽ bằng canvas, hoà màu cộng.
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const ctx = c.getContext("2d");
+  ctx.shadowColor = "rgba(255,40,30,0.9)";
+  ctx.shadowBlur = 6;
+  ctx.strokeStyle = "rgba(255,70,50,0.95)";
+  ctx.lineWidth = 3.2;
+  ctx.beginPath();
+  ctx.arc(64, 64, 44, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,90,70,1)";
+  ctx.beginPath();
+  ctx.arc(64, 64, 4.2, 0, Math.PI * 2);
+  ctx.fill();
+  const reticleTex = new THREE.CanvasTexture(c);
+  reticleTex.colorSpace = THREE.SRGBColorSpace;
+  const reticle = part(
+    g,
+    new THREE.PlaneGeometry(0.024, 0.024),
+    new THREE.MeshBasicMaterial({
+      map: reticleTex,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    }),
+    0,
+    sightY,
+    sightZ - depth / 2 + 0.002,
+  );
+  reticle.renderOrder = 3;
+  reticle.userData.redDot = true;
+  // Ốp tay có ray + ống trích khí.
+  part(g, box(0.064, 0.074, 0.27), tan, 0, -0.012, -0.3);
+  part(g, box(0.03, 0.014, 0.27), black, 0, 0.032, -0.3);
+  for (const side of [-1, 1]) part(g, box(0.012, 0.024, 0.2), black, side * 0.036, -0.012, -0.3);
+  part(g, tubeZ(0.014, 0.014, 0.2, 10), steel, 0, 0.036, -0.35);
+  // Nòng + loa hãm nòng có khe xả.
+  part(g, tubeZ(0.013, 0.013, 0.2, 10), black, 0, 0, -0.52);
+  part(g, box(0.036, 0.036, 0.075), black, 0, 0, -0.645);
+  for (let i = 0; i < 3; i++) part(g, box(0.038, 0.006, 0.01), steel, 0, 0.015, -0.625 - i * 0.018);
+  // Băng đạn cong 30 viên (3 đoạn nối nhau cong về trước).
+  const magazine = new THREE.Group();
+  magazine.position.set(0, -0.07, -0.05);
+  part(magazine, box(0.034, 0.1, 0.075), polymer, 0, -0.05, 0.0, 0.2);
+  part(magazine, box(0.034, 0.1, 0.075), polymer, 0, -0.14, -0.035, 0.42);
+  part(magazine, box(0.034, 0.07, 0.072), polymer, 0, -0.215, -0.08, 0.62);
+  for (let i = 0; i < 3; i++) part(magazine, box(0.036, 0.008, 0.078), black, 0, -0.03 - i * 0.075, -i * 0.03, 0.2 + i * 0.2);
+  g.add(magazine);
+  // Tay cầm súng + vòng cò.
+  part(g, box(0.034, 0.11, 0.045), polymer, 0, -0.11, 0.1, 0.35);
+  part(g, box(0.008, 0.03, 0.07), black, 0, -0.085, 0.04);
+  // Báng gập dạng khung ống + tấm tì vai.
+  part(g, tubeZ(0.01, 0.01, 0.27, 8), black, 0, 0.0, 0.33);
+  part(g, new THREE.CylinderGeometry(0.009, 0.009, 0.28, 8), black, 0, -0.055, 0.33, 1.35);
+  part(g, box(0.04, 0.13, 0.025), polymer, 0, -0.045, 0.47);
+  g.userData = { muzzle: new THREE.Vector3(0, 0, -0.69), magazine, sightY, kind: "beryl" };
+  return g;
+}
+
+// ---------------------------------------------------------------------------
 // AUG A3 (bullpup) + red dot
 // ---------------------------------------------------------------------------
 export function buildAug() {
@@ -364,10 +481,11 @@ export function weaponToColoredGeometry(group, mergeGeometries) {
 const bakedWeapons = new Map();
 const bakedWeaponMat = new THREE.MeshLambertMaterial({ vertexColors: true });
 export function buildBakedWeapon(kind, mergeGeometries) {
-  const key = kind === "sniper" ? "sniper" : "ranger";
+  const key = kind === "sniper" || kind === "beryl" ? kind : "ranger";
   let entry = bakedWeapons.get(key);
   if (!entry) {
-    const model = key === "sniper" ? buildKar98() : buildAug();
+    const model =
+      key === "sniper" ? buildKar98() : key === "beryl" ? buildBeryl() : buildAug();
     entry = {
       geometry: bakeModel(model, mergeGeometries, true),
       muzzle: model.userData.muzzle.clone(),

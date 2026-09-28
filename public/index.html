@@ -199,6 +199,7 @@
           </div>
           <div class="hit-flash" id="hitFlash"></div>
           <div id="deathViewOverlay" class="death-view-overlay hidden"><b>BẠN ĐÃ BỊ HẠ</b><small>QUAN SÁT TRẬN ĐẤU</small></div>
+          <div id="victoryOverlay" class="victory-overlay hidden"><small>CHIẾN THẮNG</small><b>TOP 1</b><p id="victoryLine"></p></div>
           <div class="bottom-hud">
             <div class="health"><span>HP</span>
               <div><i id="healthBar"></i></div><b id="healthText">100</b>
@@ -206,7 +207,7 @@
             <div class="weapon"><small>SÚNG TRƯỜNG TẤN CÔNG · RED DOT</small><b>AUG</b><span id="ammo">30 <i>/ 90</i></span></div>
             <div id="swimHint" class="swim-hint hidden">SPACE BƠI LÊN · SHIFT LẶN XUỐNG</div>
             <div class="controls">WASD DI CHUYỂN · SPACE NHẢY · CHUỘT TRÁI BẮN · CHUỘT PHẢI SCOPE · F NHẶT ĐỒ · TAB BALO
-              · Q/E NGHIÊNG NGƯỜI · ESC TẠM DỪNG</div>
+              · G BỎ SÚNG · Q/E NGHIÊNG NGƯỜI · ESC TẠM DỪNG</div>
           </div>
           <div id="gameMessage" class="game-message hidden">
             <div class="pause-card">
@@ -234,6 +235,17 @@
                     <option value="on">Fullscreen</option>
                   </select></label><button id="closePauseSettings" class="secondary">QUAY LẠI ESC</button>
               </div>
+            </div>
+          </div>
+          <!-- Nằm NGOÀI #gameMessage: khung đó có transform nên overlay bên trong
+               chỉ phủ được đúng khung nhỏ, không phủ tối cả màn hình. -->
+          <div id="leaveConfirm" class="leave-confirm hidden" role="dialog" aria-modal="true">
+            <div class="leave-card">
+              <div class="eyebrow">XÁC NHẬN</div>
+              <h3>Bạn chắc chắn muốn <em>thoát trận</em>?</h3>
+              <p>Bạn sẽ bị loại khỏi trận này và không thể quay lại.</p>
+              <div class="leave-actions"><button id="leaveCancelBtn" class="secondary">Ở LẠI</button><button
+                  id="leaveConfirmBtn" class="primary danger">THOÁT TRẬN</button></div>
             </div>
           </div>
         </div>
