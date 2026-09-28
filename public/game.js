@@ -5726,26 +5726,16 @@ function cleanupGame() {
   lastVehicleControlKey = "";
   resolutionScale = 1;
 }
-// Khóa chuột ở chế độ "unadjustedMovement" (đọc chuyển động thô, bỏ gia tốc
-// chuột của Windows). Trình duyệt không hỗ trợ thì khóa kiểu thường.
+// Khóa chuột kiểu THƯỜNG. KHÔNG dùng { unadjustedMovement: true }: trên
+// Chrome/Edge Windows chế độ đọc chuyển động thô đôi khi không đưa con trỏ ẩn
+// về giữa màn hình → con trỏ trôi dần tới mép, chạm mép trái thì movementX về 0
+// → "xoay trái bị chặn đứng, xoay phải vẫn được" (lỗi người chơi báo khi cúi
+// nhặt súng rồi xoay). Cú giật chuột cũ đã được saneMouseDelta xử lý riêng.
 function lockPointer(element) {
   if (!element?.requestPointerLock) return;
-  let request;
   try {
-    request = element.requestPointerLock({ unadjustedMovement: true });
-  } catch {
-    // Trình duyệt cũ báo lỗi ngay với tuỳ chọn → khóa kiểu thường.
-    try {
-      element.requestPointerLock();
-    } catch {}
-    return;
-  }
-  // Trình duyệt không nhận tuỳ chọn → Promise bị từ chối → khóa lại kiểu thường.
-  request?.catch?.(() => {
-    try {
-      element.requestPointerLock()?.catch?.(() => {});
-    } catch {}
-  });
+    element.requestPointerLock()?.catch?.(() => {});
+  } catch {}
 }
 // Chrome/Edge trên Windows thỉnh thoảng trả về một movementX/Y khổng lồ (thường
 // ngược hướng) khi đang khóa chuột và xoay liên tục — đó là cú "giật màn hình về
