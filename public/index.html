@@ -199,6 +199,7 @@
           </div>
           <div class="hit-flash" id="hitFlash"></div>
           <div id="deathViewOverlay" class="death-view-overlay hidden"><b>BẠN ĐÃ BỊ HẠ</b><small>QUAN SÁT TRẬN ĐẤU</small></div>
+          <div id="victoryOverlay" class="victory-overlay hidden"><small>CHIẾN THẮNG</small><b>TOP 1</b><p id="victoryLine"></p></div>
           <div class="bottom-hud">
             <div class="health"><span>HP</span>
               <div><i id="healthBar"></i></div><b id="healthText">100</b>
@@ -233,6 +234,15 @@
                     <option value="off">Windowed</option>
                     <option value="on">Fullscreen</option>
                   </select></label><button id="closePauseSettings" class="secondary">QUAY LẠI ESC</button>
+              </div>
+            </div>
+            <div id="leaveConfirm" class="leave-confirm hidden" role="dialog" aria-modal="true">
+              <div class="leave-card">
+                <div class="eyebrow">XÁC NHẬN</div>
+                <h3>Bạn chắc chắn muốn <em>thoát trận</em>?</h3>
+                <p>Bạn sẽ bị loại khỏi trận này và không thể quay lại.</p>
+                <div class="leave-actions"><button id="leaveCancelBtn" class="secondary">Ở LẠI</button><button
+                    id="leaveConfirmBtn" class="primary danger">THOÁT TRẬN</button></div>
               </div>
             </div>
           </div>

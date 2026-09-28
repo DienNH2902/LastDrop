@@ -8,6 +8,7 @@ import {
   fireMuzzleFlash,
   weaponToColoredGeometry,
   buildBakedWeapon,
+  buildBeryl,
 } from "./weapons.js";
 import { buildAvatar, poseAvatar } from "./avatar.js";
 
@@ -119,7 +120,7 @@ let socket = null,
     groundY: 0,
     yaw: 0,
     hp: 100,
-    weapon: "ranger",
+    weapon: "none", // tiếp đất tay không, phải vào nhà tìm súng
     kills: 0,
     placement: 0,
     peek: 0,
@@ -790,15 +791,37 @@ function playSpatialGunshot(
   weapon = "rifle",
 ) {
   const isSniper = weapon === "sniper";
+  const isBeryl = weapon === "beryl";
   const a = spatialAudio(position, {
-    volume: volume * (isSniper ? 1.5 : 1.15),
+    volume: volume * (isSniper ? 1.5 : isBeryl ? 1.35 : 1.15),
     ...AUDIO_RANGE.gunshot,
-    max: AUDIO_RANGE.gunshot.max * (isSniper ? 1.8 : 1.2),
+    max: AUDIO_RANGE.gunshot.max * (isSniper ? 1.8 : isBeryl ? 1.4 : 1.2),
     delay,
   });
   if (!a) return;
   if (isSniper) playKarShot(a);
+  else if (isBeryl) playBerylShot(a);
   else playAugShot(a);
+}
+// Beryl M762 (7.62): tiếng nổ dày, trầm và "đấm" hơn AUG rõ rệt, có tiếng dội
+// dài hơn — nghe là biết súng hạng nặng.
+function playBerylShot(a) {
+  noiseBurst(a, { duration: 0.014, filter: "highpass", freq: 4200, gain: 1.35, drive: 28 }); // nổ siêu thanh
+  noiseBurst(a, { at: 0.002, duration: 0.12, filter: "bandpass", freq: 1300, q: 0.8, gain: 1.6, drive: 18 }); // thân tiếng dày
+  noiseBurst(a, { at: 0.004, duration: 0.25, filter: "lowpass", freq: 700, gain: 1.2, drive: 9 }); // hơi nổ nặng
+  toneBurst(a, { duration: 0.1, from: 160, to: 55, gain: 1.3 }); // cú đấm ngực
+  toneBurst(a, { duration: 0.18, from: 72, to: 30, gain: 0.95 }); // sub rung sàn
+  noiseBurst(a, { at: 0.12, duration: 0.22, filter: "bandpass", freq: 600, q: 0.8, gain: 0.35 }); // dội vách
+  toneBurst(a, { at: 0.005, duration: 0.035, type: "triangle", from: 2800, to: 2100, gain: 0.06 }); // khóa nòng thép
+  gunshotReverbTail(a, { wet: 0.34, tone: 1900, predelay: 0.01 });
+}
+// Tiếng đấm: vung tay "vút" + tiếng vải áo; nghe được trong vài mét.
+function playPunchWhoosh(position) {
+  const a = spatialAudio(position, { volume: position ? 0.7 : 0.45, ref: 2, max: 14 });
+  if (!a) return;
+  noiseBurst(a, { duration: 0.16, filter: "bandpass", freq: 900, q: 0.9, gain: 0.8 });
+  noiseBurst(a, { at: 0.04, duration: 0.1, filter: "highpass", freq: 2600, gain: 0.25 });
+  toneBurst(a, { at: 0.1, duration: 0.05, from: 140, to: 80, gain: 0.25 });
 }
 // Bề mặt dưới chân quyết định tiếng bước.
 function footSurface(x, z) {
@@ -1398,6 +1421,7 @@ function connect(message) {
         if (!inMatch) beginGame();
         renderPlayers(m);
         if (local.hp <= 0) beginDeathView(local);
+        else if ((Number(m.total) || 0) > 1) showVictory();
         else showResult();
       }
     }
@@ -1558,9 +1582,13 @@ function flushMergeBuckets() {
   mergeBuckets = null;
 }
 function updateAmmoHud() {
-  const capacity = local.weapon === "sniper" ? 5 : 30;
   const reserve = local.reserveAmmo ?? 90;
   const hud = $("#ammo");
+  if (weaponKey(local.weapon) === "none") {
+    setHtml(hud, `👊 <i>VÀO NHÀ TÌM SÚNG · DỰ TRỮ ${reserve}</i>`);
+    return;
+  }
+  const capacity = local.weapon === "sniper" ? 5 : 30;
   setHtml(hud, `${ammo} <i>/ ${capacity} · DỰ TRỮ ${reserve}</i>`);
 }
 // ---- Lưới không gian cho vật cản (giống server) ----
@@ -3343,10 +3371,39 @@ function initWorld() {
   kar.position.set(0.27, -0.235, -0.52);
   kar.visible = false;
   gun.add(kar);
+  // Beryl M762: đường thước ngắm cũng đặt ở (0.28, -0.075) nên ngắm bằng
+  // chuột phải là thước ngắm sau + đầu ruồi thẳng hàng giữa màn hình.
+  const beryl = buildBeryl();
+  beryl.position.set(0.28, -0.075 - beryl.userData.sightY, -0.52);
+  beryl.visible = false;
+  gun.add(beryl);
+  // Tay không: hai nắm tay đeo găng + cẳng tay, thế thủ ở hai góc dưới màn hình.
+  const fists = new THREE.Group();
+  const gloveMat = makeMat("#26261f"),
+    sleeveMat = makeMat("#5a5f48");
+  fists.userData.hands = [-1, 1].map((side) => {
+    const hand = new THREE.Group();
+    const fist = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.08, 0.1), gloveMat);
+    hand.add(fist);
+    const forearm = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.045, 0.3, 4, 8).rotateX(Math.PI / 2),
+      sleeveMat,
+    );
+    forearm.position.set(0, -0.03, 0.2);
+    hand.add(forearm);
+    hand.userData.rest = new THREE.Vector3(side * 0.24, -0.28, -0.46);
+    hand.position.copy(hand.userData.rest);
+    hand.rotation.set(0.25, -side * 0.12, side * 0.2);
+    fists.add(hand);
+    return hand;
+  });
+  fists.visible = false;
+  gun.add(fists);
   const flashes = {};
   for (const [key, model] of [
     ["ranger", aug],
     ["sniper", kar],
+    ["beryl", beryl],
   ]) {
     const flash = makeMuzzleFlash(key === "sniper" ? 1.25 : 0.95);
     flash.position.copy(model.userData.muzzle);
@@ -3360,14 +3417,19 @@ function initWorld() {
   gun.userData.magazines = {
     ranger: aug.userData.magazine,
     sniper: kar.userData.magazine,
+    beryl: beryl.userData.magazine,
   };
-  gun.userData.rangerParts = [aug];
-  gun.userData.sniper = kar;
+  // Mô hình theo từng loại vũ khí; "none" = hai nắm đấm.
+  gun.userData.models = { ranger: aug, sniper: kar, beryl, none: fists };
+  gun.userData.fists = fists;
+  gun.userData.punchAt = 0;
+  gun.userData.punchSide = 1;
   gun.userData.flashes = flashes;
   gun.userData.bolt = kar.userData.bolt;
   gun.userData.boltAt = 0;
   gun.visible = false; // phòng chờ / máy bay / đang nhảy dù: tay không, chỉ cầm súng sau khi tiếp đất
   camera.add(gun);
+  updateLocalWeaponVisual(); // bắt đầu trận bằng tay không (hoặc vũ khí đang có)
   // (Vô lăng giả gắn vào camera đã bỏ: tài xế nhìn thấy và cầm vô lăng THẬT của xe.)
   // Đèn chớp nòng tạo SẴN (cường độ 0). Số lượng đèn trong scene phải cố định
   // suốt trận, nếu không mỗi lần đổi Three.js phải biên dịch lại shader.
@@ -3413,7 +3475,7 @@ function warmupShaders() {
   const kit = new THREE.Group();
   try {
     const { root, rig } = buildAvatar(catHeadMaterials, catEarMat);
-    for (const kind of ["ranger", "sniper"]) {
+    for (const kind of ["ranger", "sniper", "beryl"]) {
       const weapon = buildBakedWeapon(kind, mergeGeometries);
       const flash = makeMuzzleFlash(1);
       flash.visible = true;
@@ -3726,8 +3788,8 @@ function renderPlayers(state) {
   const nowMs = Date.now();
   for (const p of state.players) {
     if (p.id === playerId) {
-      const weaponChanged = local.weapon !== (p.weapon || "ranger");
-      local.weapon = p.weapon || "ranger";
+      const weaponChanged = local.weapon !== (p.weapon || "none");
+      local.weapon = p.weapon || "none";
       if (weaponChanged) updateLocalWeaponVisual();
       local.hp = Math.round(Number(p.hp) || 0);
       local.kills = p.kills;
@@ -3804,6 +3866,11 @@ function renderPlayers(state) {
       const sniperFlash = makeMuzzleFlash(1.3);
       sniperFlash.position.copy(sniperWeapon.userData.muzzle);
       sniperWeapon.add(sniperFlash);
+      const berylWeapon = buildBakedWeapon("beryl", mergeGeometries);
+      rig.weaponMount.add(berylWeapon);
+      const berylFlash = makeMuzzleFlash(1.15);
+      berylFlash.position.copy(berylWeapon.userData.muzzle);
+      berylWeapon.add(berylFlash);
       // Vòng nạp đạn và chữ thập hồi máu: mỗi cái là MỘT mesh dùng chung geometry.
       const indicators = indicatorAssets();
       const reloadIndicator = new THREE.Mesh(
@@ -3833,11 +3900,16 @@ function renderPlayers(state) {
         head: rig.head,
         weapon,
         sniperWeapon,
+        berylWeapon,
         muzzleFlash,
         sniperFlash,
+        berylFlash,
         reloadIndicator,
         healIndicator,
         shotId: Number(p.shotId) || 0,
+        punchId: Number(p.punchId) || 0,
+        punchAt: 0,
+        punchSide: 1,
         flashUntil: 0,
         kickUntil: 0,
         lastGunshotAt: 0,
@@ -3866,10 +3938,18 @@ function renderPlayers(state) {
         playLanding({ x: p.x, y: (p.groundY || 0) + 0.3, z: p.z });
     }
     // Chỉ cầm súng sau khi tiếp đất; ở phòng chờ / máy bay / trên không thì tay không.
-    mesh.userData.weapon.visible =
-      curState === "ground" && !p.vehicleId && p.weapon !== "sniper";
-    mesh.userData.sniperWeapon.visible =
-      curState === "ground" && !p.vehicleId && p.weapon === "sniper";
+    const holding = curState === "ground" && !p.vehicleId;
+    mesh.userData.weapon.visible = holding && p.weapon === "ranger";
+    mesh.userData.sniperWeapon.visible = holding && p.weapon === "sniper";
+    mesh.userData.berylWeapon.visible = holding && p.weapon === "beryl";
+    // Cú đấm mới (punchId tăng): hoạt ảnh tay luân phiên + tiếng vút.
+    const punchCount = (Number(p.punchId) || 0) - (mesh.userData.punchId || 0);
+    if (punchCount > 0) {
+      mesh.userData.punchId = Number(p.punchId) || 0;
+      mesh.userData.punchSide = -mesh.userData.punchSide;
+      mesh.userData.punchAt = nowMs;
+      playPunchWhoosh({ x: p.x, y: (p.groundY || 0) + 1.3, z: p.z });
+    }
     mesh.userData.chute.visible = curState === "parachute";
     mesh.userData.slowWalking = Boolean(p.slowWalking);
     mesh.userData.crouching = Boolean(p.crouching);
@@ -3935,7 +4015,9 @@ function renderPlayers(state) {
       fireMuzzleFlash(
         p.weapon === "sniper"
           ? mesh.userData.sniperFlash
-          : mesh.userData.muzzleFlash,
+          : p.weapon === "beryl"
+            ? mesh.userData.berylFlash
+            : mesh.userData.muzzleFlash,
       );
       mesh.userData.lastGunshotAt = nowMs;
       const soundBaseY = p.swimming ? p.swimY || 0 : p.groundY || 0;
@@ -3948,13 +4030,13 @@ function renderPlayers(state) {
           { x: p.x, y: muzzleY, z: p.z },
           1.25,
           i * 0.06,
-          p.weapon === "sniper" ? "sniper" : "rifle",
+          p.weapon === "sniper" ? "sniper" : p.weapon === "beryl" ? "beryl" : "rifle",
         );
       }
       if (p.weapon === "sniper")
         playKarBolt({ x: p.x, y: muzzleY, z: p.z }, 0.5);
     }
-    mesh.userData.weaponKind = p.weapon === "sniper" ? "sniper" : "ranger";
+    mesh.userData.weaponKind = weaponKey(p.weapon);
     mesh.userData.driver = p.vehicleSeat === 0;
     mesh.visible = p.alive;
   }
@@ -3991,7 +4073,7 @@ function renderPlayers(state) {
 function lootLabel(item) {
   if (item.type === "ammo") return `ĐẠN 5.56 (+${item.amount})`;
   if (item.type === "weapon")
-    return `${item.weapon === "sniper" ? "KAR98K · SCOPE 8X" : "AUG · RED DOT"} · NHẤN F ĐỔI SÚNG`;
+    return `${{ sniper: "KAR98K · SCOPE 8X", beryl: "BERYL M762", ranger: "AUG · RED DOT" }[item.weapon] || "SÚNG"} · NHẤN F ${weaponKey(local.weapon) === "none" ? "NHẶT" : "ĐỔI"} SÚNG`;
   return "BỊCH MÁU";
 }
 function setLootItems(items) {
@@ -4134,9 +4216,9 @@ function buildLootAssets() {
   const cyl = (r, h, seg, color, setup) =>
     coloredPart(new THREE.CylinderGeometry(r, r, h, seg), color, setup);
   // Súng rơi dưới đất = đúng mô hình AUG / Kar98k đang cầm, gộp thành 1 geometry.
-  const weapon = (sniper) =>
+  const weapon = (kind) =>
     weaponToColoredGeometry(
-      sniper ? buildKar98() : buildAug(),
+      kind === "sniper" ? buildKar98() : kind === "beryl" ? buildBeryl() : buildAug(),
       mergeGeometries,
     );
   const medParts = [box(0.5, 0.34, 0.34, "#f2f2ec")];
@@ -4175,8 +4257,9 @@ function buildLootAssets() {
     }),
   });
   const bodies = {
-    ranger: weapon(false),
-    sniper: weapon(true),
+    ranger: weapon("ranger"),
+    sniper: weapon("sniper"),
+    beryl: weapon("beryl"),
     medkit: mergeGeometries(medParts, false),
     ammo: mergeGeometries(ammoParts, false),
   };
@@ -4192,6 +4275,26 @@ function buildLootAssets() {
     bodies,
   };
 }
+// Độ cao mặt tựa của loot: điểm đất cao nhất dưới vật phẩm, và nếu nằm trong
+// nhà thì là MẶT TRÊN tấm sàn (sàn dày 8 cm đặt theo độ cao tâm nhà) — trước đây
+// loot đặt theo địa hình nên bị sàn nhà / đất dốc che mất một phần.
+const HOUSE_FLOOR_TOP = 0.08;
+function lootRestHeight(x, z, footprint) {
+  let y = groundHeightAt(x, z);
+  for (const [px, pz] of footprint) y = Math.max(y, groundHeightAt(px, pz));
+  for (const o of obstaclesNear(x, z)) {
+    if (o.type !== "house" && o.type !== "hut") continue;
+    const yaw = o.yaw || 0,
+      dx = x - o.x,
+      dz = z - o.z;
+    const lx = Math.cos(yaw) * dx - Math.sin(yaw) * dz;
+    const lz = Math.sin(yaw) * dx + Math.cos(yaw) * dz;
+    const half = (o.w || 1) / 2;
+    if (Math.abs(lx) <= half && Math.abs(lz) <= half)
+      y = Math.max(y, groundHeightAt(o.x, o.z) + HOUSE_FLOOR_TOP);
+  }
+  return y;
+}
 function addLootMesh(item) {
   if (!scene || item.mesh) return;
   lootAssets ||= buildLootAssets();
@@ -4200,8 +4303,8 @@ function addLootMesh(item) {
   const root = new THREE.Group();
   root.userData.interactionTarget = { kind: "loot", id: item.id };
   const bodyKey = isWeapon
-    ? item.weapon === "sniper"
-      ? "sniper"
+    ? item.weapon === "sniper" || item.weapon === "beryl"
+      ? item.weapon
       : "ranger"
     : isMed
       ? "medkit"
@@ -4217,18 +4320,37 @@ function addLootMesh(item) {
   // Không dùng y = 0.4 cố định vì mỗi loại loot có chiều cao khác nhau.
   const bounds = lootAssets.bodies[bodyKey].boundingBox;
 
-  if (bounds) {
-    body.position.y = -bounds.min.y + 0.015;
-  }
-
   // Loot đứng yên, không xoay và không nhấp nhô.
   body.rotation.set(0, 0, 0);
-
+  let restY;
   if (isWeapon) {
-    body.rotation.y = Math.random() * Math.PI * 2;
+    // Súng nằm nghiêng trên mặt đất như bị đánh rơi: lật 90° sang một bên
+    // (sau khi lật, trục X cục bộ thành trục đứng nên đáy = bounds.min.x), hướng
+    // do SERVER quyết định để mọi người chơi thấy khẩu súng nằm giống hệt nhau.
+    const yaw = Number(item.yaw) || 0;
+    body.rotation.set(0, yaw, Math.PI / 2);
+    if (bounds) body.position.y = -bounds.min.x + 0.03;
+    // Súng dài ~1 m: lấy điểm cao nhất dưới cả hai đầu + hai mép, nếu không
+    // đất dốc sẽ nuốt mất báng hoặc nòng.
+    const sin = Math.sin(yaw),
+      cos = Math.cos(yaw);
+    const footprint = [];
+    for (const along of bounds ? [bounds.min.z, 0, bounds.max.z] : [0])
+      for (const side of bounds ? [-bounds.max.y, -bounds.min.y] : [0])
+        footprint.push([item.x + sin * along + cos * side, item.z + cos * along - sin * side]);
+    restY = lootRestHeight(item.x, item.z, footprint);
+  } else {
+    if (bounds) body.position.y = -bounds.min.y + 0.015;
+    const r = 0.26;
+    restY = lootRestHeight(item.x, item.z, [
+      [item.x - r, item.z - r],
+      [item.x + r, item.z - r],
+      [item.x - r, item.z + r],
+      [item.x + r, item.z + r],
+    ]);
   }
 
-  root.position.set(item.x, groundHeightAt(item.x, item.z), item.z);
+  root.position.set(item.x, restY, item.z);
 
   root.visible = false;
   scene.add(root);
@@ -4661,10 +4783,14 @@ function updateGunPose(dt) {
     clamp((reloadProgress - start) / (end - start), 0, 1);
   gun.rotation.set(0.15 * gunBusy, 1.35 * gunBusy, -0.12 * gunBusy);
   // Khi ngắm red dot: đưa súng lại gần mắt để ô kính to, dễ nhìn xuyên.
+  // Beryl có hộp khóa nòng dài ra sau kính ngắm: kéo ít hơn, nếu không phần
+  // thân sau lọt qua mặt phẳng cắt gần của camera (0.1 m) → bị cắt, nhìn như
+  // trong suốt / mất chi tiết.
+  const adsPull = local.weapon === "beryl" ? 0.2 : 0.3;
   gun.position.set(
     0.3 * gunBusy - 0.28 * gunAimBlend,
     -0.14 * gunBusy + 0.075 * gunAimBlend,
-    0.05 * gunBusy + 0.3 * gunAimBlend,
+    0.05 * gunBusy + adsPull * gunAimBlend,
   );
   if (reloading) {
     // Kéo súng vào giữa và lại gần camera để thấy rõ thao tác nạp đạn.
@@ -4715,6 +4841,23 @@ function updateGunPose(dt) {
   }
   // Khóa nòng Kar98k: bật lên → kéo lùi → đẩy tới → gập xuống (~0.65 s);
   // khi nạp đạn thì mở suốt quá trình.
+  // Tay không: hai nắm tay nhún nhẹ theo nhịp thở; cú đấm lao thẳng ra trước
+  // (~0.12 s) rồi thu về (~0.2 s), tay trái / phải luân phiên.
+  const fists = gun.userData.fists;
+  if (fists?.visible) {
+    const t = (performance.now() - gun.userData.punchAt) / 320;
+    const breathe = Math.sin(performance.now() / 420) * 0.008;
+    for (const hand of fists.userData.hands) {
+      const side = hand.userData.rest.x < 0 ? -1 : 1;
+      const active = side === gun.userData.punchSide && t >= 0 && t < 1;
+      const reach = active ? (t < 0.38 ? t / 0.38 : 1 - (t - 0.38) / 0.62) : 0;
+      hand.position.set(
+        hand.userData.rest.x - side * reach * 0.2,
+        hand.userData.rest.y + breathe + reach * 0.12,
+        hand.userData.rest.z - reach * 0.38,
+      );
+    }
+  }
   const bolt = gun.userData.bolt;
   if (bolt) {
     let lift = 0,
@@ -4884,7 +5027,13 @@ function beginGame() {
   $("#resumeBtn").onclick = resumeGame;
   $("#openPauseSettings").onclick = openPauseSettings;
   $("#closePauseSettings").onclick = closePauseSettings;
-  $("#leaveMatchBtn").onclick = leaveMatch;
+  // Rời trận cần xác nhận lần nữa để tránh bấm nhầm.
+  $("#leaveMatchBtn").onclick = () => $("#leaveConfirm").classList.remove("hidden");
+  $("#leaveCancelBtn").onclick = () => $("#leaveConfirm").classList.add("hidden");
+  $("#leaveConfirmBtn").onclick = () => {
+    $("#leaveConfirm").classList.add("hidden");
+    leaveMatch();
+  };
 }
 
 // Keyboard Lock chỉ được hỗ trợ ở một số trình duyệt và thường cần fullscreen.
@@ -5343,7 +5492,7 @@ function pauseGame() {
   document.exitPointerLock?.(); // ESC bị khóa nên trình duyệt không tự thả chuột
   stopFiring();
   if (local.vehicleId && local.vehicleSeat === 0)
-    send({ type: "vehicleControl", throttle: 0, steer: 0, brake: true });
+    send({ type: "vehicleControl", throttle: 0, steer: 0, brake: false }); // xe trôi, không phanh gấp
   keys = {};
   scoped = false;
   setScope(false);
@@ -5365,6 +5514,7 @@ function resumeGame() {
   if (!paused) return;
   paused = false;
   $("#gameMessage").classList.add("hidden");
+  $("#leaveConfirm")?.classList.add("hidden");
   // Deadview intentionally has no pointer lock; resume spectating in place.
   if (deathView) return;
   lockPointer(renderer?.domElement);
@@ -5383,6 +5533,8 @@ function leaveMatch() {
 }
 function cleanupGame() {
   releaseGameInputMode();
+  hideVictory();
+  $("#leaveConfirm")?.classList.add("hidden");
   if (deathResultTimer) clearTimeout(deathResultTimer);
   deathResultTimer = null;
   deathView = null;
@@ -5511,6 +5663,7 @@ function onFire(e) {
       $("#game").classList.contains("active") &&
       !paused &&
       !local.healing &&
+      weaponKey(local.weapon) !== "none" && // tay không thì không có gì để ngắm
       document.pointerLockElement === renderer?.domElement
     )
       setScope(!scoped);
@@ -5559,8 +5712,12 @@ function stopFiring() {
 // trình duyệt dồn/trễ khi main thread bận nên nhịp bắn lúc nhanh lúc chậm và
 // viên đạn không khớp hướng ngắm của khung hình đang hiển thị.
 let nextAutoShotAt = 0;
+// Nhịp bắn phía client (hơi chậm hơn giới hạn server để không bị từ chối).
+const CLIENT_FIRE_INTERVAL = { none: 480, ranger: FIRE_INTERVAL_MS, beryl: 90 };
 const currentFireInterval = () =>
-  local.weapon === "sniper" ? SNIPER_FIRE_INTERVAL_MS : FIRE_INTERVAL_MS;
+  local.weapon === "sniper"
+    ? SNIPER_FIRE_INTERVAL_MS
+    : CLIENT_FIRE_INTERVAL[weaponKey(local.weapon)] || FIRE_INTERVAL_MS;
 function updateAutoFire() {
   if (!triggerHeld) return;
   const now = performance.now();
@@ -5577,11 +5734,11 @@ function updateAutoFire() {
 // Tia từ tâm màn hình xuyên qua đúng các mesh người chơi đang được vẽ — chính
 // là thứ red dot đang chỉ vào. Server dùng kết quả này để xác nhận trúng đạn.
 const aimRaycaster = new THREE.Raycaster();
-function findAimedPlayer(eye, dir) {
+function findAimedPlayer(eye, dir, far = 140) {
   aimRaycaster.camera = camera;
   aimRaycaster.set(eye, dir);
   aimRaycaster.near = 0;
-  aimRaycaster.far = 140;
+  aimRaycaster.far = far;
   let best = null;
   // Chỉ thử với hộp hitbox vô hình (đứng / khom) — CÙNG kích thước server dùng,
   // đã bao cả nón và giáp: thấy trúng nón là trúng đầu, trúng giáp là trúng thân.
@@ -5626,6 +5783,25 @@ function shootOnce() {
     now - lastClientShotAt < SNIPER_FIRE_INTERVAL_MS
   )
     return;
+  const key = weaponKey(local.weapon);
+  if (key === "none") {
+    // Tay không: đấm (tay trái / phải luân phiên), tầm với ~1.9 m do server kiểm.
+    lastClientShotAt = now;
+    gun.userData.punchSide = -gun.userData.punchSide;
+    gun.userData.punchAt = performance.now();
+    playPunchWhoosh(null);
+    camera.getWorldDirection(shotAim);
+    camera.getWorldPosition(shotEye);
+    send({
+      type: "shoot",
+      aim: { x: shotAim.x, y: shotAim.y, z: shotAim.z },
+      x: shotEye.x,
+      z: shotEye.z,
+      eyeY: shotEye.y,
+      hit: findAimedPlayer(shotEye, shotAim, 1.9),
+    });
+    return;
+  }
   if (ammo <= 0) {
     tone(120, 0.07, "square", 0.015);
     stopFiring();
@@ -5636,7 +5812,7 @@ function shootOnce() {
     null,
     0.65,
     0,
-    local.weapon === "sniper" ? "sniper" : "rifle",
+    key === "sniper" ? "sniper" : key === "beryl" ? "beryl" : "rifle",
   );
   // Đèn chớp nòng luôn nằm sẵn trong scene (xem initWorld), chỉ đổi cường độ.
   // Trước đây đèn được TẠO ở phát bắn đầu tiên → đổi số lượng đèn buộc Three.js
@@ -5646,12 +5822,11 @@ function shootOnce() {
     muzzleFlashOffAt = performance.now() + 45;
   }
   // Tia lửa đầu nòng (mesh có sẵn, chỉ bật lên ~40 ms).
-  const fpFlash =
-    gun?.userData.flashes?.[local.weapon === "sniper" ? "sniper" : "ranger"];
+  const fpFlash = gun?.userData.flashes?.[key];
   if (fpFlash) {
     fireMuzzleFlash(fpFlash);
     muzzleFlashOffAt =
-      performance.now() + (local.weapon === "sniper" ? 55 : 40);
+      performance.now() + (key === "sniper" ? 55 : key === "beryl" ? 50 : 40);
   }
   if (local.weapon === "sniper" && gun) {
     // Kar98k: kéo khóa nòng sau mỗi phát (hình + tiếng).
@@ -5676,11 +5851,10 @@ function shootOnce() {
   // afterward so it moves the aim for the next shot instead of deflecting this one.
   const stanceScale = local.prone ? 0.35 : local.crouching ? 0.65 : 1;
   const recoilScale = (scoped ? 0.72 : 1) * stanceScale;
-  const pitchKick = (local.weapon === "sniper" ? 0.105 : 0.032) * recoilScale;
-  const yawKick =
-    (Math.random() - 0.5) *
-    (local.weapon === "sniper" ? 0.018 : 0.026) *
-    recoilScale;
+  // Độ giật: Beryl M762 giật lên và lắc ngang mạnh hơn AUG rõ rệt.
+  const kick = { sniper: [0.105, 0.018], beryl: [0.05, 0.05], ranger: [0.032, 0.026] }[key];
+  const pitchKick = kick[0] * recoilScale;
+  const yawKick = (Math.random() - 0.5) * kick[1] * recoilScale;
   camera.rotation.x = clamp(camera.rotation.x + pitchKick, -1.35, 1.35);
   recoilPitch += pitchKick;
   recoilYaw += yawKick;
@@ -5699,12 +5873,17 @@ function setScope(enabled) {
   $(".crosshair").classList.toggle("scope-hidden", scoped);
   const overlay = $("#scopeOverlay");
   overlay.classList.toggle("hidden", !scoped);
-  overlay.classList.toggle("reflex", scoped && local.weapon !== "sniper");
+  // AUG: chấm đỏ; Beryl: kính toàn ảnh (lưới ngắm nằm trên mô hình 3D, không phủ
+  // lớp HUD); Kar98k: ống 8x.
+  overlay.classList.toggle("reflex", scoped && local.weapon === "ranger");
+  overlay.classList.toggle("iron", scoped && local.weapon === "beryl");
   overlay.classList.toggle("sniper", scoped && local.weapon === "sniper");
   overlay.querySelector("small").textContent =
-    scoped && local.weapon !== "sniper"
-      ? "RED DOT / HOLO · RIGHT CLICK ĐỂ THOÁT"
-      : `ỐNG NGẮM ${Math.round(baseFov / sniperZoomFov)}X · CUỘN CHUỘT ĐỔI 4X–8X · CHUỘT PHẢI ĐỂ THOÁT`;
+    local.weapon === "sniper"
+      ? `ỐNG NGẮM ${Math.round(baseFov / sniperZoomFov)}X · CUỘN CHUỘT ĐỔI 4X–8X · CHUỘT PHẢI ĐỂ THOÁT`
+      : local.weapon === "beryl"
+        ? "KÍNH TOÀN ẢNH · CHUỘT PHẢI ĐỂ THOÁT"
+        : "RED DOT · CHUỘT PHẢI ĐỂ THOÁT";
 }
 function onScopeWheel(event) {
   if (!scoped || local.weapon !== "sniper") return;
@@ -5720,22 +5899,25 @@ function onScopeWheel(event) {
   camera.updateProjectionMatrix();
   setScope(true);
 }
+// Tên + mô tả hiển thị trên HUD cho từng loại vũ khí.
+const WEAPON_INFO = {
+  none: { name: "TAY KHÔNG", sub: "ĐẤM · ĐẦU −50 · THÂN −5" },
+  ranger: { name: "AUG", sub: "SÚNG TRƯỜNG TẤN CÔNG · RED DOT" },
+  beryl: { name: "BERYL M762", sub: "SÚNG TRƯỜNG TẤN CÔNG · KÍNH TOÀN ẢNH" },
+  sniper: { name: "KAR98K", sub: "SÚNG BẮN TỈA · SCOPE 8X" },
+};
+const weaponKey = (w) => (WEAPON_INFO[w] ? w : "none");
 function updateLocalWeaponVisual() {
   if (!gun) return;
-  const sniper = local.weapon === "sniper";
-  for (const part of gun.userData.rangerParts || []) part.visible = !sniper;
-  if (gun.userData.sniper) gun.userData.sniper.visible = sniper;
-  gun.userData.magazine =
-    gun.userData.magazines?.[sniper ? "sniper" : "ranger"] ||
-    gun.userData.magazine;
-  const small = $(".weapon small"),
-    name = $(".weapon b");
-  if (small)
-    small.textContent = sniper
-      ? "SÚNG BẮN TỈA · 7.92 MM · SCOPE 8X"
-      : "SÚNG TRƯỜNG TẤN CÔNG · RED DOT";
-  if (name) name.textContent = sniper ? "KAR98K" : "AUG";
-  if (scoped) setScope(true);
+  const key = weaponKey(local.weapon);
+  for (const [kind, model] of Object.entries(gun.userData.models || {}))
+    model.visible = kind === key;
+  gun.userData.magazine = gun.userData.magazines?.[key] || null;
+  setText($(".weapon small"), WEAPON_INFO[key].sub);
+  setText($(".weapon b"), WEAPON_INFO[key].name);
+  if (key === "none" && scoped) setScope(false);
+  else if (scoped) setScope(true);
+  updateAmmoHud();
 }
 // Vệt đạn dùng một "bể" Line cố định: bắn auto trước đây tạo Geometry +
 // Material + setTimeout mới cho MỖI viên (12 viên/giây) rồi hủy → rác bộ nhớ,
@@ -5777,8 +5959,7 @@ function makeTracer(eye, direction) {
     muzzle.copy(eye).addScaledVector(direction, 0.25);
   } else {
     // Vệt đạn xuất phát đúng đầu nòng của mô hình súng đang cầm.
-    const fpFlash =
-      gun?.userData.flashes?.[local.weapon === "sniper" ? "sniper" : "ranger"];
+    const fpFlash = gun?.userData.flashes?.[weaponKey(local.weapon)];
     if (fpFlash) {
       fpFlash.parent.updateMatrixWorld(true);
       fpFlash.getWorldPosition(muzzle);
@@ -6150,6 +6331,10 @@ const WEAPON_GRIPS = {
     right: new THREE.Vector3(0, -0.07, 0.1),
     left: new THREE.Vector3(0, -0.05, -0.26),
   },
+  beryl: {
+    right: new THREE.Vector3(0, -0.1, 0.1),
+    left: new THREE.Vector3(0, -0.06, -0.3),
+  },
 };
 // Dựng tư thế + hoạt ảnh cho người chơi khác mỗi khung hình (sau khi đã nội
 // suy vị trí). Tốc độ lấy từ chính chuyển động đang hiển thị nên bước chân
@@ -6183,7 +6368,9 @@ function animateAvatars(dt) {
                   : ud.crouching
                     ? "crouch"
                     : "stand";
-    const armed = ud.weapon.visible || ud.sniperWeapon.visible;
+    const armed =
+      ud.weapon.visible || ud.sniperWeapon.visible || ud.berylWeapon.visible;
+    const punchT = (now - ud.punchAt) / 320;
     poseAvatar(
       ud.rig,
       ud.pose,
@@ -6196,13 +6383,18 @@ function animateAvatars(dt) {
         steerSpin: ud.steerSpin || 0,
         kick:
           now < ud.kickUntil ? (ud.weaponKind === "sniper" ? 0.16 : 0.06) : 0,
-        weaponGrip: armed ? WEAPON_GRIPS[ud.weaponKind || "ranger"] : null,
+        weaponGrip: armed ? WEAPON_GRIPS[ud.weaponKind] || WEAPON_GRIPS.ranger : null,
+        // Tay không (đã tiếp đất): thế thủ + cú đấm luân phiên.
+        fists: !armed && ud.weaponKind === "none" && ud.state === "ground",
+        punch: punchT >= 0 && punchT < 1 ? punchT : 0,
+        punchSide: ud.punchSide,
       },
       dt,
     );
     if (now >= ud.flashUntil) {
       ud.muzzleFlash.visible = false;
       ud.sniperFlash.visible = false;
+      ud.berylFlash.visible = false;
     }
     if (ud.reloading) ud.reloadIndicator.rotation.z += dt * 7;
     if (ud.healing) ud.healIndicator.rotation.y += dt * 5;
@@ -8004,9 +8196,50 @@ function adaptResolution(dt) {
   slowChecks = fastChecks = 0;
   renderer.setPixelRatio(graphicsPixelRatio());
 }
+// Thắng trận (trận có nhiều người, chỉ còn mình sống): ẩn minimap, hiện chữ
+// TOP 1 vàng thật to kèm một câu chúc mừng ngẫu nhiên, rồi mới sang bảng kết quả.
+const VICTORY_LINES = [
+  "Gà quay tối nay là của bạn! 🍗",
+  "Cả bản đồ này giờ là nhà của bạn!",
+  "Không ai cản nổi bạn hôm nay!",
+  "Người cuối cùng đứng vững — chính là bạn!",
+  "Đối thủ đã về sảnh, còn bạn về nhất!",
+];
+let victoryTimer = null;
+function showVictory() {
+  if (victoryTimer || $("#result").classList.contains("active")) return;
+  stopFiring();
+  if (scoped) setScope(false);
+  if (paused) {
+    paused = false;
+    $("#gameMessage").classList.add("hidden");
+  }
+  $("#flightHud")?.classList.add("hidden");
+  setText(
+    $("#victoryLine"),
+    VICTORY_LINES[Math.floor(Math.random() * VICTORY_LINES.length)],
+  );
+  $("#victoryOverlay")?.classList.remove("hidden");
+  playVictoryFanfare();
+  victoryTimer = setTimeout(() => {
+    victoryTimer = null;
+    showResult();
+  }, 6000);
+}
+function hideVictory() {
+  if (victoryTimer) clearTimeout(victoryTimer);
+  victoryTimer = null;
+  $("#victoryOverlay")?.classList.add("hidden");
+}
+function playVictoryFanfare() {
+  [523, 659, 784, 1047].forEach((freq, i) =>
+    setTimeout(() => tone(freq, i === 3 ? 0.5 : 0.16, "triangle", 0.05), i * 150),
+  );
+}
 function showResult() {
   if (!$("#game").classList.contains("active")) return;
   if ($("#result").classList.contains("active")) return;
+  hideVictory();
   if (deathResultTimer) clearTimeout(deathResultTimer);
   deathResultTimer = null;
   deathView = null;

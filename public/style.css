@@ -2392,3 +2392,130 @@ body:has(#game.active) #game {
   color: #f3f3ed;
   text-shadow: 0 1px 3px #000;
 }
+
+/* Beryl: ngắm thẳng bằng thước ngắm cơ khí — không phủ mặt nạ tối, không tâm giữa. */
+.scope-overlay.iron {
+  background: transparent;
+}
+.scope-overlay.iron:before,
+.scope-overlay.iron:after,
+.scope-overlay.iron .scope-reticle {
+  display: none;
+}
+.scope-overlay.iron small {
+  bottom: 12%;
+  color: #e3e6dc;
+  text-shadow: 0 1px 3px #000;
+}
+
+/* Hộp xác nhận thoát trận (nằm trên menu ESC). */
+.leave-confirm {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 7, 4, 0.62);
+  z-index: 5;
+}
+.leave-confirm.hidden {
+  display: none;
+}
+.leave-card {
+  width: min(380px, calc(100vw - 32px));
+  padding: 24px 24px 20px;
+  background: #151812;
+  border: 1px solid #3c4232;
+  border-top: 3px solid #ff5a3c;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+  text-align: center;
+  color: #e9ecdf;
+}
+.leave-card h3 {
+  margin: 8px 0 6px;
+  font:
+    800 26px "Barlow Condensed",
+    Arial,
+    sans-serif;
+  letter-spacing: 0.5px;
+}
+.leave-card h3 em {
+  color: #ff6b4d;
+  font-style: normal;
+}
+.leave-card p {
+  margin: 0 0 18px;
+  color: #aeb2a3;
+  font-size: 13px;
+}
+.leave-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.leave-actions button {
+  width: 100%;
+  margin: 0;
+}
+.leave-actions .danger {
+  background: #e2462b;
+  border-color: #e2462b;
+  color: #fff;
+}
+
+/* Màn hình thắng: TOP 1 vàng thật to giữa màn hình. */
+.victory-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
+  text-align: center;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0) 62%);
+  z-index: 6;
+}
+.victory-overlay.hidden {
+  display: none;
+}
+.victory-overlay small {
+  font:
+    12px "DM Mono",
+    monospace;
+  letter-spacing: 6px;
+  color: #ffe9a3;
+  text-shadow: 0 2px 6px #000;
+}
+.victory-overlay b {
+  font:
+    900 clamp(84px, 17vw, 190px) / 0.95 "Barlow Condensed",
+    Arial,
+    sans-serif;
+  letter-spacing: 4px;
+  background: linear-gradient(180deg, #fff6c8 0%, #ffd23f 45%, #e59a0b 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 4px 0 #6b4300) drop-shadow(0 0 22px rgba(255, 200, 40, 0.55));
+  animation: victory-pop 0.7s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+.victory-overlay p {
+  margin: 4px 16px 0;
+  font:
+    700 clamp(18px, 3vw, 28px) "Barlow Condensed",
+    Arial,
+    sans-serif;
+  color: #ffe27a;
+  text-shadow: 0 2px 8px #000;
+  animation: victory-pop 0.7s 0.25s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+@keyframes victory-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

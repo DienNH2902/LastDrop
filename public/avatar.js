@@ -438,6 +438,19 @@ export function poseAvatar(rig, pose, state, dt) {
   const grip = state.weaponGrip;
   rig.arms.forEach((arm, i) => {
     if (
+      state.fists &&
+      (stance === "stand" || stance === "crouch" || stance === "jump")
+    ) {
+      // Tay không: thế thủ, hai nắm tay trước mặt; cú đấm duỗi thẳng tay ra trước.
+      const punching = state.punchSide === arm.side ? state.punch || 0 : 0;
+      const reach = Math.sin(Math.min(1, punching) * Math.PI);
+      _t.set(
+        arm.side * (0.17 - reach * 0.12),
+        0.6 + reach * 0.04,
+        -0.24 - reach * 0.36,
+      );
+      solveArm(arm, _t);
+    } else if (
       grip &&
       (stance === "stand" ||
         stance === "crouch" ||
