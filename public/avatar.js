@@ -7,6 +7,7 @@
 // số này. Hộp đã bao trọn nón và áo giáp đang hiển thị → bắn trúng nón = trúng
 // đầu, trúng giáp = trúng thân. Toạ độ cục bộ: chân ở y = 0, mặt nhìn về -Z.
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 export const HITBOX = {
   stand: {
@@ -29,97 +30,247 @@ const SHIN = 0.4;
 const UPPER_ARM = 0.31;
 const FOREARM = 0.32;
 
-const matCache = new Map();
-function mat(color) {
-  if (!matCache.has(color))
-    matCache.set(color, new THREE.MeshLambertMaterial({ color }));
-  return matCache.get(color);
+// ---------------------------------------------------------------------------
+// GỘP MESH: mọi khối nhỏ nằm trên cùng một xương được "nướng" thành MỘT geometry
+// màu theo đỉnh (vertex color), tạo đúng 1 lần cho cả trận và dùng chung cho mọi
+// nhân vật. Mỗi người chơi chỉ còn ~14 mesh (hông, 6 đoạn chân, thân, đầu + phần
+// nón/tai, 4 đoạn tay) thay vì ~100 mesh, và không phải tạo lại geometry.
+// Xương (Group) vẫn tách riêng nên IK / hoạt ảnh chạy y như cũ.
+// ---------------------------------------------------------------------------
+const bakedMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+const _tmp = new THREE.Object3D();
+// spec: { g: geometry, c: màu, p: [x,y,z], r: [rx,ry,rz], s: [sx,sy,sz] }
+function bake(specs) {
+  const geos = specs.map(
+    ({ g, c, p = [0, 0, 0], r = [0, 0, 0], s = [1, 1, 1] }) => {
+      _tmp.position.set(...p);
+      _tmp.rotation.set(...r);
+      _tmp.scale.set(...s);
+      _tmp.updateMatrix();
+      const geo = g.clone();
+      geo.applyMatrix4(_tmp.matrix);
+      g.dispose();
+      const color = new THREE.Color(c);
+      const n = geo.attributes.position.count;
+      const colors = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        colors[i * 3] = color.r;
+        colors[i * 3 + 1] = color.g;
+        colors[i * 3 + 2] = color.b;
+      }
+      geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      geo.deleteAttribute("uv"); // mọi khối gộp đều dùng màu đỉnh, không cần UV
+      return geo;
+    },
+  );
+  return mergeGeometries(geos, false);
 }
 const capsule = (r, len) => new THREE.CapsuleGeometry(r, len, 4, 10);
-function add(parent, geometry, material, x = 0, y = 0, z = 0) {
-  const m = new THREE.Mesh(geometry, material);
-  m.position.set(x, y, z);
-  parent.add(m);
-  return m;
+const box = (x, y, z) => new THREE.BoxGeometry(x, y, z);
+
+const C = {
+  pants: "#3b4232",
+  shirt: "#5a5f48",
+  vest: "#3a4838",
+  pouch: "#4d5a45",
+  glove: "#26261f",
+  boot: "#2a2420",
+  strap: "#2c3226",
+  helmet: "#5f6c46",
+  brim: "#4a5537",
+};
+
+// Đầu mèo: 6 mặt hộp đọc từ MỘT texture atlas 3×2 (xem game.js): ô = chỉ số mặt
+// BoxGeometry (+x, -x, +y, -y, +z, -z), hàng 0 nằm trên cùng của ảnh.
+function atlasHeadGeometry() {
+  const g = new THREE.BoxGeometry(0.46, 0.44, 0.42);
+  const uv = g.attributes.uv;
+  const pad = 0.004; // chừa mép nhỏ để mipmap không lẫn sang ô bên cạnh
+  for (let f = 0; f < 6; f++) {
+    const col = f % 3,
+      row = Math.floor(f / 3);
+    for (let i = 0; i < 4; i++) {
+      const k = f * 4 + i;
+      const u = uv.getX(k),
+        v = uv.getY(k);
+      uv.setXY(
+        k,
+        (col + pad + u * (1 - 2 * pad)) / 3,
+        (1 - row + pad + v * (1 - 2 * pad)) / 2,
+      );
+    }
+  }
+  uv.needsUpdate = true;
+  return g;
 }
+
+let assets = null;
+function getAssets(earColor) {
+  if (assets) return assets;
+  const thighGeo = (side) =>
+    bake([
+      { g: capsule(0.078, THIGH - 0.12), c: C.pants, p: [0, -THIGH / 2, 0] },
+      { g: box(0.09, 0.12, 0.05), c: C.pouch, p: [side * 0.07, -0.18, 0] }, // túi đùi
+    ]);
+  const ears = [-1, 1].map((side) => ({
+    g: new THREE.ConeGeometry(0.075, 0.15, 4),
+    c: earColor,
+    p: [side * 0.25, 0.16, 0.04],
+    r: [0, Math.PI / 4, -side * 0.95], // tai thò ra hai bên dưới vành nón
+  }));
+  // Hitbox vô hình (dùng chung), trùng khớp server.
+  const hitGeo = {};
+  for (const [stance, set] of Object.entries(HITBOX))
+    hitGeo[stance] = ["head", "torso", "legs"].map((part) => {
+      const { c, h } = set[part];
+      return {
+        part,
+        c,
+        geo: new THREE.BoxGeometry(h[0] * 2, h[1] * 2, h[2] * 2),
+      };
+    });
+  assets = {
+    hips: bake([
+      { g: box(0.34, 0.18, 0.22), c: C.pants, p: [0, -0.02, 0] },
+      { g: box(0.36, 0.05, 0.24), c: C.strap, p: [0, 0.06, 0] }, // thắt lưng
+    ]),
+    thigh: { "-1": thighGeo(-1), 1: thighGeo(1) },
+    knee: bake([
+      { g: capsule(0.064, SHIN - 0.1), c: C.pants, p: [0, -SHIN / 2, 0] },
+      { g: new THREE.SphereGeometry(0.07, 8, 6), c: C.pouch, p: [0, 0, -0.04] }, // đệm gối
+    ]),
+    ankle: bake([
+      { g: box(0.12, 0.11, 0.26), c: C.boot, p: [0, -0.03, -0.045] },
+    ]),
+    // Thân: áo + áo giáp + túi đạn + tấm ngực + đệm vai + cổ; nằm trong hitbox thân.
+    torso: bake([
+      {
+        g: capsule(0.15, 0.26),
+        c: C.shirt,
+        p: [0, 0.27, 0],
+        s: [1.25, 1, 0.8],
+      },
+      {
+        g: new THREE.CapsuleGeometry(0.18, 0.18, 4, 12),
+        c: C.vest,
+        p: [0, 0.29, 0],
+        s: [1.55, 1, 1],
+      },
+      ...[-0.16, 0, 0.16].map((x) => ({
+        g: box(0.13, 0.15, 0.06),
+        c: C.pouch,
+        p: [x, 0.16, -0.2],
+      })),
+      { g: box(0.4, 0.16, 0.05), c: C.pouch, p: [0, 0.42, -0.19] }, // tấm ngực
+      ...[-1, 1].map((side) => ({
+        g: new THREE.SphereGeometry(0.12, 10, 8),
+        c: C.vest,
+        p: [side * 0.25, 0.52, 0],
+        s: [1, 0.6, 1.1],
+      })),
+      {
+        g: new THREE.CylinderGeometry(0.07, 0.08, 0.12, 10),
+        c: C.shirt,
+        p: [0, 0.6, 0],
+      }, // cổ
+    ]),
+    head: atlasHeadGeometry(),
+    // Nón + vành + tai: một mesh riêng (màu đỉnh), gắn cùng xương đầu.
+    headgear: bake([
+      {
+        g: new THREE.SphereGeometry(
+          0.27,
+          16,
+          10,
+          0,
+          Math.PI * 2,
+          0,
+          Math.PI / 2,
+        ),
+        c: C.helmet,
+        p: [0, 0.12, 0],
+        s: [1, 0.72, 1.02],
+      },
+      {
+        g: new THREE.CylinderGeometry(0.3, 0.31, 0.04, 18),
+        c: C.brim,
+        p: [0, 0.12, 0],
+      }, // vành
+      ...ears,
+    ]),
+    shoulder: bake([
+      {
+        g: capsule(0.055, UPPER_ARM - 0.1),
+        c: C.shirt,
+        p: [0, -UPPER_ARM / 2, 0],
+      },
+    ]),
+    elbow: bake([
+      { g: capsule(0.05, FOREARM - 0.1), c: C.shirt, p: [0, -FOREARM / 2, 0] },
+      {
+        g: new THREE.SphereGeometry(0.052, 8, 6),
+        c: C.glove,
+        p: [0, -FOREARM, 0],
+      },
+    ]),
+    hitGeo,
+    hitMat: new THREE.MeshBasicMaterial({ visible: false }),
+  };
+  return assets;
+}
+
 function limb(parent, x, y, z) {
   const g = new THREE.Group();
   g.position.set(x, y, z);
   parent.add(g);
   return g;
 }
+function mesh(parent, geometry, material) {
+  const m = new THREE.Mesh(geometry, material);
+  parent.add(m);
+  return m;
+}
 
-// headMaterials: 6 mặt đầu mèo; earMat: vật liệu tai.
-export function buildAvatar(headMaterials, earMat) {
+// headMaterial: MỘT material dùng atlas đầu mèo (game.js: catHeadMaterials);
+// earMat: vật liệu tai (chỉ lấy màu để nướng vào mesh nón).
+export function buildAvatar(headMaterial, earMat) {
+  const A = getAssets(earMat.color);
   const root = new THREE.Group();
-  const pants = mat("#3b4232"),
-    shirt = mat("#5a5f48"),
-    vestMat = mat("#3a4838"),
-    pouch = mat("#4d5a45"),
-    glove = mat("#26261f"),
-    boot = mat("#2a2420"),
-    strap = mat("#2c3226");
   const hips = limb(root, 0, STAND_HIP, 0);
-  add(hips, new THREE.BoxGeometry(0.34, 0.18, 0.22), pants, 0, -0.02, 0);
-  add(hips, new THREE.BoxGeometry(0.36, 0.05, 0.24), strap, 0, 0.06, 0); // thắt lưng
+  mesh(hips, A.hips, bakedMat);
   const legs = [];
   for (const side of [-1, 1]) {
     const thigh = limb(hips, side * 0.1, -0.04, 0);
-    add(thigh, capsule(0.078, THIGH - 0.12), pants, 0, -THIGH / 2, 0);
-    add(thigh, new THREE.BoxGeometry(0.09, 0.12, 0.05), pouch, side * 0.07, -0.18, 0); // túi đùi
+    mesh(thigh, A.thigh[side], bakedMat);
     const knee = limb(thigh, 0, -THIGH, 0);
-    add(knee, capsule(0.064, SHIN - 0.1), pants, 0, -SHIN / 2, 0);
-    add(knee, new THREE.SphereGeometry(0.07, 8, 6), pouch, 0, 0, -0.04); // đệm gối
+    mesh(knee, A.knee, bakedMat);
     const ankle = limb(knee, 0, -SHIN, 0);
-    add(ankle, new THREE.BoxGeometry(0.12, 0.11, 0.26), boot, 0, -0.03, -0.045);
+    mesh(ankle, A.ankle, bakedMat);
     legs.push({ thigh, knee, ankle });
   }
   const torso = limb(hips, 0, 0.04, 0);
-  const chest = add(torso, capsule(0.15, 0.26), shirt, 0, 0.27, 0);
-  chest.scale.set(1.25, 1, 0.8);
-  // Áo giáp: thân + túi đạn phía trước + đệm vai; nằm gọn trong hitbox thân.
-  const vest = add(torso, new THREE.CapsuleGeometry(0.18, 0.18, 4, 12), vestMat, 0, 0.29, 0);
-  vest.scale.set(1.55, 1, 1); // áo giáp bo tròn (rộng 0.56 × cao 0.54 × dày 0.36)
-  for (const x of [-0.16, 0, 0.16])
-    add(torso, new THREE.BoxGeometry(0.13, 0.15, 0.06), pouch, x, 0.16, -0.2);
-  add(torso, new THREE.BoxGeometry(0.4, 0.16, 0.05), pouch, 0, 0.42, -0.19); // tấm ngực
-  for (const side of [-1, 1]) {
-    const pad = add(torso, new THREE.SphereGeometry(0.12, 10, 8), vestMat, side * 0.25, 0.52, 0);
-    pad.scale.set(1, 0.6, 1.1);
-  }
-  add(torso, new THREE.CylinderGeometry(0.07, 0.08, 0.12, 10), shirt, 0, 0.6, 0); // cổ
-  // Đầu mèo + tai + nón.
+  mesh(torso, A.torso, bakedMat);
   const head = limb(torso, 0, 0.8, 0);
-  add(head, new THREE.BoxGeometry(0.46, 0.44, 0.42), headMaterials);
-  const earGeo = new THREE.ConeGeometry(0.075, 0.15, 4);
-  for (const side of [-1, 1]) {
-    const ear = add(head, earGeo, earMat, side * 0.25, 0.16, 0.04);
-    ear.rotation.set(0, Math.PI / 4, -side * 0.95); // tai thò ra hai bên dưới vành nón
-  }
-  const helmet = limb(head, 0, 0.12, 0);
-  const dome = add(helmet, new THREE.SphereGeometry(0.27, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat("#5f6c46"));
-  dome.scale.set(1, 0.72, 1.02);
-  add(helmet, new THREE.CylinderGeometry(0.3, 0.31, 0.04, 18), mat("#4a5537"), 0, 0, 0); // vành
+  mesh(head, A.head, headMaterial);
+  mesh(head, A.headgear, bakedMat);
   // Tay: vai → khuỷu → bàn tay; hướng được giải bằng IK mỗi khung hình.
   const arms = [];
   for (const side of [-1, 1]) {
     const shoulder = limb(torso, side * 0.26, 0.5, 0);
-    add(shoulder, capsule(0.055, UPPER_ARM - 0.1), shirt, 0, -UPPER_ARM / 2, 0);
+    mesh(shoulder, A.shoulder, bakedMat);
     const elbow = limb(shoulder, 0, -UPPER_ARM, 0);
-    add(elbow, capsule(0.05, FOREARM - 0.1), shirt, 0, -FOREARM / 2, 0);
-    add(elbow, new THREE.SphereGeometry(0.052, 8, 6), glove, 0, -FOREARM, 0);
+    mesh(elbow, A.elbow, bakedMat);
     arms.push({ shoulder, elbow, side });
   }
   // Giá súng gắn trên thân (theo thân khi nghiêng / khom).
   const weaponMount = limb(torso, 0.07, 0.33, -0.25);
   // Hitbox vô hình, trùng khớp server — dùng cho ngắm bắn phía client.
   const hitboxes = {};
-  const hitMat = new THREE.MeshBasicMaterial({ visible: false });
-  for (const [stance, set] of Object.entries(HITBOX)) {
+  for (const stance of Object.keys(HITBOX)) {
     const group = new THREE.Group();
-    for (const part of ["head", "torso", "legs"]) {
-      const { c, h } = set[part];
-      const m = add(group, new THREE.BoxGeometry(h[0] * 2, h[1] * 2, h[2] * 2), hitMat, ...c);
+    for (const { part, c, geo } of A.hitGeo[stance]) {
+      const m = mesh(group, geo, A.hitMat);
+      m.position.set(...c);
       m.userData.hitPart = part === "head" ? "head" : "body";
     }
     group.visible = false;
@@ -147,7 +298,8 @@ function solveArm(arm, target) {
   _d.subVectors(target, s);
   const L = Math.min(Math.max(_d.length(), 0.08), UPPER_ARM + FOREARM - 0.002);
   _d.normalize();
-  const cosA = (UPPER_ARM * UPPER_ARM + L * L - FOREARM * FOREARM) / (2 * UPPER_ARM * L);
+  const cosA =
+    (UPPER_ARM * UPPER_ARM + L * L - FOREARM * FOREARM) / (2 * UPPER_ARM * L);
   const a = Math.acos(Math.min(1, Math.max(-1, cosA)));
   // Khuỷu tay chĩa xuống dưới và ra ngoài.
   _hint.set(arm.side * 0.6, -1, 0.2).normalize();
@@ -172,8 +324,16 @@ export function poseAvatar(rig, pose, state, dt) {
   const speed = Math.min(state.speed || 0, 8);
   const moving = speed > 0.3;
   // Nhịp bước: 1 chu kỳ = 2 bước; bước dài hơn khi chạy.
-  const stride = stance === "crouch" ? 0.9 : stance === "prone" ? 0.7 : state.slow ? 1.0 : 1.5;
-  pose.phase = (pose.phase || 0) + (moving ? (speed / stride) * Math.PI * dt : 0);
+  const stride =
+    stance === "crouch"
+      ? 0.9
+      : stance === "prone"
+        ? 0.7
+        : state.slow
+          ? 1.0
+          : 1.5;
+  pose.phase =
+    (pose.phase || 0) + (moving ? (speed / stride) * Math.PI * dt : 0);
   const sinP = Math.sin(pose.phase),
     cosP = Math.cos(pose.phase);
   const run = !state.slow && speed > 4.5;
@@ -244,7 +404,10 @@ export function poseAvatar(rig, pose, state, dt) {
     leg.thigh.rotation.x = pose.thigh - s * pose.swing;
     // Gối gập (cẳng chân quặp về sau) khi chân đưa ra sau / nhấc lên.
     leg.knee.rotation.x = pose.knee - Math.max(0, s) * pose.kneeSwing;
-    leg.ankle.rotation.x = -(pose.thigh + pose.knee) * (stance === "seat" ? 0.4 : 0.5) * (stance === "crouch" ? 0.9 : 0.3);
+    leg.ankle.rotation.x =
+      -(pose.thigh + pose.knee) *
+      (stance === "seat" ? 0.4 : 0.5) *
+      (stance === "crouch" ? 0.9 : 0.3);
     leg.thigh.rotation.z = stance === "air" ? (i === 0 ? -0.35 : 0.35) : 0;
   });
   // Nạp đạn: hạ súng xuống, tay trái rời báng về phía băng đạn.
@@ -267,14 +430,21 @@ export function poseAvatar(rig, pose, state, dt) {
   // Tay: cầm súng (IK) hoặc tư thế riêng khi bay / lái xe / bơi.
   const grip = state.weaponGrip;
   rig.arms.forEach((arm, i) => {
-    if (grip && (stance === "stand" || stance === "crouch" || stance === "prone")) {
+    if (
+      grip &&
+      (stance === "stand" || stance === "crouch" || stance === "prone")
+    ) {
       // Điểm cầm (toạ độ của giá súng) → toạ độ thân.
       _t.copy(i === 1 ? grip.right : grip.left)
         .applyEuler(rig.weaponMount.rotation)
         .add(rig.weaponMount.position);
       solveArm(arm, _t);
     } else if (stance === "seat") {
-      _t.set(arm.side * (state.driver ? 0.2 : 0.18), state.driver ? 0.34 : 0.02, state.driver ? -0.42 : -0.3);
+      _t.set(
+        arm.side * (state.driver ? 0.2 : 0.18),
+        state.driver ? 0.34 : 0.02,
+        state.driver ? -0.42 : -0.3,
+      );
       solveArm(arm, _t);
     } else if (stance === "chute") {
       _t.set(arm.side * 0.3, 0.98, -0.05);
@@ -284,10 +454,18 @@ export function poseAvatar(rig, pose, state, dt) {
       solveArm(arm, _t);
     } else if (stance === "swim") {
       const s = Math.sin(pose.phase + i * Math.PI);
-      _t.set(arm.side * (0.3 + s * 0.15), 0.35, -0.35 - Math.cos(pose.phase + i * Math.PI) * 0.15);
+      _t.set(
+        arm.side * (0.3 + s * 0.15),
+        0.35,
+        -0.35 - Math.cos(pose.phase + i * Math.PI) * 0.15,
+      );
       solveArm(arm, _t);
     } else {
-      _t.set(arm.side * 0.3, 0.05 + (i ? sinP : -sinP) * 0.05, -0.05 - (i ? sinP : -sinP) * 0.12);
+      _t.set(
+        arm.side * 0.3,
+        0.05 + (i ? sinP : -sinP) * 0.05,
+        -0.05 - (i ? sinP : -sinP) * 0.12,
+      );
       solveArm(arm, _t);
     }
   });

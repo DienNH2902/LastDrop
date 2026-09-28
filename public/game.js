@@ -7,6 +7,7 @@ import {
   makeMuzzleFlash,
   fireMuzzleFlash,
   weaponToColoredGeometry,
+  buildBakedWeapon,
 } from "./weapons.js";
 import { buildAvatar, poseAvatar } from "./avatar.js";
 
@@ -80,7 +81,8 @@ const LOAD_TIPS = [
 ];
 function runLoader(duration) {
   const started = performance.now();
-  $("#loadTip").textContent = LOAD_TIPS[Math.floor(Math.random() * LOAD_TIPS.length)];
+  $("#loadTip").textContent =
+    LOAD_TIPS[Math.floor(Math.random() * LOAD_TIPS.length)];
   const tick = () => {
     const t = Math.min(1, (performance.now() - started) / duration);
     const pct = Math.round((1 - Math.pow(1 - t, 2.2)) * 100);
@@ -631,37 +633,150 @@ const GUNSHOT_PROFILES = {
 function playAugShot(a) {
   // AUG trong PUBG: phát nổ đanh, "chát" ở dải trung cao, thân tiếng dày,
   // đuôi ngắn dội nhẹ — nghe gọn và nhanh khi xả liên thanh.
-  noiseBurst(a, { duration: 0.012, filter: "highpass", freq: 5200, gain: 1.2, drive: 24 }); // tiếng nổ siêu thanh
-  noiseBurst(a, { at: 0.002, duration: 0.09, filter: "bandpass", freq: 1900, q: 0.9, gain: 1.35, drive: 14 }); // thân tiếng "chát"
-  noiseBurst(a, { at: 0.004, duration: 0.18, filter: "lowpass", freq: 900, gain: 0.9, drive: 6 }); // hơi nổ
+  noiseBurst(a, {
+    duration: 0.012,
+    filter: "highpass",
+    freq: 5200,
+    gain: 1.2,
+    drive: 24,
+  }); // tiếng nổ siêu thanh
+  noiseBurst(a, {
+    at: 0.002,
+    duration: 0.09,
+    filter: "bandpass",
+    freq: 1900,
+    q: 0.9,
+    gain: 1.35,
+    drive: 14,
+  }); // thân tiếng "chát"
+  noiseBurst(a, {
+    at: 0.004,
+    duration: 0.18,
+    filter: "lowpass",
+    freq: 900,
+    gain: 0.9,
+    drive: 6,
+  }); // hơi nổ
   toneBurst(a, { duration: 0.08, from: 190, to: 70, gain: 1.0 }); // cú đấm ngực
   toneBurst(a, { duration: 0.12, from: 90, to: 38, gain: 0.55 }); // sub
-  noiseBurst(a, { at: 0.11, duration: 0.16, filter: "bandpass", freq: 700, q: 0.8, gain: 0.22 }); // dội ngắn
-  toneBurst(a, { at: 0.004, duration: 0.03, type: "triangle", from: 3200, to: 2400, gain: 0.05 }); // tiếng kim loại khóa nòng
+  noiseBurst(a, {
+    at: 0.11,
+    duration: 0.16,
+    filter: "bandpass",
+    freq: 700,
+    q: 0.8,
+    gain: 0.22,
+  }); // dội ngắn
+  toneBurst(a, {
+    at: 0.004,
+    duration: 0.03,
+    type: "triangle",
+    from: 3200,
+    to: 2400,
+    gain: 0.05,
+  }); // tiếng kim loại khóa nòng
   gunshotReverbTail(a, { wet: 0.26, tone: 2400, predelay: 0.008 });
 }
 function playKarShot(a) {
   // Kar98k trong PUBG: "đoàng" cực to, trầm, vang xa, có tiếng vọng đập vào
   // địa hình rồi dội lại hai nhịp.
-  noiseBurst(a, { duration: 0.02, filter: "highpass", freq: 3600, gain: 1.3, drive: 26 });
-  noiseBurst(a, { at: 0.004, duration: 0.34, filter: "lowpass", freq: 1500, gain: 1.7, drive: 22 });
-  noiseBurst(a, { at: 0.004, duration: 0.12, filter: "bandpass", freq: 1200, q: 0.8, gain: 0.9, drive: 10 });
+  noiseBurst(a, {
+    duration: 0.02,
+    filter: "highpass",
+    freq: 3600,
+    gain: 1.3,
+    drive: 26,
+  });
+  noiseBurst(a, {
+    at: 0.004,
+    duration: 0.34,
+    filter: "lowpass",
+    freq: 1500,
+    gain: 1.7,
+    drive: 22,
+  });
+  noiseBurst(a, {
+    at: 0.004,
+    duration: 0.12,
+    filter: "bandpass",
+    freq: 1200,
+    q: 0.8,
+    gain: 0.9,
+    drive: 10,
+  });
   toneBurst(a, { duration: 0.38, from: 95, to: 28, gain: 1.4 });
   toneBurst(a, { at: 0.015, duration: 0.45, from: 48, to: 18, gain: 0.95 });
-  noiseBurst(a, { at: 0.22, duration: 0.42, filter: "lowpass", freq: 520, gain: 0.45 }); // vọng lần 1
-  noiseBurst(a, { at: 0.55, duration: 0.6, filter: "lowpass", freq: 380, gain: 0.22 }); // vọng lần 2
+  noiseBurst(a, {
+    at: 0.22,
+    duration: 0.42,
+    filter: "lowpass",
+    freq: 520,
+    gain: 0.45,
+  }); // vọng lần 1
+  noiseBurst(a, {
+    at: 0.55,
+    duration: 0.6,
+    filter: "lowpass",
+    freq: 380,
+    gain: 0.22,
+  }); // vọng lần 2
   gunshotReverbTail(a, { wet: 0.6, tone: 1100, predelay: 0.018 });
 }
 // Kéo khóa nòng Kar98k: "cách" mở, "rẹt" kéo lùi (vỏ đạn văng), "rẹt" đẩy, "cạch" khóa.
 function playKarBolt(position, delay = 0) {
-  const a = spatialAudio(position, { volume: 0.75, ...AUDIO_RANGE.reload, delay });
+  const a = spatialAudio(position, {
+    volume: 0.75,
+    ...AUDIO_RANGE.reload,
+    delay,
+  });
   if (!a) return;
-  noiseBurst(a, { duration: 0.025, filter: "bandpass", freq: 3200, q: 3, gain: 0.9 });
-  noiseBurst(a, { at: 0.09, duration: 0.09, filter: "bandpass", freq: 2100, q: 1.4, gain: 0.8 });
-  toneBurst(a, { at: 0.2, duration: 0.05, type: "triangle", from: 2600, to: 1900, gain: 0.08 }); // vỏ đạn leng keng
-  toneBurst(a, { at: 0.26, duration: 0.05, type: "triangle", from: 2300, to: 1700, gain: 0.05 });
-  noiseBurst(a, { at: 0.3, duration: 0.08, filter: "bandpass", freq: 2300, q: 1.4, gain: 0.8 });
-  noiseBurst(a, { at: 0.42, duration: 0.03, filter: "bandpass", freq: 2800, q: 3, gain: 1 });
+  noiseBurst(a, {
+    duration: 0.025,
+    filter: "bandpass",
+    freq: 3200,
+    q: 3,
+    gain: 0.9,
+  });
+  noiseBurst(a, {
+    at: 0.09,
+    duration: 0.09,
+    filter: "bandpass",
+    freq: 2100,
+    q: 1.4,
+    gain: 0.8,
+  });
+  toneBurst(a, {
+    at: 0.2,
+    duration: 0.05,
+    type: "triangle",
+    from: 2600,
+    to: 1900,
+    gain: 0.08,
+  }); // vỏ đạn leng keng
+  toneBurst(a, {
+    at: 0.26,
+    duration: 0.05,
+    type: "triangle",
+    from: 2300,
+    to: 1700,
+    gain: 0.05,
+  });
+  noiseBurst(a, {
+    at: 0.3,
+    duration: 0.08,
+    filter: "bandpass",
+    freq: 2300,
+    q: 1.4,
+    gain: 0.8,
+  });
+  noiseBurst(a, {
+    at: 0.42,
+    duration: 0.03,
+    filter: "bandpass",
+    freq: 2800,
+    q: 3,
+    gain: 1,
+  });
   toneBurst(a, { at: 0.42, duration: 0.06, from: 210, to: 100, gain: 0.35 });
 }
 // position: {x, y, z} của họng súng; null = súng của chính mình.
@@ -693,7 +808,11 @@ function footSurface(x, z) {
       dz = z - o.z,
       c = Math.cos(o.yaw || 0),
       sn = Math.sin(o.yaw || 0);
-    if (Math.abs(c * dx - sn * dz) < o.w / 2 && Math.abs(sn * dx + c * dz) < o.w / 2) return "wood";
+    if (
+      Math.abs(c * dx - sn * dz) < o.w / 2 &&
+      Math.abs(sn * dx + c * dz) < o.w / 2
+    )
+      return "wood";
   }
   if (isNearRoad(x, z, 0)) return "road";
   return mapId === "forest" ? "grass" : "sand";
@@ -711,27 +830,113 @@ function playSpatialFootstep(x, y, z, intensity = 1, ownPlayer = false) {
   const v = 0.92 + Math.random() * 0.16; // mỗi bước hơi khác nhau
   const surface = footSurface(x, z);
   // Gót chạm trước, mũi chân tiếp đất ngay sau (~55 ms).
-  for (const [at, g] of [[0, 1], [0.055, 0.55]]) {
+  for (const [at, g] of [
+    [0, 1],
+    [0.055, 0.55],
+  ]) {
     if (surface === "grass") {
       toneBurst(a, { at, duration: 0.06, from: 95 * v, to: 55, gain: 0.3 * g });
-      noiseBurst(a, { at, duration: 0.13, filter: "bandpass", freq: 2600 * v, q: 0.7, gain: 0.42 * g }); // cỏ sột soạt
-      noiseBurst(a, { at, duration: 0.06, filter: "lowpass", freq: 520, gain: 0.5 * g });
+      noiseBurst(a, {
+        at,
+        duration: 0.13,
+        filter: "bandpass",
+        freq: 2600 * v,
+        q: 0.7,
+        gain: 0.42 * g,
+      }); // cỏ sột soạt
+      noiseBurst(a, {
+        at,
+        duration: 0.06,
+        filter: "lowpass",
+        freq: 520,
+        gain: 0.5 * g,
+      });
     } else if (surface === "sand") {
-      noiseBurst(a, { at, duration: 0.15, filter: "highpass", freq: 2800 * v, gain: 0.3 * g }); // cát lạo xạo
-      noiseBurst(a, { at, duration: 0.08, filter: "lowpass", freq: 420, gain: 0.55 * g });
+      noiseBurst(a, {
+        at,
+        duration: 0.15,
+        filter: "highpass",
+        freq: 2800 * v,
+        gain: 0.3 * g,
+      }); // cát lạo xạo
+      noiseBurst(a, {
+        at,
+        duration: 0.08,
+        filter: "lowpass",
+        freq: 420,
+        gain: 0.55 * g,
+      });
     } else if (surface === "road") {
-      noiseBurst(a, { at, duration: 0.03, filter: "bandpass", freq: 1900 * v, q: 2, gain: 0.8 * g }); // đế giày gõ nhựa đường
-      toneBurst(a, { at, duration: 0.05, from: 120 * v, to: 70, gain: 0.3 * g });
-      noiseBurst(a, { at: at + 0.02, duration: 0.05, filter: "highpass", freq: 3500, gain: 0.15 * g });
+      noiseBurst(a, {
+        at,
+        duration: 0.03,
+        filter: "bandpass",
+        freq: 1900 * v,
+        q: 2,
+        gain: 0.8 * g,
+      }); // đế giày gõ nhựa đường
+      toneBurst(a, {
+        at,
+        duration: 0.05,
+        from: 120 * v,
+        to: 70,
+        gain: 0.3 * g,
+      });
+      noiseBurst(a, {
+        at: at + 0.02,
+        duration: 0.05,
+        filter: "highpass",
+        freq: 3500,
+        gain: 0.15 * g,
+      });
     } else if (surface === "wood") {
-      toneBurst(a, { at, duration: 0.09, from: 190 * v, to: 120, gain: 0.55 * g }); // sàn gỗ rỗng
-      noiseBurst(a, { at, duration: 0.05, filter: "bandpass", freq: 900 * v, q: 3, gain: 0.6 * g });
+      toneBurst(a, {
+        at,
+        duration: 0.09,
+        from: 190 * v,
+        to: 120,
+        gain: 0.55 * g,
+      }); // sàn gỗ rỗng
+      noiseBurst(a, {
+        at,
+        duration: 0.05,
+        filter: "bandpass",
+        freq: 900 * v,
+        q: 3,
+        gain: 0.6 * g,
+      });
     } else if (surface === "mud") {
-      noiseBurst(a, { at, duration: 0.14, filter: "lowpass", freq: 480 * v, gain: 0.8 * g }); // bùn nhóp nhép
-      noiseBurst(a, { at: at + 0.03, duration: 0.08, filter: "bandpass", freq: 320, q: 2, gain: 0.5 * g });
+      noiseBurst(a, {
+        at,
+        duration: 0.14,
+        filter: "lowpass",
+        freq: 480 * v,
+        gain: 0.8 * g,
+      }); // bùn nhóp nhép
+      noiseBurst(a, {
+        at: at + 0.03,
+        duration: 0.08,
+        filter: "bandpass",
+        freq: 320,
+        q: 2,
+        gain: 0.5 * g,
+      });
     } else {
-      noiseBurst(a, { at, duration: 0.24, filter: "lowpass", freq: 1700 * v, gain: 0.75 * g }); // lội nước
-      noiseBurst(a, { at: at + 0.04, duration: 0.14, filter: "bandpass", freq: 650, q: 1, gain: 0.45 * g });
+      noiseBurst(a, {
+        at,
+        duration: 0.24,
+        filter: "lowpass",
+        freq: 1700 * v,
+        gain: 0.75 * g,
+      }); // lội nước
+      noiseBurst(a, {
+        at: at + 0.04,
+        duration: 0.14,
+        filter: "bandpass",
+        freq: 650,
+        q: 1,
+        gain: 0.45 * g,
+      });
     }
   }
 }
@@ -743,7 +948,8 @@ function playSpatialReload(kind, position) {
     noiseBurst(a, { at, duration: 0.025, filter: "bandpass", freq, q, gain });
   const slide = (at, freq, duration = 0.08, gain = 0.7) =>
     noiseBurst(a, { at, duration, filter: "bandpass", freq, q: 1.3, gain });
-  const thud = (at, from, gain = 0.4) => toneBurst(a, { at, duration: 0.07, from, to: from / 2, gain });
+  const thud = (at, from, gain = 0.4) =>
+    toneBurst(a, { at, duration: 0.07, from, to: from / 2, gain });
   if (kind === "magRelease") {
     click(0, 3400, 0.7);
   } else if (kind === "magOut") {
@@ -753,7 +959,13 @@ function playSpatialReload(kind, position) {
     slide(0, 1400, 0.06, 0.6);
     click(0.06, 2600, 1.1, 2); // "cạch" băng vào khoá
     thud(0.06, 180, 0.6);
-    noiseBurst(a, { at: 0.075, duration: 0.03, filter: "highpass", freq: 4200, gain: 0.5 });
+    noiseBurst(a, {
+      at: 0.075,
+      duration: 0.03,
+      filter: "highpass",
+      freq: 4200,
+      gain: 0.5,
+    });
   } else if (kind === "charge") {
     slide(0, 2400, 0.07, 0.8); // kéo tay kéo lên đạn
     click(0.12, 3000, 1.1);
@@ -763,10 +975,24 @@ function playSpatialReload(kind, position) {
     slide(0.08, 2100, 0.09, 0.8);
   } else if (kind === "round") {
     click(0, 2900, 0.8, 4); // viên đạn ép xuống hộp
-    toneBurst(a, { at: 0.005, duration: 0.04, type: "triangle", from: 2100, to: 1600, gain: 0.05 });
+    toneBurst(a, {
+      at: 0.005,
+      duration: 0.04,
+      type: "triangle",
+      from: 2100,
+      to: 1600,
+      gain: 0.05,
+    });
   } else if (kind === "clipOut") {
     slide(0, 3000, 0.05, 0.5);
-    toneBurst(a, { at: 0.03, duration: 0.06, type: "triangle", from: 1800, to: 1200, gain: 0.06 });
+    toneBurst(a, {
+      at: 0.03,
+      duration: 0.06,
+      type: "triangle",
+      from: 1800,
+      to: 1200,
+      gain: 0.06,
+    });
   } else if (kind === "boltClose") {
     slide(0, 2300, 0.08, 0.8);
     click(0.1, 2800, 1.1);
@@ -777,7 +1003,9 @@ function playSpatialReload(kind, position) {
 // Vị trí được lấy lại ở mỗi tiếng nên âm thanh đi theo người đang nạp đạn,
 // và tự dừng nếu họ chết / thoát / ngừng nạp.
 function startReloadSounds(playerKey, weapon = "ranger") {
-  for (const stage of RELOAD_STAGES[weapon === "sniper" ? "sniper" : "ranger"]) {
+  for (const stage of RELOAD_STAGES[
+    weapon === "sniper" ? "sniper" : "ranger"
+  ]) {
     setTimeout(() => {
       if (playerKey === null) {
         if (local.reloading) playSpatialReload(stage.kind, null);
@@ -1181,8 +1409,12 @@ function connect(message) {
       return;
     }
     $("#status").textContent = "● MẤT KẾT NỐI";
-    if (inMatch) showLootToast("MẤT KẾT NỐI MÁY CHỦ · KIỂM TRA MẠNG RỒI VÀO LẠI PHÒNG");
-    else if (roomCode) alert("Mất kết nối tới máy chủ. Hãy kiểm tra mạng rồi tạo/vào lại phòng.");
+    if (inMatch)
+      showLootToast("MẤT KẾT NỐI MÁY CHỦ · KIỂM TRA MẠNG RỒI VÀO LẠI PHÒNG");
+    else if (roomCode)
+      alert(
+        "Mất kết nối tới máy chủ. Hãy kiểm tra mạng rồi tạo/vào lại phòng.",
+      );
   };
 }
 // ---- Đo ping (RTT) — dùng để dự đoán xe và hiện chất lượng mạng cho người chơi ----
@@ -1523,12 +1755,21 @@ function terrainColor(forest, x, z, h, slope, bed, swamp, seed, out) {
     out.set(n > 0.55 ? "#5c8a43" : n > 0.42 ? "#4f7d3c" : "#44703a");
     mix("#7d8a4a", Math.max(0, n2 - 0.62) * 1.6); // mảng cỏ úa
     if (h > 18) mix("#56654a", Math.min(1, (h - 18) / 22)); // cỏ núi sẫm
-    if (slope > 0.45) mix(n2 > 0.5 ? "#6d6f66" : "#5d6058", Math.min(1, (slope - 0.45) * 2.2)); // vách đá
+    if (slope > 0.45)
+      mix(n2 > 0.5 ? "#6d6f66" : "#5d6058", Math.min(1, (slope - 0.45) * 2.2)); // vách đá
     if (h > 34) mix("#7b7e78", Math.min(1, (h - 34) / 10));
-    if (h > 46) mix("#e8ecef", Math.min(1, (h - 46) / 8) * (slope < 1 ? 1 : 0.5)); // tuyết đỉnh núi
+    if (h > 46)
+      mix("#e8ecef", Math.min(1, (h - 46) / 8) * (slope < 1 ? 1 : 0.5)); // tuyết đỉnh núi
     if (swamp) out.set(n2 > 0.5 ? "#3d4a2b" : "#454f2e");
     if (bed > 0) out.set("#3e4b3a");
-    else if (h < 0.7 && waterBedDepth(x + 6, z) + waterBedDepth(x - 6, z) + waterBedDepth(x, z + 6) + waterBedDepth(x, z - 6) > 0)
+    else if (
+      h < 0.7 &&
+      waterBedDepth(x + 6, z) +
+        waterBedDepth(x - 6, z) +
+        waterBedDepth(x, z + 6) +
+        waterBedDepth(x, z - 6) >
+        0
+    )
       out.set("#7b7657"); // bãi bồi ven sông
   } else {
     out.set(n > 0.55 ? "#d2ae74" : n > 0.42 ? "#c9a46a" : "#bf975f");
@@ -1536,7 +1777,10 @@ function terrainColor(forest, x, z, h, slope, bed, swamp, seed, out) {
     if (slope > 0.3) {
       // Vách núi sa mạc: các lớp đá trầm tích theo độ cao.
       const band = Math.floor((h + n * 6) / 3.2) % 3;
-      mix(band === 0 ? "#b5794a" : band === 1 ? "#a3673f" : "#c48c58", Math.min(1, (slope - 0.3) * 2));
+      mix(
+        band === 0 ? "#b5794a" : band === 1 ? "#a3673f" : "#c48c58",
+        Math.min(1, (slope - 0.3) * 2),
+      );
     }
     if (h > 55) mix("#8d5e3c", Math.min(1, (h - 55) / 20));
   }
@@ -1649,7 +1893,8 @@ function ribbonGeometry(points, halfWidth, yFn) {
     dx /= len;
     dz /= len;
     const hw = typeof halfWidth === "function" ? halfWidth(i) : halfWidth;
-    if (i > 0) along += Math.hypot(p.x - points[i - 1].x, p.z - points[i - 1].z);
+    if (i > 0)
+      along += Math.hypot(p.x - points[i - 1].x, p.z - points[i - 1].z);
     for (const side of [-1, 1]) {
       const x = p.x + dz * hw * side,
         z = p.z - dx * hw * side;
@@ -1690,7 +1935,11 @@ function segmentLines(type, idKey, trim = 0) {
       const steps = Math.max(1, Math.round((half * 2) / 2.5));
       for (let k = 1; k <= steps; k++) {
         const t = k / steps;
-        pts.push({ x: s.x - sx + 2 * sx * t, z: s.z - sz + 2 * sz * t, seg: s });
+        pts.push({
+          x: s.x - sx + 2 * sx * t,
+          z: s.z - sz + 2 * sz * t,
+          seg: s,
+        });
       }
     });
     lines.push(pts);
@@ -1702,8 +1951,18 @@ function addRoadRibbons(forest) {
   for (const pts of segmentLines("road", "roadId", 0.6)) {
     const y = (lift) => (x, z) => groundHeightAt(x, z) + lift;
     const halfW = pts[0]?.seg.w / 2 || 4.5;
-    bucketAdd("road-shoulder", forest ? "#7c7563" : "#9a8a6c", ribbonGeometry(pts, halfW + 1.2, y(0.05)), noop);
-    bucketAdd("road-asphalt", forest ? "#4f4d46" : "#5e584e", ribbonGeometry(pts, halfW, y(0.085)), noop);
+    bucketAdd(
+      "road-shoulder",
+      forest ? "#7c7563" : "#9a8a6c",
+      ribbonGeometry(pts, halfW + 1.2, y(0.05)),
+      noop,
+    );
+    bucketAdd(
+      "road-asphalt",
+      forest ? "#4f4d46" : "#5e584e",
+      ribbonGeometry(pts, halfW, y(0.085)),
+      noop,
+    );
     // Vạch giữa đứt quãng.
     let run = 0;
     let dash = [];
@@ -1712,7 +1971,12 @@ function addRoadRibbons(forest) {
       const on = run % 5 < 2.2;
       if (on) dash.push(pts[i]);
       if ((!on || i === pts.length - 1) && dash.length > 1) {
-        bucketAdd("road-dash", "#d9d0a8", ribbonGeometry(dash, 0.09, y(0.11)), noop);
+        bucketAdd(
+          "road-dash",
+          "#d9d0a8",
+          ribbonGeometry(dash, 0.09, y(0.11)),
+          noop,
+        );
         dash = [];
       } else if (!on) dash = [];
     }
@@ -1720,18 +1984,28 @@ function addRoadRibbons(forest) {
   // Mặt cầu dày + trụ cầu xuống lòng sông.
   for (const s of mapObstacles) {
     if (s.type !== "road" || !s.bridge) continue;
-    bucketAdd("bridge-deck", "#6b6358", new THREE.BoxGeometry(s.w + 0.6, 0.4, s.length), (t) => {
-      t.position.set(s.x, groundHeightAt(s.x, s.z) - 0.18, s.z);
-      t.rotation.y = s.yaw;
-    });
+    bucketAdd(
+      "bridge-deck",
+      "#6b6358",
+      new THREE.BoxGeometry(s.w + 0.6, 0.4, s.length),
+      (t) => {
+        t.position.set(s.x, groundHeightAt(s.x, s.z) - 0.18, s.z);
+        t.rotation.y = s.yaw;
+      },
+    );
     for (const side of [-1, 1])
-      bucketAdd("bridge-deck", "#6b6358", new THREE.BoxGeometry(0.7, 5.2, 0.7), (t) => {
-        t.position.set(
-          s.x + Math.cos(s.yaw) * side * (s.w / 2 - 0.3),
-          -2.5,
-          s.z - Math.sin(s.yaw) * side * (s.w / 2 - 0.3),
-        );
-      });
+      bucketAdd(
+        "bridge-deck",
+        "#6b6358",
+        new THREE.BoxGeometry(0.7, 5.2, 0.7),
+        (t) => {
+          t.position.set(
+            s.x + Math.cos(s.yaw) * side * (s.w / 2 - 0.3),
+            -2.5,
+            s.z - Math.sin(s.yaw) * side * (s.w / 2 - 0.3),
+          );
+        },
+      );
   }
 }
 function addWaterSurfaces(forest) {
@@ -1744,7 +2018,11 @@ function addWaterSurfaces(forest) {
     opacity: 0.86,
   });
   for (const pts of segmentLines("river", "riverId", 6)) {
-    const geometry = ribbonGeometry(pts, (i) => pts[i].seg.w / 2 + 0.6, () => 0.05);
+    const geometry = ribbonGeometry(
+      pts,
+      (i) => pts[i].seg.w / 2 + 0.6,
+      () => 0.05,
+    );
     scene.add(new THREE.Mesh(geometry, riverMat));
   }
   // Đầm lầy: mặt nước đục màu rêu, nông (đi bộ được), kèm lau sậy từ addGrass().
@@ -1836,17 +2114,27 @@ function drawMapObject(o, forest) {
         sn = Math.sin(o.yaw || 0);
       const color = "#7a6a52";
       for (const y of [0.55, 1.02])
-        bucketAdd("fence", color, new THREE.BoxGeometry(0.09, 0.12, o.length), (t) => {
-          t.position.set(o.x, baseY + y, o.z);
-          t.rotation.y = o.yaw || 0;
-        });
+        bucketAdd(
+          "fence",
+          color,
+          new THREE.BoxGeometry(0.09, 0.12, o.length),
+          (t) => {
+            t.position.set(o.x, baseY + y, o.z);
+            t.rotation.y = o.yaw || 0;
+          },
+        );
       const posts = Math.max(1, Math.round(o.length / 2.4));
       for (let n = 0; n <= posts; n++) {
         const along = (n / posts - 0.5) * o.length;
-        bucketAdd("fence", color, new THREE.BoxGeometry(0.14, 1.2, 0.14), (t) => {
-          t.position.set(o.x + sn * along, baseY + 0.55, o.z + c * along);
-          t.rotation.y = o.yaw || 0;
-        });
+        bucketAdd(
+          "fence",
+          color,
+          new THREE.BoxGeometry(0.14, 1.2, 0.14),
+          (t) => {
+            t.position.set(o.x + sn * along, baseY + 0.55, o.z + c * along);
+            t.rotation.y = o.yaw || 0;
+          },
+        );
       }
       break;
     }
@@ -2033,14 +2321,23 @@ function drawMapObject(o, forest) {
           [0.1, 0.9, -0.1, 0.85],
         ];
         for (const [bx, by, bz, bs] of blobs)
-          bucketAdd("broadleaf-" + o.variant, leaf, new THREE.IcosahedronGeometry(1, 0), (t) => {
-            const r = w * 1.35 * bs;
-            const c = Math.cos(o.yaw || 0),
-              sn = Math.sin(o.yaw || 0);
-            t.position.set(o.x + (c * bx + sn * bz) * w * 1.4, baseY + o.h * by, o.z + (-sn * bx + c * bz) * w * 1.4);
-            t.scale.set(r, r * 0.8, r);
-            t.rotation.y = (o.yaw || 0) + bx;
-          });
+          bucketAdd(
+            "broadleaf-" + o.variant,
+            leaf,
+            new THREE.IcosahedronGeometry(1, 0),
+            (t) => {
+              const r = w * 1.35 * bs;
+              const c = Math.cos(o.yaw || 0),
+                sn = Math.sin(o.yaw || 0);
+              t.position.set(
+                o.x + (c * bx + sn * bz) * w * 1.4,
+                baseY + o.h * by,
+                o.z + (-sn * bx + c * bz) * w * 1.4,
+              );
+              t.scale.set(r, r * 0.8, r);
+              t.rotation.y = (o.yaw || 0) + bx;
+            },
+          );
       }
       break;
     }
@@ -2138,7 +2435,7 @@ function drawMapObject(o, forest) {
 function grassTuftGeometry(blades, height, seed) {
   const rnd = (() => {
     let s = seed >>> 0;
-    return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
+    return () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296;
   })();
   const pos = [],
     col = [],
@@ -2161,8 +2458,18 @@ function grassTuftGeometry(blades, height, seed) {
     const pts = [
       [ox - cx * w, 0, oz - cz * w, 0],
       [ox + cx * w, 0, oz + cz * w, 0],
-      [ox - cx * w * 0.7 + lx * 0.35, h * 0.55, oz - cz * w * 0.7 + lz * 0.35, 0.55],
-      [ox + cx * w * 0.7 + lx * 0.35, h * 0.55, oz + cz * w * 0.7 + lz * 0.35, 0.55],
+      [
+        ox - cx * w * 0.7 + lx * 0.35,
+        h * 0.55,
+        oz - cz * w * 0.7 + lz * 0.35,
+        0.55,
+      ],
+      [
+        ox + cx * w * 0.7 + lx * 0.35,
+        h * 0.55,
+        oz + cz * w * 0.7 + lz * 0.35,
+        0.55,
+      ],
       [ox + lx, h, oz + lz, 1],
     ];
     for (const [x, y, z, t] of pts) {
@@ -2170,7 +2477,17 @@ function grassTuftGeometry(blades, height, seed) {
       const c = base.clone().lerp(tip, t);
       col.push(c.r, c.g, c.b);
     }
-    index.push(v0, v0 + 1, v0 + 2, v0 + 1, v0 + 3, v0 + 2, v0 + 2, v0 + 3, v0 + 4);
+    index.push(
+      v0,
+      v0 + 1,
+      v0 + 2,
+      v0 + 1,
+      v0 + 3,
+      v0 + 2,
+      v0 + 2,
+      v0 + 3,
+      v0 + 4,
+    );
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
@@ -2181,16 +2498,21 @@ function grassTuftGeometry(blades, height, seed) {
 }
 function nearHouse(x, z, margin) {
   for (const o of obstaclesNear(x, z))
-    if ((o.type === "house" || o.type === "hut") && Math.hypot(o.x - x, o.z - z) < o.w * 0.72 + margin)
+    if (
+      (o.type === "house" || o.type === "hut") &&
+      Math.hypot(o.x - x, o.z - z) < o.w * 0.72 + margin
+    )
       return true;
   return false;
 }
 function addGrass(forest) {
   const lowQuality = $("#quality")?.value === "Performance";
   GRASS_VIEW_DISTANCE = lowQuality ? 50 : 75;
-  const seed = (mapObstacles.find((o) => o.type === "terrain")?.seed || 1) >>> 0;
+  const seed =
+    (mapObstacles.find((o) => o.type === "terrain")?.seed || 1) >>> 0;
   let s = seed ^ 0x9e3779b9;
-  const rand = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
+  const rand = () =>
+    (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296;
   const material = new THREE.MeshLambertMaterial({
     vertexColors: true,
     side: THREE.DoubleSide,
@@ -2221,7 +2543,14 @@ function addGrass(forest) {
       if (Math.abs(x) < 6 && Math.abs(z) < 12) continue; // khu chờ đầu trận
       if (waterBedDepth(x, z) > 0) continue;
       if (forest && inSwamp(x, z)) {
-        if (r < 0.7) push("reed", x, z, 0.8 + rand() * 0.6, tint.setHSL(0.17 + rand() * 0.04, 0.35, 0.3 + rand() * 0.12));
+        if (r < 0.7)
+          push(
+            "reed",
+            x,
+            z,
+            0.8 + rand() * 0.6,
+            tint.setHSL(0.17 + rand() * 0.04, 0.35, 0.3 + rand() * 0.12),
+          );
         continue;
       }
       if (isNearRoad(x, z, 0.9) || nearHouse(x, z, 0.3)) continue;
@@ -2230,15 +2559,36 @@ function addGrass(forest) {
       if (forest) {
         // Thưa dần lên cao, không mọc trên vách đá / đỉnh núi.
         if (slope > 0.55 || h > 40 || r > 1 - Math.min(0.85, h / 48)) {
-        } else push("grass", x, z, 0.75 + rand() * 0.7, tint.setHSL(0.22 + rand() * 0.07, 0.45 + rand() * 0.2, 0.55 + rand() * 0.25));
+        } else
+          push(
+            "grass",
+            x,
+            z,
+            0.75 + rand() * 0.7,
+            tint.setHSL(
+              0.22 + rand() * 0.07,
+              0.45 + rand() * 0.2,
+              0.55 + rand() * 0.25,
+            ),
+          );
       } else if (slope < 0.35 && h < 24 && r < 0.55) {
-        push("grass", x, z, 0.6 + rand() * 0.5, tint.setHSL(0.11 + rand() * 0.03, 0.35, 0.6 + rand() * 0.15));
+        push(
+          "grass",
+          x,
+          z,
+          0.6 + rand() * 0.5,
+          tint.setHSL(0.11 + rand() * 0.03, 0.35, 0.6 + rand() * 0.15),
+        );
       }
     }
   grassChunks = [];
   for (const kind of Object.values(kinds))
     for (const chunk of kind.chunks.values()) {
-      const mesh = new THREE.InstancedMesh(kind.geometry, material, chunk.matrices.length);
+      const mesh = new THREE.InstancedMesh(
+        kind.geometry,
+        material,
+        chunk.matrices.length,
+      );
       chunk.matrices.forEach((matrix, index) => {
         mesh.setMatrixAt(index, matrix);
         mesh.setColorAt(index, chunk.colors[index]);
@@ -2263,12 +2613,15 @@ function updateGrassVisibility() {
   grassCheckAt = now + 200;
   const high =
     local.state === "plane" ||
-    camera.position.y - groundHeightAt(camera.position.x, camera.position.z) > 60;
+    camera.position.y - groundHeightAt(camera.position.x, camera.position.z) >
+      60;
   for (const mesh of grassChunks) {
     const sphere = mesh.boundingSphere;
     const d =
-      Math.hypot(sphere.center.x - camera.position.x, sphere.center.z - camera.position.z) -
-      sphere.radius;
+      Math.hypot(
+        sphere.center.x - camera.position.x,
+        sphere.center.z - camera.position.z,
+      ) - sphere.radius;
     mesh.visible = !high && d < GRASS_VIEW_DISTANCE;
   }
 }
@@ -2537,7 +2890,8 @@ function buildCarMesh(vehicle, forest) {
 // sử vị trí 1 s (claimAlong) nên bắn trúng thứ mình nhìn thấy vẫn được tính.
 const INTERP_DELAY_MS = 100;
 const MAX_EXTRAPOLATE_MS = 150;
-const angleDelta = (from, to) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
+const angleDelta = (from, to) =>
+  Math.atan2(Math.sin(to - from), Math.cos(to - from));
 function pushSnapshot(list, snap, teleportDistance = 8) {
   const last = list[list.length - 1];
   if (last) {
@@ -2570,7 +2924,8 @@ function sampleSnapshots(list, renderT, out) {
     // Gói kế tiếp tới muộn: ngoại suy ngắn theo vận tốc gần nhất rồi dừng.
     a = list[n - 2];
     b = last;
-    k = 1 + Math.min(renderT - b.t, MAX_EXTRAPOLATE_MS) / Math.max(1, b.t - a.t);
+    k =
+      1 + Math.min(renderT - b.t, MAX_EXTRAPOLATE_MS) / Math.max(1, b.t - a.t);
   } else {
     let i = n - 1;
     while (i > 1 && list[i - 1].t > renderT) i--;
@@ -2601,10 +2956,14 @@ function carInputs() {
 function stepCar(state, input, dt) {
   if (input.brake) state.speed *= Math.max(0, 1 - 7 * dt);
   else if (input.throttle)
-    state.speed = Math.max(-7, Math.min(22, state.speed + input.throttle * 8 * dt));
+    state.speed = Math.max(
+      -7,
+      Math.min(22, state.speed + input.throttle * 8 * dt),
+    );
   else state.speed *= Math.max(0, 1 - 0.8 * dt);
   const speedFactor = Math.min(1, Math.abs(state.speed) / 4);
-  state.yaw += input.steer * 1.35 * speedFactor * dt * (state.speed < 0 ? -1 : 1);
+  state.yaw +=
+    input.steer * 1.35 * speedFactor * dt * (state.speed < 0 ? -1 : 1);
   state.x -= Math.sin(state.yaw) * state.speed * dt;
   state.z -= Math.cos(state.yaw) * state.speed * dt;
 }
@@ -2612,7 +2971,12 @@ function reconcileDrive(vehicle) {
   // Gói server phản ánh phím đã gửi khoảng 1 RTT trước: tua trạng thái server
   // tiến lên đúng khoảng đó bằng phím hiện tại để ra "hiện tại" của máy mình.
   const lead = Math.min(0.3, (rttMs || 60) / 1000 + 0.025);
-  const next = { x: vehicle.x, z: vehicle.z, yaw: vehicle.yaw, speed: vehicle.speed };
+  const next = {
+    x: vehicle.x,
+    z: vehicle.z,
+    yaw: vehicle.yaw,
+    speed: vehicle.speed,
+  };
   const input = carInputs();
   for (let left = lead; left > 1e-4; left -= 1 / 60)
     stepCar(next, input, Math.min(1 / 60, left));
@@ -2624,7 +2988,8 @@ function reconcileDrive(vehicle) {
     driveSim.oz = shownZ - next.z;
     driveSim.oyaw = angleDelta(next.yaw, shownYaw);
     // Lệch quá xa (va chạm mạnh, xe chìm...) thì chấp nhận nhảy ngay.
-    if (Math.hypot(driveSim.ox, driveSim.oz) > 5) driveSim.ox = driveSim.oz = driveSim.oyaw = 0;
+    if (Math.hypot(driveSim.ox, driveSim.oz) > 5)
+      driveSim.ox = driveSim.oz = driveSim.oyaw = 0;
     Object.assign(driveSim, next);
   } else {
     driveSim = { id: vehicle.id, ...next, ox: 0, oz: 0, oyaw: 0 };
@@ -2793,18 +3158,24 @@ function updateLocalVehicleView() {
     const shownSpeed =
       driveSim && driveSim.id === vehicle.id ? driveSim.speed : vehicle.speed;
     setText($("#vehicleSpeed"), Math.round(Math.abs(shownSpeed) * 3.6));
-    setText($("#vehicleHP"), vehicle.submerged
-      ? "XE CHÌM · ĐỘNG CƠ ĐÃ TẮT"
-      : vehicle.destroyed
-        ? "XE ĐÃ NỔ · CỐ ĐỊNH"
-        : `XE ${Math.round(vehicle.hp)}/60 HP${vehicle.smoke >= 2 ? " · KHÓI DÀY" : vehicle.smoke ? " · ĐANG BỐC KHÓI" : ""}`);
-    setText($("#vehicleStatus"), vehicle.submerged
-      ? "XE CHÌM · ĐỘNG CƠ ĐÃ TẮT"
-      : vehicle.destroyed
-        ? "XE ĐÃ CHÁY"
-        : local.vehicleSeat === 0
-          ? "TÀI XẾ · CLICK BÓP KÈN"
-          : "HÀNH KHÁCH · F ĐỂ XUỐNG");
+    setText(
+      $("#vehicleHP"),
+      vehicle.submerged
+        ? "XE CHÌM · ĐỘNG CƠ ĐÃ TẮT"
+        : vehicle.destroyed
+          ? "XE ĐÃ NỔ · CỐ ĐỊNH"
+          : `XE ${Math.round(vehicle.hp)}/60 HP${vehicle.smoke >= 2 ? " · KHÓI DÀY" : vehicle.smoke ? " · ĐANG BỐC KHÓI" : ""}`,
+    );
+    setText(
+      $("#vehicleStatus"),
+      vehicle.submerged
+        ? "XE CHÌM · ĐỘNG CƠ ĐÃ TẮT"
+        : vehicle.destroyed
+          ? "XE ĐÃ CHÁY"
+          : local.vehicleSeat === 0
+            ? "TÀI XẾ · CLICK BÓP KÈN"
+            : "HÀNH KHÁCH · F ĐỂ XUỐNG",
+    );
     $("#vehicleHud").classList.toggle("vehicle-damaged", vehicle.smoke > 0);
   }
 }
@@ -2884,7 +3255,10 @@ function initWorld() {
   kar.visible = false;
   gun.add(kar);
   const flashes = {};
-  for (const [key, model] of [["ranger", aug], ["sniper", kar]]) {
+  for (const [key, model] of [
+    ["ranger", aug],
+    ["sniper", kar],
+  ]) {
     const flash = makeMuzzleFlash(key === "sniper" ? 1.25 : 0.95);
     flash.position.copy(model.userData.muzzle);
     model.add(flash);
@@ -2894,7 +3268,10 @@ function initWorld() {
     mag.userData.baseRot = mag.rotation.clone();
   }
   gun.userData.magazine = aug.userData.magazine;
-  gun.userData.magazines = { ranger: aug.userData.magazine, sniper: kar.userData.magazine };
+  gun.userData.magazines = {
+    ranger: aug.userData.magazine,
+    sniper: kar.userData.magazine,
+  };
   gun.userData.rangerParts = [aug];
   gun.userData.sniper = kar;
   gun.userData.flashes = flashes;
@@ -2988,42 +3365,46 @@ const remoteMeshes = new Map();
 // Đầu mèo 3D dùng chung cho mọi nhân vật: 1 ảnh cho mỗi mặt (trước/sau/2 bên/trên/dưới)
 // cắt ra từ đúng ảnh mèo người dùng gửi, để nhìn góc nào cũng ra hình con mèo đó
 // chứ không phải một mặt phẳng dán phía trước.
-const catHeadLoader = new THREE.TextureLoader();
-// Ảnh mặt trước/sau đã thu về 512 px JPEG (trước là PNG 1254 px, ~7 MB tải về
-// và ~12 MB bộ nhớ GPU cho một cái đầu 0.5 m trên màn hình).
-const loadHeadTex = (name) => {
-  const ext = name.endsWith("-zoom") ? "jpg" : "png";
-  const tex = catHeadLoader.load(`/cat-head-${name}.${ext}`);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-};
-
-// Tạo texture cho mặt bên phải
-const sideRightTex = loadHeadTex("side");
-
-// Tạo texture cho mặt bên trái và LẬT NGANG (Mirror)
-const sideLeftTex = loadHeadTex("side").clone();
-sideLeftTex.center.set(0.5, 0.5); // Đặt tâm xoay/lật vào giữa ảnh
-sideLeftTex.repeat.x = -1; // Lật ngược chiều ngang (Horizontal Flip)
-sideLeftTex.needsUpdate = true;
-
-const topTex = loadHeadTex("top");
-topTex.center.set(0.5, 0.5);
-topTex.rotation = Math.PI; // Xoay 180° để mặt trước quay về phía trước
-
-// Thứ tự material của THREE.BoxGeometry: [+X phải, -X trái, +Y trên, -Y dưới, +Z sau, -Z trước]
-const catHeadMaterials = [
-  new THREE.MeshLambertMaterial({ map: sideRightTex }), // +X: Bên phải
-  new THREE.MeshLambertMaterial({ map: sideLeftTex }), // -X: Bên trái (đã lật)
-  new THREE.MeshLambertMaterial({ map: topTex }),
-  new THREE.MeshLambertMaterial({ map: loadHeadTex("bottom") }),
-  new THREE.MeshLambertMaterial({
-    map: loadHeadTex("back-zoom"),
-  }),
-  new THREE.MeshLambertMaterial({
-    map: loadHeadTex("face-zoom"),
-  }),
-];
+// Đầu mèo: 6 ảnh (phải, trái lật gương, trên xoay 180°, dưới, sau, mặt) được
+// vẽ vào MỘT texture atlas 3×2 → cái đầu chỉ tốn 1 lần vẽ thay vì 6.
+const HEAD_ATLAS_CELL = 256;
+const headAtlasCanvas = document.createElement("canvas");
+headAtlasCanvas.width = HEAD_ATLAS_CELL * 3;
+headAtlasCanvas.height = HEAD_ATLAS_CELL * 2;
+const headAtlasTexture = new THREE.CanvasTexture(headAtlasCanvas);
+headAtlasTexture.colorSpace = THREE.SRGBColorSpace;
+[
+  ["side", "none"],
+  ["side", "mirror"],
+  ["top", "rotate"],
+  ["bottom", "none"],
+  ["back-zoom", "none"],
+  ["face-zoom", "none"],
+].forEach(([name, transform], face) => {
+  const img = new Image();
+  img.onload = () => {
+    const ctx = headAtlasCanvas.getContext("2d");
+    const S = HEAD_ATLAS_CELL;
+    const x = (face % 3) * S,
+      y = Math.floor(face / 3) * S;
+    ctx.save();
+    if (transform === "mirror") {
+      ctx.translate(x + S, y);
+      ctx.scale(-1, 1);
+    } else if (transform === "rotate") {
+      ctx.translate(x + S, y + S);
+      ctx.rotate(Math.PI);
+    } else ctx.translate(x, y);
+    ctx.drawImage(img, 0, 0, S, S);
+    ctx.restore();
+    headAtlasTexture.needsUpdate = true;
+  };
+  img.src = `/cat-head-${name}.${name.endsWith("-zoom") ? "jpg" : "png"}`;
+});
+const catHeadMaterials = new THREE.MeshLambertMaterial({
+  map: headAtlasTexture,
+});
+catHeadMaterials.userData.headAtlas = true;
 const catEarMat = makeMat("#8a8175");
 
 // Hạt máu dùng chung 1 geometry + 2 material và được tái sử dụng; trước đây mỗi
@@ -3299,8 +3680,8 @@ function renderPlayers(state) {
       // trên tay với tia lửa đầu nòng dựng sẵn (chỉ bật/tắt khi bắn).
       const { root, rig } = buildAvatar(catHeadMaterials, catEarMat);
       mesh = root;
-      const weapon = buildAug();
-      const sniperWeapon = buildKar98();
+      const weapon = buildBakedWeapon("ranger", mergeGeometries);
+      const sniperWeapon = buildBakedWeapon("sniper", mergeGeometries);
       rig.weaponMount.add(weapon, sniperWeapon);
       const muzzleFlash = makeMuzzleFlash(1);
       muzzleFlash.position.copy(weapon.userData.muzzle);
@@ -3308,29 +3689,20 @@ function renderPlayers(state) {
       const sniperFlash = makeMuzzleFlash(1.3);
       sniperFlash.position.copy(sniperWeapon.userData.muzzle);
       sniperWeapon.add(sniperFlash);
-      // Vòng xoay báo đang nạp đạn (trên nón).
-      const reloadIndicator = new THREE.Group();
+      // Vòng nạp đạn và chữ thập hồi máu: mỗi cái là MỘT mesh dùng chung geometry.
+      const indicators = indicatorAssets();
+      const reloadIndicator = new THREE.Mesh(
+        indicators.ring,
+        indicators.ringMat,
+      );
       reloadIndicator.rotation.x = Math.PI / 2;
-      const dashMaterial = new THREE.MeshBasicMaterial({ color: 0xd6ff45, toneMapped: false });
-      const dashGeometry = new THREE.BoxGeometry(0.13, 0.1, 0.11);
-      for (let dash = 0; dash < 12; dash++) {
-        const angle = (dash / 12) * Math.PI * 2;
-        const segment = new THREE.Mesh(dashGeometry, dashMaterial);
-        segment.position.set(Math.cos(angle) * 0.3, 0, Math.sin(angle) * 0.3);
-        segment.rotation.y = -angle;
-        reloadIndicator.add(segment);
-      }
       reloadIndicator.position.set(0, 2.35, 0);
+      reloadIndicator.visible = false;
       mesh.add(reloadIndicator);
-      // Chữ thập đỏ xoay trên đầu khi đối phương đang hồi máu.
-      const healIndicator = new THREE.Group();
-      const healMaterial = new THREE.MeshBasicMaterial({ color: 0xff4d5e, toneMapped: false });
-      for (const [w, h, d] of [
-        [0.52, 0.14, 0.14],
-        [0.14, 0.52, 0.14],
-        [0.14, 0.14, 0.52],
-      ])
-        healIndicator.add(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), healMaterial));
+      const healIndicator = new THREE.Mesh(
+        indicators.cross,
+        indicators.crossMat,
+      );
       healIndicator.position.set(0, 2.35, 0);
       healIndicator.visible = false;
       mesh.add(healIndicator);
@@ -3441,7 +3813,9 @@ function renderPlayers(state) {
       mesh.userData.flashUntil = nowMs + (p.weapon === "sniper" ? 60 : 45);
       mesh.userData.kickUntil = nowMs + 90;
       fireMuzzleFlash(
-        p.weapon === "sniper" ? mesh.userData.sniperFlash : mesh.userData.muzzleFlash,
+        p.weapon === "sniper"
+          ? mesh.userData.sniperFlash
+          : mesh.userData.muzzleFlash,
       );
       mesh.userData.lastGunshotAt = nowMs;
       const soundBaseY = p.swimming ? p.swimY || 0 : p.groundY || 0;
@@ -3457,7 +3831,8 @@ function renderPlayers(state) {
           p.weapon === "sniper" ? "sniper" : "rifle",
         );
       }
-      if (p.weapon === "sniper") playKarBolt({ x: p.x, y: muzzleY, z: p.z }, 0.5);
+      if (p.weapon === "sniper")
+        playKarBolt({ x: p.x, y: muzzleY, z: p.z }, 0.5);
     }
     mesh.userData.weaponKind = p.weapon === "sniper" ? "sniper" : "ranger";
     mesh.userData.driver = p.vehicleSeat === 0;
@@ -3468,9 +3843,8 @@ function renderPlayers(state) {
       scene.remove(m);
       remoteMeshes.delete(id);
       // Giải phóng geometry riêng của avatar; material dùng chung thì giữ lại.
-      m.traverse((o) => {
-        if (o.geometry && o.geometry !== bloodGeometry) o.geometry.dispose();
-      });
+      // Geometry nhân vật / súng / chỉ báo dùng chung giữa mọi người chơi nên
+      // KHÔNG dispose ở đây (những người khác vẫn đang dùng).
     }
   setText($("#healthText"), local.hp);
   setStyle($("#healthBar"), "width", local.hp + "%");
@@ -3641,7 +4015,10 @@ function buildLootAssets() {
     coloredPart(new THREE.CylinderGeometry(r, r, h, seg), color, setup);
   // Súng rơi dưới đất = đúng mô hình AUG / Kar98k đang cầm, gộp thành 1 geometry.
   const weapon = (sniper) =>
-    weaponToColoredGeometry(sniper ? buildKar98() : buildAug(), mergeGeometries);
+    weaponToColoredGeometry(
+      sniper ? buildKar98() : buildAug(),
+      mergeGeometries,
+    );
   const medParts = [box(0.5, 0.34, 0.34, "#f2f2ec")];
   const bar = (w, h, d, x, y, z) =>
     medParts.push(box(w, h, d, "#d8202f", (o) => o.position.set(x, y, z)));
@@ -4211,7 +4588,11 @@ function updateGunPose(dt) {
     let lift = 0,
       back = 0;
     if (local.weapon === "sniper" && reloading) {
-      const open = Math.min(1, reloadProgress / 0.1, (1 - reloadProgress) / 0.1);
+      const open = Math.min(
+        1,
+        reloadProgress / 0.1,
+        (1 - reloadProgress) / 0.1,
+      );
       lift = open;
       back = open;
     } else {
@@ -5016,7 +5397,9 @@ function updateAutoFire() {
   const interval = currentFireInterval();
   // Sau một lần khựng dài thì không xả bù cả loạt đạn cùng lúc.
   nextAutoShotAt =
-    now - nextAutoShotAt > interval ? now + interval : nextAutoShotAt + interval;
+    now - nextAutoShotAt > interval
+      ? now + interval
+      : nextAutoShotAt + interval;
   shootOnce();
 }
 
@@ -5038,7 +5421,11 @@ function findAimedPlayer(eye, dir) {
     mesh.updateMatrixWorld(true);
     const hit = aimRaycaster.intersectObject(set, true)[0];
     if (hit && (!best || hit.distance < best.dist))
-      best = { id, part: hit.object.userData.hitPart || "body", dist: hit.distance };
+      best = {
+        id,
+        part: hit.object.userData.hitPart || "body",
+        dist: hit.distance,
+      };
   }
   return best;
 }
@@ -5088,10 +5475,12 @@ function shootOnce() {
     muzzleFlashOffAt = performance.now() + 45;
   }
   // Tia lửa đầu nòng (mesh có sẵn, chỉ bật lên ~40 ms).
-  const fpFlash = gun?.userData.flashes?.[local.weapon === "sniper" ? "sniper" : "ranger"];
+  const fpFlash =
+    gun?.userData.flashes?.[local.weapon === "sniper" ? "sniper" : "ranger"];
   if (fpFlash) {
     fireMuzzleFlash(fpFlash);
-    muzzleFlashOffAt = performance.now() + (local.weapon === "sniper" ? 55 : 40);
+    muzzleFlashOffAt =
+      performance.now() + (local.weapon === "sniper" ? 55 : 40);
   }
   if (local.weapon === "sniper" && gun) {
     // Kar98k: kéo khóa nòng sau mỗi phát (hình + tiếng).
@@ -5150,7 +5539,11 @@ function onScopeWheel(event) {
   if (!scoped || local.weapon !== "sniper") return;
   event.preventDefault();
   // Ống ngắm Kar98k có thể chỉnh 4x → 8x như trong PUBG.
-  const zoom = clamp(Math.round(baseFov / sniperZoomFov) - Math.sign(event.deltaY), 4, 8);
+  const zoom = clamp(
+    Math.round(baseFov / sniperZoomFov) - Math.sign(event.deltaY),
+    4,
+    8,
+  );
   sniperZoomFov = baseFov / zoom;
   camera.fov = sniperZoomFov;
   camera.updateProjectionMatrix();
@@ -5213,7 +5606,8 @@ function makeTracer(eye, direction) {
     muzzle.copy(eye).addScaledVector(direction, 0.25);
   } else {
     // Vệt đạn xuất phát đúng đầu nòng của mô hình súng đang cầm.
-    const fpFlash = gun?.userData.flashes?.[local.weapon === "sniper" ? "sniper" : "ranger"];
+    const fpFlash =
+      gun?.userData.flashes?.[local.weapon === "sniper" ? "sniper" : "ranger"];
     if (fpFlash) {
       fpFlash.parent.updateMatrixWorld(true);
       fpFlash.getWorldPosition(muzzle);
@@ -5544,10 +5938,47 @@ function updatePlaneObject(dt) {
 }
 // Người chơi khác: đứng trong khoang theo chỗ ngồi, hoặc lướt mượt tới vị trí bay mới nhất.
 const remoteSample = { x: 0, y: 0, z: 0, yaw: 0 };
+// Geometry vòng nạp đạn (12 vạch) và chữ thập hồi máu, gộp sẵn và dùng chung.
+let indicatorCache = null;
+function indicatorAssets() {
+  if (indicatorCache) return indicatorCache;
+  const dashes = [];
+  for (let dash = 0; dash < 12; dash++) {
+    const angle = (dash / 12) * Math.PI * 2;
+    const box = new THREE.BoxGeometry(0.13, 0.1, 0.11);
+    box.rotateY(-angle);
+    box.translate(Math.cos(angle) * 0.3, 0, Math.sin(angle) * 0.3);
+    dashes.push(box);
+  }
+  const cross = [
+    [0.52, 0.14, 0.14],
+    [0.14, 0.52, 0.14],
+    [0.14, 0.14, 0.52],
+  ].map(([w, h, d]) => new THREE.BoxGeometry(w, h, d));
+  indicatorCache = {
+    ring: mergeGeometries(dashes, false),
+    ringMat: new THREE.MeshBasicMaterial({
+      color: 0xd6ff45,
+      toneMapped: false,
+    }),
+    cross: mergeGeometries(cross, false),
+    crossMat: new THREE.MeshBasicMaterial({
+      color: 0xff4d5e,
+      toneMapped: false,
+    }),
+  };
+  return indicatorCache;
+}
 // Điểm hai tay cầm trên mỗi khẩu (toạ độ của mô hình súng, xem weapons.js).
 const WEAPON_GRIPS = {
-  ranger: { right: new THREE.Vector3(0, -0.1, -0.02), left: new THREE.Vector3(0, -0.13, -0.2) },
-  sniper: { right: new THREE.Vector3(0, -0.07, 0.1), left: new THREE.Vector3(0, -0.05, -0.26) },
+  ranger: {
+    right: new THREE.Vector3(0, -0.1, -0.02),
+    left: new THREE.Vector3(0, -0.13, -0.2),
+  },
+  sniper: {
+    right: new THREE.Vector3(0, -0.07, 0.1),
+    left: new THREE.Vector3(0, -0.05, -0.26),
+  },
 };
 // Dựng tư thế + hoạt ảnh cho người chơi khác mỗi khung hình (sau khi đã nội
 // suy vị trí). Tốc độ lấy từ chính chuyển động đang hiển thị nên bước chân
@@ -5589,7 +6020,8 @@ function animateAvatars(dt) {
         slow: ud.slowWalking,
         reloading: ud.reloading,
         driver: ud.driver,
-        kick: now < ud.kickUntil ? (ud.weaponKind === "sniper" ? 0.16 : 0.06) : 0,
+        kick:
+          now < ud.kickUntil ? (ud.weaponKind === "sniper" ? 0.16 : 0.06) : 0,
         weaponGrip: armed ? WEAPON_GRIPS[ud.weaponKind || "ranger"] : null,
       },
       dt,
@@ -5918,8 +6350,20 @@ function minimapBase(S, forest, k, X, Y) {
   const img = ctx.createImageData(S, S);
   const c = new THREE.Color();
   const ramp = forest
-    ? [[0, "#5a8a47"], [8, "#4c7a3d"], [20, "#5d6f4a"], [32, "#7d7f74"], [48, "#e6eaec"]]
-    : [[0, "#d0ac72"], [10, "#c79b62"], [28, "#b27a4c"], [50, "#93613f"], [80, "#7b5236"]];
+    ? [
+        [0, "#5a8a47"],
+        [8, "#4c7a3d"],
+        [20, "#5d6f4a"],
+        [32, "#7d7f74"],
+        [48, "#e6eaec"],
+      ]
+    : [
+        [0, "#d0ac72"],
+        [10, "#c79b62"],
+        [28, "#b27a4c"],
+        [50, "#93613f"],
+        [80, "#7b5236"],
+      ];
   const c2 = new THREE.Color();
   for (let py = 0; py < S; py++)
     for (let px = 0; px < S; px++) {
@@ -5928,13 +6372,20 @@ function minimapBase(S, forest, k, X, Y) {
       const h = mapTerrain ? mapTerrain.heightAt(x, z) : 0;
       let i = 0;
       while (i < ramp.length - 2 && h > ramp[i + 1][0]) i++;
-      const t = Math.min(1, Math.max(0, (h - ramp[i][0]) / (ramp[i + 1][0] - ramp[i][0])));
+      const t = Math.min(
+        1,
+        Math.max(0, (h - ramp[i][0]) / (ramp[i + 1][0] - ramp[i][0])),
+      );
       c.set(ramp[i][1]).lerp(c2.set(ramp[i + 1][1]), t);
       if (waterBedDepth(x, z) > 0) c.set("#3a8fa3");
       else if (forest && inSwamp(x, z)) c.set("#56643a");
       const d = 2 / k;
-      const gx = mapTerrain ? mapTerrain.heightAt(x + d, z) - mapTerrain.heightAt(x - d, z) : 0;
-      const gz = mapTerrain ? mapTerrain.heightAt(x, z + d) - mapTerrain.heightAt(x, z - d) : 0;
+      const gx = mapTerrain
+        ? mapTerrain.heightAt(x + d, z) - mapTerrain.heightAt(x - d, z)
+        : 0;
+      const gz = mapTerrain
+        ? mapTerrain.heightAt(x, z + d) - mapTerrain.heightAt(x, z - d)
+        : 0;
       const shade = Math.max(0.55, Math.min(1.25, 1 - (gx + gz) * 0.035));
       const o = (py * S + px) * 4;
       img.data[o] = Math.min(255, c.r * 255 * shade);
@@ -5947,16 +6398,27 @@ function minimapBase(S, forest, k, X, Y) {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   const roadLines = segmentLines("road", "roadId", 0.6);
-  for (const [color, width] of [["#3c3a33", 1.7], [forest ? "#d8cfae" : "#efe0bb", 0.9]]) {
+  for (const [color, width] of [
+    ["#3c3a33", 1.7],
+    [forest ? "#d8cfae" : "#efe0bb", 0.9],
+  ]) {
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.max(1, 9 * k * width);
     ctx.beginPath();
     for (const pts of roadLines)
-      pts.forEach((p, i) => (i ? ctx.lineTo(X(p.x), Y(p.z)) : ctx.moveTo(X(p.x), Y(p.z))));
+      pts.forEach((p, i) =>
+        i ? ctx.lineTo(X(p.x), Y(p.z)) : ctx.moveTo(X(p.x), Y(p.z)),
+      );
     ctx.stroke();
   }
   for (const o of mapObstacles) {
-    if (o.type !== "house" && o.type !== "hut" && o.type !== "tree" && o.type !== "rock") continue;
+    if (
+      o.type !== "house" &&
+      o.type !== "hut" &&
+      o.type !== "tree" &&
+      o.type !== "rock"
+    )
+      continue;
     const size = Math.max(1.4, (o.w || 1) * k);
     ctx.save();
     ctx.translate(X(o.x), Y(o.z));
@@ -7416,7 +7878,7 @@ function renderTrophies() {
   matchKills.forEach((k, i) => {
     const li = document.createElement("li");
     const t = Math.floor(k.at / 1000);
-    li.innerHTML = `<i>#${i + 1}</i><div><strong></strong><small>PHÚT ${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}${k.distance ? ` · ${k.distance} M` : ""}</small></div><span class="${k.headshot ? "hs" : ""}">${k.weapon}${k.headshot ? " · HEADSHOT" : ""}</span>`;
+    li.innerHTML = `<i>HẠ: #${i + 1}</i><div><strong></strong><small>PHÚT ${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}${k.distance ? ` · ${k.distance} M` : ""}</small></div><span class="${k.headshot ? "hs" : ""}">${k.weapon}${k.headshot ? " · HEADSHOT" : ""}</span>`;
     li.querySelector("strong").textContent = k.name; // tên người chơi: không chèn HTML
     list.append(li);
   });
