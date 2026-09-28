@@ -15,6 +15,14 @@
 
 /* Phòng chờ trong map · máy bay · nhảy dù */
 .game:not([data-mode="ground"]) .crosshair,.game:not([data-mode="ground"]) .bottom-hud,.game:not([data-mode="ground"]) .feed{display:none}
+
+/* Đã rời máy bay là có thể bị bắn → hiện thanh máu; vẫn ẩn súng/đạn/phím tắt
+   vì đang ở trên không không dùng tới. */
+.game[data-mode="freefall"] .bottom-hud,.game[data-mode="parachute"] .bottom-hud{display:flex}
+.game[data-mode="freefall"] .bottom-hud .weapon,.game[data-mode="parachute"] .bottom-hud .weapon,
+.game[data-mode="freefall"] .bottom-hud .controls,.game[data-mode="parachute"] .bottom-hud .controls,
+.game[data-mode="freefall"] .bottom-hud .swim-hint,.game[data-mode="parachute"] .bottom-hud .swim-hint{display:none}
+
 .phase-overlay{position:absolute;left:50%;top:18%;transform:translateX(-50%);text-align:center;text-shadow:0 2px 14px #000;pointer-events:none;width:min(720px,92%)}
 .phase-overlay small{font:11px 'DM Mono',monospace;letter-spacing:3px;color:var(--acid)}
 .phase-overlay #phaseBig{font:900 130px/1 'Barlow Condensed',Arial,sans-serif;color:#fff;margin:6px 0}

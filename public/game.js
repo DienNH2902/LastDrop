@@ -777,13 +777,82 @@ function syncSettingControl(key, value) {
     }
   }
 }
+
+// ---- Chế độ hiển thị: game quyết định fullscreen/windowed, không phải phím ESC ----
+let displayMode =
+  localStorage.getItem("ld-display-mode") === "fullscreen"
+    ? "fullscreen"
+    : "windowed";
+let fullscreenRestoreArmed = false;
+const isMatchScreenActive = () => $("#game")?.classList.contains("active");
+function syncDisplayModeControls() {
+  const pause = document.getElementById("pauseFullscreen");
+  if (pause) pause.value = displayMode === "fullscreen" ? "on" : "off";
+  const main = document.getElementById("displayMode");
+  if (main) main.value = displayMode;
+}
+// Đang fullscreen trong trận thì khóa phím ESC (Chrome/Edge): nhấn ESC chỉ gửi
+// sự kiện cho game (mở menu tạm dừng) chứ không thoát fullscreen.
+function syncKeyboardLock() {
+  try {
+    if (
+      displayMode === "fullscreen" &&
+      document.fullscreenElement &&
+      isMatchScreenActive()
+    )
+      navigator.keyboard?.lock?.(GAME_KEY_CODES)?.catch?.(() => {});
+    else navigator.keyboard?.unlock?.();
+  } catch {}
+}
+async function applyDisplayMode() {
+  try {
+    if (displayMode === "fullscreen" && !document.fullscreenElement)
+      await document.documentElement.requestFullscreen?.({
+        navigationUI: "hide",
+      });
+    else if (displayMode === "windowed" && document.fullscreenElement)
+      await document.exitFullscreen?.();
+  } catch {
+    // Trình duyệt chỉ cho vào fullscreen khi có thao tác của người chơi; nếu
+    // bị từ chối thì armFullscreenRestore() sẽ thử lại ở lần bấm/phím kế tiếp.
+  }
+  syncKeyboardLock();
+}
+function setDisplayMode(mode) {
+  displayMode = mode === "fullscreen" ? "fullscreen" : "windowed";
+  localStorage.setItem("ld-display-mode", displayMode);
+  syncDisplayModeControls();
+  return applyDisplayMode();
+}
+// Fullscreen bị thoát ngoài ý muốn (ESC ở trình duyệt không hỗ trợ khóa phím...):
+// chờ thao tác kế tiếp của người chơi rồi vào lại ngay, vì trình duyệt không cho
+// tự vào fullscreen nếu không có thao tác.
+function armFullscreenRestore() {
+  if (fullscreenRestoreArmed) return;
+  fullscreenRestoreArmed = true;
+  const restore = async () => {
+    document.removeEventListener("pointerdown", restore, true);
+    document.removeEventListener("keydown", restore, true);
+    fullscreenRestoreArmed = false;
+    if (displayMode !== "fullscreen" || !isMatchScreenActive()) return;
+    await applyDisplayMode();
+    if (
+      displayMode === "fullscreen" &&
+      isMatchScreenActive() &&
+      !document.fullscreenElement
+    )
+      armFullscreenRestore(); // phím vừa bấm (vd. ESC) không tính là thao tác hợp lệ
+  };
+  document.addEventListener("pointerdown", restore, true);
+  document.addEventListener("keydown", restore, true);
+}
+
 function syncPauseSettings() {
   for (const key of Object.keys(settingsBindings)) {
     const input = document.getElementById(settingsBindings[key].main);
     if (input) syncSettingControl(key, input.value);
   }
-  const fullscreen = document.getElementById("pauseFullscreen");
-  if (fullscreen) fullscreen.value = document.fullscreenElement ? "on" : "off";
+  syncDisplayModeControls();
 }
 function saveSettings() {
   localStorage.setItem(
@@ -819,21 +888,25 @@ for (const [key, binding] of Object.entries(settingsBindings)) {
 }
 document
   .getElementById("pauseFullscreen")
-  ?.addEventListener("change", async (event) => {
-    const enabled = event.currentTarget.value === "on";
-    try {
-      if (enabled && !document.fullscreenElement)
-        await document.documentElement.requestFullscreen?.();
-      else if (!enabled && document.fullscreenElement)
-        await document.exitFullscreen?.();
-    } catch {
-      // The browser may deny fullscreen; keep the selector in sync with reality.
-    }
-    syncPauseSettings();
-  });
+  ?.addEventListener("change", (event) =>
+    setDisplayMode(
+      event.currentTarget.value === "on" ? "fullscreen" : "windowed",
+    ),
+  );
+document
+  .getElementById("displayMode")
+  ?.addEventListener("change", (event) =>
+    setDisplayMode(event.currentTarget.value),
+  );
+syncDisplayModeControls();
+// Setting đã chọn thì khóa đúng như vậy suốt trận.
 document.addEventListener("fullscreenchange", () => {
-  const fullscreen = document.getElementById("pauseFullscreen");
-  if (fullscreen) fullscreen.value = document.fullscreenElement ? "on" : "off";
+  syncKeyboardLock();
+  if (!isMatchScreenActive()) return; // ngoài trận không ép
+  if (displayMode === "windowed" && document.fullscreenElement)
+    document.exitFullscreen?.().catch?.(() => {});
+  else if (displayMode === "fullscreen" && !document.fullscreenElement)
+    armFullscreenRestore();
 });
 $("#nameInput").addEventListener("input", () => {
   localStorage.setItem("ld-player-name", $("#nameInput").value.slice(0, 18));
@@ -886,6 +959,14 @@ $("#joinBtn").onclick = () => {
   }
   connect({ type: "join", code });
 };
+
+// Nhập mã phòng xong bấm Enter cũng vào phòng, không cần bấm nút THAM GIA.
+$("#codeInput").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  $("#joinBtn").click();
+});
+
 function connect(message) {
   if (socket) socket.close();
   serverOffsetReady = false;
@@ -3868,6 +3949,7 @@ function enterGameInputMode() {
   if (!canvas || !game) return;
 
   // Gọi cả hai API đồng bộ trong cùng thao tác click để đáp ứng user activation.
+  applyDisplayMode(); // theo setting fullscreen/windowed đã chọn
   try {
     const lockRequest = canvas.requestPointerLock?.();
     lockRequest?.catch?.(() => {});
@@ -4294,6 +4376,7 @@ function pauseGame() {
     return;
   closeBackpack(false);
   paused = true;
+  document.exitPointerLock?.(); // ESC bị khóa nên trình duyệt không tự thả chuột
   stopFiring();
   if (local.vehicleId && local.vehicleSeat === 0)
     send({ type: "vehicleControl", throttle: 0, steer: 0, brake: true });
@@ -5547,12 +5630,12 @@ function drawFlightMap() {
     const pos = planePosAt(planeTime());
     planeMarker(pos.x, pos.z);
   }
-  for (const p of gameState?.players || [])
-    if (
-      p.id !== playerId &&
-      (p.state === "freefall" || p.state === "parachute")
-    )
-      dot(p.x, p.z, 3, "#ff7a5c");
+  // for (const p of gameState?.players || [])
+  //   if (
+  //     p.id !== playerId &&
+  //     (p.state === "freefall" || p.state === "parachute")
+  //   )
+  //     dot(p.x, p.z, 3, "#ff7a5c");
   const me =
     local.state === "plane" && plane
       ? planePosAt(planeTime())

@@ -120,6 +120,14 @@
             </select>
           </label>
 
+                    <label>
+            CHẾ ĐỘ HIỂN THỊ
+            <select id="displayMode">
+              <option value="windowed">Windowed (cửa sổ)</option>
+              <option value="fullscreen">Fullscreen (toàn màn hình)</option>
+            </select>
+          </label>
+
           <button class="primary back">
             LƯU & QUAY LẠI
           </button>
@@ -205,7 +213,10 @@
                     <option>Performance</option>
                     <option>Balanced</option>
                     <option>High</option>
-                  </select></label><label>CHẾ ĐỘ HIỂN THỊ<select id="pauseFullscreen"><option value="off">Cửa sổ</option><option value="on">Toàn màn hình</option></select></label><button id="closePauseSettings" class="secondary">QUAY LẠI ESC</button>
+                                    </select></label><label>CHẾ ĐỘ HIỂN THỊ<select id="pauseFullscreen">
+                    <option value="off">Windowed</option>
+                    <option value="on">Fullscreen</option>
+                  </select></label><button id="closePauseSettings" class="secondary">QUAY LẠI ESC</button>
               </div>
             </div>
           </div>
