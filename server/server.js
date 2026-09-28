@@ -1145,6 +1145,16 @@ function tickZone(room, now) {
   }
   if (changed) broadcast(room);
 }
+// Sự kiện âm thanh loot (nhặt / thả) — client phát tiếng theo loại vật phẩm.
+function lootSfx(room, p, sound, x = p.x, z = p.z) {
+  broadcastRaw(room, {
+    type: "lootSfx",
+    sound,
+    by: p.id,
+    x: Math.round(x * 100) / 100,
+    z: Math.round(z * 100) / 100,
+  });
+}
 function startPlane(room) {
   room.phase = "plane";
   room.plane = { ...createFlight(), startedAt: Date.now() };
@@ -1567,7 +1577,7 @@ wss.on("connection", (ws) => {
         lastMoveAt: Date.now(),
         ammo: 0,
         weapon: "none", // tiếp đất tay không, phải tự tìm súng
-        reserveAmmo: 90,
+        reserveAmmo: 0, // balo rỗng: đạn phải tự nhặt trong nhà
         medkits: 0,
         healingUntil: 0,
         reloadingUntil: 0,
@@ -1968,6 +1978,7 @@ wss.on("connection", (ws) => {
           room.loot = room.loot.filter((item) => item !== best);
           broadcastRaw(room, { type: "lootRemoved", id: best.id });
         }
+        lootSfx(room, p, "pickup-ammo", best.x, best.z);
         send(ws, {
           type: "toast",
           text:
@@ -2005,7 +2016,11 @@ wss.on("connection", (ws) => {
         );
         room.loot = room.loot.filter((item) => item !== best);
         broadcastRaw(room, { type: "lootRemoved", id: best.id });
-        if (dropped) broadcastRaw(room, { type: "lootAdded", item: dropped });
+        if (dropped) {
+          broadcastRaw(room, { type: "lootAdded", item: dropped });
+          lootSfx(room, p, "drop-" + dropped.weapon);
+        }
+        lootSfx(room, p, "pickup-" + p.weapon, best.x, best.z);
         send(ws, {
           type: "toast",
           text: `${dropped ? "ĐÃ ĐỔI SANG" : "ĐÃ NHẶT"} ${weaponStats(p).name}`,
@@ -2020,6 +2035,7 @@ wss.on("connection", (ws) => {
         p.medkits = (p.medkits || 0) + best.amount;
         room.loot = room.loot.filter((item) => item !== best);
         broadcastRaw(room, { type: "lootRemoved", id: best.id });
+        lootSfx(room, p, "pickup-medkit", best.x, best.z);
         send(ws, {
           type: "toast",
           text:
@@ -2060,12 +2076,42 @@ wss.on("connection", (ws) => {
       if (type === "ammo") p.reserveAmmo += amount;
       else p.medkits = (p.medkits || 0) + amount;
       crate.contents[type] -= amount;
+      lootSfx(room, p, "pickup-" + type, crate.x, crate.z);
       send(ws, {
         type: "toast",
         text: `ĐÃ LẤY ${amount} ${type === "ammo" ? "VIÊN ĐẠN" : "BỊCH MÁU"}`,
       });
       if (!crate.contents.ammo && !crate.contents.medkit)
         room.crates = room.crates.filter((item) => item !== crate);
+      broadcast(room);
+      return;
+    }
+    if (m.type === "dropWeapon") {
+      if (!canFight(room, p) || p.vehicleId || p.swimming) return;
+      if (!p.weapon || p.weapon === "none")
+        return send(ws, { type: "toast", text: "BẠN ĐANG TAY KHÔNG" });
+      const now = Date.now();
+      if (p.reloadingUntil > now)
+        return send(ws, { type: "toast", text: "CHỜ NẠP ĐẠN XONG ĐỂ BỎ SÚNG" });
+      if (p.healingUntil > now) return;
+      const dropped = {
+        id: room.nextLootId++,
+        type: "weapon",
+        weapon: p.weapon,
+        x: Math.round(p.x * 100) / 100,
+        z: Math.round(p.z * 100) / 100,
+        yaw: Math.round(Math.random() * 628) / 100,
+        amount: 1,
+        ammo: p.ammo,
+      };
+      room.loot ||= [];
+      room.loot.push(dropped);
+      const name = weaponStats(p).name;
+      p.weapon = "none";
+      p.ammo = 0;
+      broadcastRaw(room, { type: "lootAdded", item: dropped });
+      lootSfx(room, p, "drop-" + dropped.weapon);
+      send(ws, { type: "toast", text: `ĐÃ BỎ ${name} · TAY KHÔNG` });
       broadcast(room);
       return;
     }
@@ -2097,6 +2143,7 @@ wss.on("connection", (ws) => {
       room.loot ||= [];
       room.loot.push(dropped);
       broadcastRaw(room, { type: "lootAdded", item: dropped });
+      lootSfx(room, p, "drop-" + type);
       send(ws, {
         type: "toast",
         text: `ĐÃ THẢ ${requested} ${type === "ammo" ? "VIÊN ĐẠN" : "BỊCH MÁU"}`,

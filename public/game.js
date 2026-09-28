@@ -330,10 +330,13 @@ function tone(freq = 440, duration = 0.06, type = "sine", volume = 0.03) {
 // trong thế giới game). Chỉnh các số dưới đây nếu muốn nghe xa/gần hơn.
 //   ref: trong khoảng này âm lượng tối đa
 //   max: xa hơn mức này thì hoàn toàn không nghe thấy
+// Tầm nghe đủ xa để phát hiện đối thủ TRƯỚC khi chạm mặt: tiếng súng vọng
+// khắp một vùng lớn (xa thì nhỏ + đục đi), tiếng chạy nghe được từ ~40 m.
 const AUDIO_RANGE = {
-  footstep: { ref: 1.5, max: 16 }, // chạy bộ; đi chậm/khom tự nhỏ hơn (nhân theo intensity)
-  gunshot: { ref: 4, max: 60 },
-  reload: { ref: 1.5, max: 12 },
+  footstep: { ref: 3, max: 40 }, // chạy bộ; đi chậm/khom tự nhỏ hơn (nhân theo intensity)
+  gunshot: { ref: 12, max: 320 },
+  reload: { ref: 1.5, max: 14 },
+  loot: { ref: 1.5, max: 18 },
 };
 // Thời điểm (ms, tính từ lúc bắt đầu nạp) của từng tiếng trong 1.8 giây nạp đạn.
 // Thời điểm (ms, tính từ lúc bắt đầu nạp) của từng tiếng trong 1.8 giây nạp đạn,
@@ -395,7 +398,9 @@ function distanceGain(distance, ref, max) {
   if (distance >= max) return 0;
   if (distance <= ref) return 1;
   const t = (distance - ref) / (max - ref);
-  return (1 - t) * (1 - t);
+  // Giảm chậm hơn đường bậc 2 cũ ở tầm trung (cũ: nửa tầm chỉ còn 25%) nên
+  // âm ở xa vẫn nghe rõ, nhưng vẫn tắt êm về 0 ở mép tầm nghe.
+  return Math.pow(1 - t, 1.6);
 }
 // position = null nghĩa là âm thanh của chính người chơi (không pan, không giảm).
 // Trả về null nếu tắt tiếng hoặc nguồn âm quá xa (không tạo node nào cả).
@@ -437,7 +442,9 @@ function spatialAudio(
     // Panner chỉ lo hướng trái/phải/trước/sau; độ to đã tính ở trên
     // (rolloffFactor = 0 tắt hẳn suy giảm mặc định của Web Audio).
     const panner = audioCtx.createPanner();
-    panner.panningModel = "HRTF";
+    // HRTF tốn CPU: chỉ dùng cho âm ở gần (cần định vị chính xác); âm ở xa
+    // (tiếng súng vọng từ xa) dùng equalpower rẻ hơn nhiều, vẫn đủ trái/phải.
+    panner.panningModel = farness < 0.2 ? "HRTF" : "equalpower";
     panner.distanceModel = "linear";
     panner.rolloffFactor = 0;
     if (panner.positionX) {
@@ -795,7 +802,7 @@ function playSpatialGunshot(
   const a = spatialAudio(position, {
     volume: volume * (isSniper ? 1.5 : isBeryl ? 1.35 : 1.15),
     ...AUDIO_RANGE.gunshot,
-    max: AUDIO_RANGE.gunshot.max * (isSniper ? 1.8 : isBeryl ? 1.4 : 1.2),
+    max: AUDIO_RANGE.gunshot.max * (isSniper ? 1.5 : isBeryl ? 1.2 : 1),
     delay,
   });
   if (!a) return;
@@ -822,6 +829,79 @@ function playPunchWhoosh(position) {
   noiseBurst(a, { duration: 0.16, filter: "bandpass", freq: 900, q: 0.9, gain: 0.8 });
   noiseBurst(a, { at: 0.04, duration: 0.1, filter: "highpass", freq: 2600, gain: 0.25 });
   toneBurst(a, { at: 0.1, duration: 0.05, from: 140, to: 80, gain: 0.25 });
+}
+// Âm thanh nhặt / thả đồ, mỗi loại một chất liệu riêng:
+//  đạn  — vỏ đạn đồng lách cách trong hộp kim loại
+//  máu  — túi nhựa/vải sột soạt + xé khoá dán
+//  AUG  — thân nhựa polymer nhẹ "cạch", dây đeo sột soạt
+//  Beryl— thép nặng "cạch" trầm + kéo tay kéo khoá nòng
+//  Kar  — báng gỗ "cộc" + khoá nòng thép
+// position = null: của chính mình (không pan, không suy giảm).
+function playLootSound(sound, position) {
+  const a = spatialAudio(position, { volume: position ? 0.9 : 0.6, ...AUDIO_RANGE.loot });
+  if (!a) return;
+  const r = () => 0.9 + Math.random() * 0.2;
+  const [action, kind] = sound.split("-");
+  if (action === "pickup") {
+    if (kind === "ammo") {
+      noiseBurst(a, { duration: 0.05, filter: "lowpass", freq: 700, gain: 0.5 }); // nhấc hộp
+      for (let i = 0; i < 7; i++) {
+        const at = 0.03 + i * 0.035 + Math.random() * 0.02;
+        toneBurst(a, { at, duration: 0.05, type: "triangle", from: 3600 * r(), to: 3000 * r(), gain: 0.07 });
+        noiseBurst(a, { at, duration: 0.02, filter: "bandpass", freq: 5200 * r(), q: 4, gain: 0.25 });
+      }
+      toneBurst(a, { at: 0.3, duration: 0.09, type: "triangle", from: 620, to: 480, gain: 0.12 }); // nắp hộp thiếc
+      noiseBurst(a, { at: 0.3, duration: 0.05, filter: "bandpass", freq: 1800, q: 2, gain: 0.35 });
+    } else if (kind === "medkit") {
+      noiseBurst(a, { duration: 0.22, filter: "bandpass", freq: 1900 * r(), q: 0.6, gain: 0.45 }); // túi sột soạt
+      for (let i = 0; i < 6; i++)
+        noiseBurst(a, { at: 0.2 + i * 0.022, duration: 0.018, filter: "highpass", freq: 3200, gain: 0.3 }); // khoá dán
+      noiseBurst(a, { at: 0.38, duration: 0.07, filter: "lowpass", freq: 500, gain: 0.35 }); // bỏ vào balo
+    } else if (kind === "beryl") {
+      noiseBurst(a, { duration: 0.08, filter: "bandpass", freq: 850, q: 1.2, gain: 0.7 });
+      toneBurst(a, { duration: 0.12, type: "triangle", from: 240, to: 150, gain: 0.25 }); // thép nặng
+      noiseBurst(a, { at: 0.22, duration: 0.03, filter: "highpass", freq: 2600, gain: 0.55 }); // kéo khoá nòng
+      toneBurst(a, { at: 0.22, duration: 0.04, type: "square", from: 1500, to: 1100, gain: 0.05 });
+      noiseBurst(a, { at: 0.33, duration: 0.035, filter: "bandpass", freq: 1700, q: 2, gain: 0.7 }); // nhả về
+      toneBurst(a, { at: 0.33, duration: 0.06, type: "triangle", from: 900, to: 650, gain: 0.12 });
+    } else if (kind === "sniper") {
+      noiseBurst(a, { duration: 0.07, filter: "lowpass", freq: 600, gain: 0.6 }); // gỗ cộc
+      toneBurst(a, { duration: 0.08, from: 190, to: 120, gain: 0.3 });
+      noiseBurst(a, { at: 0.2, duration: 0.04, filter: "bandpass", freq: 2200, q: 2, gain: 0.5 }); // khoá nòng
+      noiseBurst(a, { at: 0.3, duration: 0.03, filter: "bandpass", freq: 2800, q: 3, gain: 0.45 });
+    } else {
+      // AUG: nhựa nhẹ, tiếng "cạch" cao và khô, dây đeo sột soạt.
+      noiseBurst(a, { duration: 0.12, filter: "bandpass", freq: 2400, q: 0.7, gain: 0.35 });
+      noiseBurst(a, { at: 0.05, duration: 0.03, filter: "bandpass", freq: 1500, q: 2.5, gain: 0.6 });
+      noiseBurst(a, { at: 0.24, duration: 0.025, filter: "highpass", freq: 3400, gain: 0.5 }); // lẫy an toàn
+      toneBurst(a, { at: 0.24, duration: 0.03, type: "triangle", from: 2300, to: 1900, gain: 0.06 });
+    }
+    return;
+  }
+  // Thả xuống đất: cú chạm + nảy nhẹ, chất liệu theo loại.
+  if (kind === "ammo") {
+    noiseBurst(a, { duration: 0.06, filter: "lowpass", freq: 500, gain: 0.6 });
+    for (let i = 0; i < 4; i++)
+      toneBurst(a, { at: 0.02 + i * 0.03, duration: 0.05, type: "triangle", from: 3300 * r(), to: 2800, gain: 0.06 });
+  } else if (kind === "medkit") {
+    noiseBurst(a, { duration: 0.1, filter: "lowpass", freq: 420, gain: 0.55 });
+    noiseBurst(a, { duration: 0.14, filter: "bandpass", freq: 1500, q: 0.6, gain: 0.25 });
+  } else if (kind === "beryl") {
+    noiseBurst(a, { duration: 0.09, filter: "lowpass", freq: 400, gain: 0.9 });
+    toneBurst(a, { duration: 0.1, from: 110, to: 55, gain: 0.35 });
+    noiseBurst(a, { at: 0.01, duration: 0.07, filter: "bandpass", freq: 800, q: 1.5, gain: 0.6 }); // thép va đất
+    toneBurst(a, { at: 0.01, duration: 0.2, type: "triangle", from: 520, to: 470, gain: 0.07 }); // ngân kim loại
+    noiseBurst(a, { at: 0.16, duration: 0.05, filter: "bandpass", freq: 900, q: 1.5, gain: 0.3 }); // nảy
+  } else if (kind === "sniper") {
+    noiseBurst(a, { duration: 0.08, filter: "lowpass", freq: 450, gain: 0.8 });
+    toneBurst(a, { duration: 0.09, from: 150, to: 90, gain: 0.3 }); // gỗ cộc
+    noiseBurst(a, { at: 0.15, duration: 0.04, filter: "lowpass", freq: 700, gain: 0.35 });
+  } else {
+    noiseBurst(a, { duration: 0.06, filter: "lowpass", freq: 550, gain: 0.6 });
+    noiseBurst(a, { at: 0.01, duration: 0.05, filter: "bandpass", freq: 1600, q: 1.5, gain: 0.5 }); // nhựa lách cách
+    noiseBurst(a, { at: 0.12, duration: 0.04, filter: "bandpass", freq: 1900, q: 1.5, gain: 0.3 });
+    noiseBurst(a, { at: 0.2, duration: 0.03, filter: "bandpass", freq: 2100, q: 1.5, gain: 0.15 });
+  }
 }
 // Bề mặt dưới chân quyết định tiếng bước.
 function footSurface(x, z) {
@@ -1363,6 +1443,13 @@ function connect(message) {
     if (m.type === "lootRemoved") removeLootItem(m.id);
     if (m.type === "lootAdded" && m.item) addLootItem(m.item);
     if (m.type === "toast") showLootToast(m.text);
+    if (m.type === "lootSfx" && typeof m.sound === "string")
+      playLootSound(
+        m.sound,
+        m.by === playerId
+          ? null
+          : { x: m.x, y: groundHeightAt(m.x, m.z) + 0.6, z: m.z },
+      );
     if (m.type === "horn" && m.senderId !== playerId)
       playCarHorn({ x: m.x, y: m.y, z: m.z });
     // Server sửa lại chỗ tiếp đất (ví dụ trúng cây / đá).
@@ -1582,7 +1669,7 @@ function flushMergeBuckets() {
   mergeBuckets = null;
 }
 function updateAmmoHud() {
-  const reserve = local.reserveAmmo ?? 90;
+  const reserve = local.reserveAmmo ?? 0;
   const hud = $("#ammo");
   if (weaponKey(local.weapon) === "none") {
     setHtml(hud, `👊 <i>VÀO NHÀ TÌM SÚNG · DỰ TRỮ ${reserve}</i>`);
@@ -4983,7 +5070,7 @@ function beginGame() {
   local.swimY = null;
   local.swimDepth = 0;
   local.reloading = false;
-  local.reserveAmmo = 90;
+  local.reserveAmmo = 0; // balo rỗng khi bắt đầu trận
   local.medkits = 0;
   local.healing = false;
   local.healEndsAt = 0;
@@ -5428,6 +5515,28 @@ function onKeyDown(e) {
     if (!local.healing) {
       stopFiring();
       send({ type: "reload" });
+    }
+    return;
+  }
+
+  // G: bỏ súng đang cầm xuống đất, quay về tay không.
+  if (
+    e.code === "KeyG" &&
+    !e.repeat &&
+    !paused &&
+    local.state === "ground" &&
+    !local.vehicleId &&
+    $("#game").classList.contains("active")
+  ) {
+    e.preventDefault();
+    if (weaponKey(local.weapon) === "none") showLootToast("BẠN ĐANG TAY KHÔNG");
+    else {
+      stopFiring();
+      if (scoped) {
+        scoped = false;
+        setScope(false);
+      }
+      send({ type: "dropWeapon" });
     }
     return;
   }
