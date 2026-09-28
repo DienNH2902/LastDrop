@@ -4457,6 +4457,34 @@ function stopFiring() {
   if (fireInterval !== null) clearInterval(fireInterval);
   fireInterval = null;
 }
+
+// Tia từ tâm màn hình xuyên qua đúng các mesh người chơi đang được vẽ — chính
+// là thứ red dot đang chỉ vào. Server dùng kết quả này để xác nhận trúng đạn.
+const aimRaycaster = new THREE.Raycaster();
+function findAimedPlayer(eye, dir) {
+  aimRaycaster.camera = camera;
+  aimRaycaster.set(eye, dir);
+  aimRaycaster.near = 0;
+  aimRaycaster.far = 140;
+  let best = null;
+  for (const [id, mesh] of remoteMeshes) {
+    if (!mesh.visible) continue;
+    for (const hit of aimRaycaster.intersectObject(mesh, true)) {
+      let part = "body";
+      let hidden = false;
+      for (let o = hit.object; o && o !== mesh; o = o.parent) {
+        if (!o.visible) hidden = true;
+        if (o === mesh.userData.head) part = "head";
+      }
+      if (hidden) continue;
+      if (!best || hit.distance < best.dist)
+        best = { id, part, dist: hit.distance };
+      break;
+    }
+  }
+  return best;
+}
+
 function shootOnce() {
   if (
     !triggerHeld ||
@@ -4499,6 +4527,14 @@ function shootOnce() {
   camera.getWorldDirection(aim);
   const eye = new THREE.Vector3();
   camera.getWorldPosition(eye);
+  send({
+    type: "shoot",
+    aim: { x: aim.x, y: aim.y, z: aim.z },
+    x: eye.x,
+    z: eye.z,
+    eyeY: eye.y,
+    hit: findAimedPlayer(eye, aim),
+  });
   send({
     type: "shoot",
     aim: { x: aim.x, y: aim.y, z: aim.z },

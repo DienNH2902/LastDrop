@@ -64,6 +64,60 @@ const AIR = {
   maxFall: 55,
   maxLandingHeight: 40,
 };
+// ---- Xác nhận trúng đạn theo "thấy gì bắn nấy" ----
+// Client hiển thị địch ở vị trí cũ hơn vị trí thật trên server (độ trễ mạng +
+// tick), nên tia ngắm đúng trên màn hình vẫn có thể trượt nếu chỉ so với vị
+// trí mới nhất. Ta lưu lịch sử vị trí ngắn và chấp nhận cú bắn nếu tia đi
+// qua gần địch ở BẤT KỲ mốc nào trong cửa sổ này.
+const POSITION_HISTORY_MS = 1000;
+const CLAIM_WINDOW_MS = 450;
+const poseSample = (q, now) => ({
+  t: now,
+  x: q.x,
+  z: q.z,
+  baseY:
+    q.state === "freefall" || q.state === "parachute"
+      ? Number(q.y) || 0
+      : q.swimming
+        ? q.swimY || 0
+        : q.groundY || 0,
+  jumpY: q.jumpY || 0,
+  crouching: Boolean(q.crouching),
+  prone: Boolean(q.prone),
+});
+function recordPositionHistory(room, now) {
+  for (const q of room.players.values()) {
+    q.history ||= [];
+    q.history.push(poseSample(q, now));
+    while (q.history.length > 1 && now - q.history[0].t > POSITION_HISTORY_MS)
+      q.history.shift();
+  }
+}
+// Trả về khoảng cách dọc theo tia tới mục tiêu nếu tia đi đủ gần (null nếu không).
+function claimAlong(q, part, origin, dir, now) {
+  const samples = (q.history || []).filter((s) => now - s.t <= CLAIM_WINDOW_MS);
+  samples.push(poseSample(q, now));
+  const tolerance = part === "head" ? 0.8 : 1.1;
+  let best = null;
+  for (const s of samples) {
+    const crouchScale = s.crouching ? 0.68 : 1;
+    const py = s.prone
+      ? s.baseY + (part === "head" ? 0.5 : 0.35)
+      : s.baseY + s.jumpY + (part === "head" ? 1.72 : 1.0) * crouchScale;
+    const vx = s.x - origin.x,
+      vy = py - origin.y,
+      vz = s.z - origin.z;
+    const along = vx * dir.x + vy * dir.y + vz * dir.z;
+    if (along < 0.1 || along > 140) continue;
+    const perp = Math.hypot(
+      vx - dir.x * along,
+      vy - dir.y * along,
+      vz - dir.z * along,
+    );
+    if (perp <= tolerance && (best === null || along < best)) best = along;
+  }
+  return best;
+}
 const isGrounded = (p) => p.state === "lobby" || p.state === "ground";
 // Đi lại: đứng chờ trong map (staging/countdown) hoặc đã tiếp đất.
 const canWalk = (room, p) =>
@@ -1380,6 +1434,8 @@ function tickRoom(room) {
   }
   */
   if (room.phase === "plane" || room.phase === "playing") tickZone(room, now);
+  if (room.phase === "plane" || room.phase === "playing")
+    recordPositionHistory(room, now);
   if (room.phase === "staging") {
     if (
       players.every((p) => p.ready) ||
@@ -2326,6 +2382,7 @@ wss.on("connection", (ws) => {
           targetPart = null;
         }
       }
+      const blockerDistance = nearest; // tường/đá/xe gần nhất chắn giữa tia và người chơi
       for (const q of room.players.values())
         if (
           q !== p &&
@@ -2454,7 +2511,11 @@ wss.on("connection", (ws) => {
               },
             ),
             rayBox(
-              { x: q.x, y: targetBaseY + 0.4 * crouchScale + jumpY, z: q.z },
+              {
+                x: q.x,
+                y: targetBaseY + 0.4 * crouchScale + jumpY,
+                z: q.z,
+              },
               q.yaw,
               {
                 x: 0.24,
@@ -2493,6 +2554,27 @@ wss.on("connection", (ws) => {
             }
           }
         }
+      // Red dot dính địch trên màn hình = chắc chắn trúng: nếu cách xét cũ trượt
+      // (địch đang di chuyển/trễ mạng) nhưng client báo trúng và tia thật sự đi
+      // qua địch trong cửa sổ trễ, không bị vật cản che, thì vẫn tính trúng.
+      if (!target && m.hit) {
+        const q = room.players.get(m.hit.id);
+        const part = m.hit.part === "head" ? "head" : "body";
+        if (
+          q &&
+          q !== p &&
+          q.alive &&
+          ["ground", "freefall", "parachute"].includes(q.state)
+        ) {
+          const along = claimAlong(q, part, origin, dir, shotTime);
+          if (along !== null && along <= blockerDistance + 0.6) {
+            struckVehicle = null;
+            target = q;
+            targetPart = part;
+            nearest = Math.min(nearest, along);
+          }
+        }
+      }
       if (struckVehicle) {
         struckVehicle.hits++;
         struckVehicle.hp = Math.max(0, 60 - struckVehicle.hits);
