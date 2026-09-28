@@ -5452,8 +5452,14 @@ function updateZoneHud() {
   const zone = gameState?.zone;
   if (!zone || local.state === "lobby") {
     setStyle(grayOverlay, "opacity", "0");
-    setText(hud, "");
     setStyle(tint, "opacity", "0");
+    // Đã nhảy/tiếp đất nhưng máy bay chưa bay hết map: bo chưa tính giờ.
+    const planeLeft =
+      plane && local.state !== "lobby" && local.state !== "plane"
+        ? Math.ceil(Math.max(0, plane.tExit - planeTime()))
+        : 0;
+    setText(hud, planeLeft > 0 ? `VÒNG BO BẮT ĐẦU KHI MÁY BAY RỜI MAP · ${planeLeft}S` : "");
+    if (planeLeft > 0) setStyle(hud, "color", "#d6ff45");
     return;
   }
   const circle = zoneCircleNow();
