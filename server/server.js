@@ -1498,6 +1498,17 @@ function tickRoom(room) {
     }
   }
   */
+  // Vòng bo chỉ bắt đầu tính giờ khi MÁY BAY BAY HẾT MAP (tExit), không phải
+  // lúc người cuối cùng nhảy: cả phòng nhảy sớm thì bo vẫn chờ máy bay rời map.
+  if (
+    (room.phase === "plane" || room.phase === "playing") &&
+    !room.zone &&
+    room.plane &&
+    (now - room.plane.startedAt) / 1000 >= room.plane.tExit
+  ) {
+    initZone(room);
+    broadcast(room);
+  }
   if (room.phase === "plane" || room.phase === "playing") tickZone(room, now);
   if (room.phase === "plane" || room.phase === "playing")
     recordPositionHistory(room, now);
@@ -1529,8 +1540,7 @@ function tickRoom(room) {
       }
     }
     if (players.every((p) => p.state !== "plane")) {
-      room.phase = "playing";
-      initZone(room); // vòng bo chỉ bắt đầu tính giờ từ lúc này (máy bay đã bay hết map)
+      room.phase = "playing"; // vòng bo khởi tạo riêng khi máy bay bay hết map (xem trên)
       changed = true;
     }
     if (changed) broadcast(room);
@@ -2315,7 +2325,7 @@ wss.on("connection", (ws) => {
           eyeY <= 20
             ? eyeY
             : (p.swimming ? p.swimY || 0 : p.groundY || 0) +
-              (p.prone ? 0.48 : p.crouching ? 1.05 : 1.65),
+              (p.prone ? 0.48 : p.crouching ? 1.34 : 1.8), // khớp độ cao mắt ở client
         z: freshPosition ? sz : p.z,
       };
       // Ray tests cover the full playable map (the previous 32-unit cap made
