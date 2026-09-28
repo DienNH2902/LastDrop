@@ -1203,6 +1203,7 @@ function killByVehicle(
     victimName: victim.name,
     killerId: killer?.id || null,
     cause,
+    weapon: "XE",
     killerName:
       cause === "explosion"
         ? "Nổ xe"
@@ -2507,6 +2508,10 @@ wss.on("connection", (ws) => {
             victimName: target.name,
             killerId: p.id,
             killerName: p.name,
+            // Cho màn Chiến tích: hạ bằng súng gì, headshot, khoảng cách.
+            weapon: p.weapon === "sniper" ? "KAR98K" : "AUG",
+            headshot: targetPart === "head",
+            distance: Math.round(nearest),
           };
           room.crates ||= [];
           room.crates.push({

@@ -250,8 +250,20 @@ export function poseAvatar(rig, pose, state, dt) {
   // Nạp đạn: hạ súng xuống, tay trái rời báng về phía băng đạn.
   const reload = state.reloading ? 1 : 0;
   pose.reload = damp(pose.reload ?? 0, reload, 8, dt);
-  rig.weaponMount.rotation.x = pose.reload * 0.35 + (state.kick || 0);
-  rig.weaponMount.position.y = 0.33 - pose.reload * 0.06;
+  // Nằm sấp: toàn thân được xoay nằm xuống (trục cao của thân → hướng trước
+  // mặt, trục -Z cục bộ → xuống đất). Ngẩng đầu và đưa súng ra trước mặt,
+  // nòng chĩa về phía trước chứ không cắm xuống đất.
+  const prone = stance === "prone" ? 1 : 0;
+  pose.prone = damp(pose.prone ?? prone, prone, 8, dt);
+  rig.head.rotation.x = pose.prone * 1.25;
+  rig.weaponMount.rotation.x =
+    pose.prone * (Math.PI / 2) + pose.reload * 0.35 + (state.kick || 0);
+  // Nằm: báng tì vai phải, súng nằm cạnh má (không xuyên qua đầu mèo).
+  rig.weaponMount.position.set(
+    0.07 + pose.prone * 0.15,
+    0.33 + pose.prone * 0.27 - pose.reload * 0.06,
+    -0.25 + pose.prone * 0.45,
+  );
   // Tay: cầm súng (IK) hoặc tư thế riêng khi bay / lái xe / bơi.
   const grip = state.weaponGrip;
   rig.arms.forEach((arm, i) => {

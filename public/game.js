@@ -62,15 +62,45 @@ const companySplash = $("#companySplash"),
 const loadingDurationMs =
   Number.parseFloat(
     getComputedStyle(loading).getPropertyValue("--loading-duration"),
-  ) || 5000;
+  ) || 4200;
+// Màn nạp: thanh tiến trình, trạng thái và mẹo chơi bằng tiếng Việt.
+const LOAD_STEPS = [
+  [0, "Đang khởi tạo đấu trường…"],
+  [22, "Đang dựng địa hình rừng núi và sa mạc…"],
+  [48, "Đang lau súng AUG và Kar98k…"],
+  [72, "Đang nạp nhiên liệu cho máy bay thả dù…"],
+  [92, "Sẵn sàng nhảy dù!"],
+];
+const LOAD_TIPS = [
+  "Mẹo: nằm sấp giúp bạn khó bị phát hiện giữa bãi cỏ cao.",
+  "Mẹo: bắn trúng nón vẫn tính là trúng đầu — ngắm cao lên một chút.",
+  "Mẹo: cầu có lan can, nhưng lao xe xuống sông thì xe sẽ chìm.",
+  "Mẹo: vật phẩm chỉ nằm trong nhà — hãy lục soát từng khu dân cư.",
+  "Mẹo: với Kar98k, cuộn chuột để đổi ống ngắm 4x – 8x.",
+];
+function runLoader(duration) {
+  const started = performance.now();
+  $("#loadTip").textContent = LOAD_TIPS[Math.floor(Math.random() * LOAD_TIPS.length)];
+  const tick = () => {
+    const t = Math.min(1, (performance.now() - started) / duration);
+    const pct = Math.round((1 - Math.pow(1 - t, 2.2)) * 100);
+    $("#loadBar").style.width = pct + "%";
+    setText($("#loadPercent"), pct + "%");
+    setText($("#loadStatus"), LOAD_STEPS.filter(([at]) => pct >= at).pop()[1]);
+    if (t < 1) requestAnimationFrame(tick);
+  };
+  tick();
+}
 setTimeout(() => {
   companySplash.classList.add("hidden");
   loading.classList.remove("hidden");
+  runLoader(loadingDurationMs);
   setTimeout(() => {
     loading.classList.add("hidden");
     app.classList.remove("hidden");
-  }, loadingDurationMs);
-}, 6000);
+  }, loadingDurationMs + 250);
+}, 4200);
+
 let socket = null,
   roomCode = "",
   playerId = "",
@@ -3149,6 +3179,8 @@ function beginDeathView(position = local) {
 
 function renderPlayers(state) {
   setText($("#aliveCount"), state.alive);
+  const me = state.players.find((player) => player.id === playerId);
+  if (me) setText($("#killHud"), me.kills || 0);
   setText($("#totalCount"), state.total);
   if (state.lastElimination && state.lastElimination.id !== lastEliminationId) {
     const event = state.lastElimination;
@@ -3174,6 +3206,13 @@ function renderPlayers(state) {
       $("#resultDetail").textContent = localEliminationMessage;
     }
     if (event.killerId === playerId && event.killerName !== "Nổ xe") {
+      matchKills.push({
+        name: event.victimName,
+        weapon: event.weapon || (event.cause === "collision" ? "XE" : "—"),
+        headshot: Boolean(event.headshot),
+        distance: event.distance,
+        at: Date.now() - startedAt,
+      });
       const notice = $("#killNotice");
       if (notice) {
         if (event.cause === "collision") {
@@ -4256,6 +4295,7 @@ function updateLootHud(dt) {
 }
 function beginGame() {
   inMatch = true;
+  matchKills = [];
   readySent = false;
   jumpRequestedAt = 0;
   envBlend = 0;
@@ -7340,7 +7380,7 @@ function showResult() {
       Math.ceil((resultEndsAt - Date.now()) / 1000),
     );
     $("#resultDetail").textContent =
-      `${resultMessage} Tự động về Home sau ${secondsLeft} giây.`;
+      `${resultMessage} Tự động chuyển sang Chiến tích sau ${secondsLeft} giây.`;
   };
   clearTimeout(resultTimeout);
   clearInterval(resultCountdown);
@@ -7350,9 +7390,43 @@ function showResult() {
   releaseGameInputMode();
   show("result");
   resultCountdown = setInterval(updateCountdown, 250);
-  resultTimeout = setTimeout(returnHome, 20000);
+  resultTimeout = setTimeout(showTrophies, 20000);
 }
-function returnHome() {
+// Danh sách đối thủ mình đã hạ trong trận (cho màn Chiến tích).
+let matchKills = [];
+function renderTrophies() {
+  setText($("#trophyKills"), local.kills || matchKills.length);
+  const heads = matchKills.filter((k) => k.headshot).length;
+  const longest = matchKills.reduce((m, k) => Math.max(m, k.distance || 0), 0);
+  setText(
+    $("#trophySub"),
+    matchKills.length
+      ? `HEADSHOT: ${heads} · XA NHẤT: ${longest} M`
+      : "Chưa hạ được ai trong trận này — lần sau sẽ khác!",
+  );
+  const list = $("#trophyList");
+  list.innerHTML = "";
+  if (!matchKills.length) {
+    const li = document.createElement("li");
+    li.className = "trophy-empty";
+    li.textContent = "Không có lượt hạ gục nào.";
+    list.append(li);
+    return;
+  }
+  matchKills.forEach((k, i) => {
+    const li = document.createElement("li");
+    const t = Math.floor(k.at / 1000);
+    li.innerHTML = `<i>#${i + 1}</i><div><strong></strong><small>PHÚT ${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}${k.distance ? ` · ${k.distance} M` : ""}</small></div><span class="${k.headshot ? "hs" : ""}">${k.weapon}${k.headshot ? " · HEADSHOT" : ""}</span>`;
+    li.querySelector("strong").textContent = k.name; // tên người chơi: không chèn HTML
+    list.append(li);
+  });
+}
+// Bảng kết quả → Chiến tích → Trang chủ.
+function showTrophies() {
+  renderTrophies();
+  returnHome("trophies");
+}
+function returnHome(target = "menu") {
   clearTimeout(resultTimeout);
   clearInterval(resultCountdown);
   resultTimeout = null;
@@ -7363,6 +7437,7 @@ function returnHome() {
   if (socket) socket.close();
   socket = null;
   $("#status").textContent = "● ONLINE";
-  show("menu");
+  show(target);
 }
-$("#returnBtn").onclick = returnHome;
+$("#returnBtn").onclick = showTrophies;
+$("#trophyHomeBtn").onclick = () => show("menu");
