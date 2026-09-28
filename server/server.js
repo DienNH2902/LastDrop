@@ -12,6 +12,19 @@ const { createObstacles } = require("./mapgen.js");
 const ROOT = path.join(__dirname, "..", "public");
 const PORT = Number(process.env.PORT || 3000);
 const rooms = new Map();
+// Đo "server bận": độ trễ vòng lặp sự kiện (p99, cửa sổ ~5 s). Trên Render gói
+// free (0.1 CPU) tiến trình bị HĐH tạm dừng khi dùng hết hạn mức CPU → mọi gói
+// tin (kể cả ping) phải chờ. Giá trị này được gửi kèm "pong" để HUD phân biệt
+// trễ do MẠNG hay do SERVER nghẽn.
+const { monitorEventLoopDelay } = require("node:perf_hooks");
+const loopDelay = monitorEventLoopDelay({ resolution: 10 });
+loopDelay.enable();
+let serverLagMs = 0;
+setInterval(() => {
+  // Trừ đi độ phân giải lấy mẫu (10 ms) để đo đúng phần bị "kẹt".
+  serverLagMs = Math.max(0, Math.round(loopDelay.percentile(99) / 1e6 - 10));
+  loopDelay.reset();
+}, 5000).unref();
 
 // ---- Luồng trận: waiting -> staging -> countdown -> plane -> playing -> finished ----
 //  waiting   : phòng chờ (chưa vào map), người chơi nhập mã và vào phòng.
@@ -1155,6 +1168,46 @@ function lootSfx(room, p, sound, x = p.x, z = p.z) {
     z: Math.round(z * 100) / 100,
   });
 }
+// ---- BỂ MAP SINH SẴN ----
+// Sinh 1 map (địa hình + ~800 vật cản) tốn ~100–150 ms CPU. Render gói free
+// chỉ cho 0.1 CPU (10 ms mỗi 100 ms) → sinh map ngay lúc tạo phòng làm CẢ
+// server đứng ~1.5–2 s: mọi trận đang đánh ở phòng khác bị khựng, ping đỏ.
+// Nay map được sinh SẴN lúc server rảnh (không có trận nào đang diễn ra);
+// tạo phòng chỉ lấy ra dùng. Hết bể (hiếm) mới sinh tại chỗ như cũ.
+const MAP_POOL_SIZE = 2; // mỗi loại map giữ sẵn 2 bản (~vài MB RAM)
+const mapPool = { forest: [], desert: [] };
+function buildMap(mapId) {
+  const mapSeed = Math.floor(Math.random() * 0xffffffff);
+  const obstacles = attachObstacleGrid(createObstacles(mapSeed, mapId));
+  return { mapSeed, obstacles, terrain: Terrain.build(obstacles) };
+}
+function takeMap(mapId) {
+  const map = mapPool[mapId].pop() || buildMap(mapId);
+  scheduleMapRefill();
+  return map;
+}
+// Có trận đang đếm ngược / bay / đánh → đừng chiếm CPU lúc này.
+function matchInProgress() {
+  for (const room of rooms.values())
+    if (["countdown", "staging", "plane", "playing"].includes(room.phase)) return true;
+  return false;
+}
+let mapRefillTimer = null;
+function scheduleMapRefill(delay = 4000) {
+  if (mapRefillTimer) return;
+  mapRefillTimer = setTimeout(() => {
+    mapRefillTimer = null;
+    refillMapPool();
+  }, delay);
+  mapRefillTimer.unref?.();
+}
+function refillMapPool() {
+  const missing = Object.keys(mapPool).find((id) => mapPool[id].length < MAP_POOL_SIZE);
+  if (!missing) return;
+  if (matchInProgress()) return scheduleMapRefill(15000); // thử lại sau
+  mapPool[missing].push(buildMap(missing)); // mỗi lần 1 map để không giữ CPU lâu
+  scheduleMapRefill(1000);
+}
 function startPlane(room) {
   room.phase = "plane";
   room.plane = { ...createFlight(), startedAt: Date.now() };
@@ -1503,7 +1556,7 @@ wss.on("connection", (ws) => {
     }
     if (!m || typeof m !== "object") return;
     // Đo độ trễ khứ hồi: client dùng để dự đoán xe và hiển thị ping.
-    if (m.type === "ping") return send(ws, { type: "pong", t: m.t });
+    if (m.type === "ping") return send(ws, { type: "pong", t: m.t, lag: serverLagMs });
     if (m.type === "create" || m.type === "join") {
       if (room) return;
       const code = m.type === "create" ? roomCode() : String(m.code || "");
@@ -1512,9 +1565,7 @@ wss.on("connection", (ws) => {
         return send(ws, { type: "error", message: "Không tìm thấy phòng." });
       if (!room) {
         const mapId = m.mapId === "desert" ? "desert" : "forest";
-        const mapSeed = Math.floor(Math.random() * 0xffffffff);
-        const obstacles = attachObstacleGrid(createObstacles(mapSeed, mapId));
-        const terrain = Terrain.build(obstacles);
+        const { mapSeed, obstacles, terrain } = takeMap(mapId);
         room = {
           code,
           phase: "waiting",
@@ -2681,6 +2732,7 @@ setInterval(() => {
     ws.ping();
   }
 }, 15000);
-server.listen(PORT, () =>
-  console.log(`Last Drop Arena listening on http://localhost:${PORT}`),
-);
+server.listen(PORT, () => {
+  console.log(`Last Drop Arena listening on http://localhost:${PORT}`);
+  scheduleMapRefill(300); // sinh sẵn map rừng + sa mạc ngay khi server rảnh
+});

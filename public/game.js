@@ -1408,6 +1408,7 @@ $("#codeInput").addEventListener("keydown", (e) => {
 function connect(message) {
   if (socket) socket.close();
   serverOffsetReady = false;
+  resetNetTiming();
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${protocol}//${location.host}`);
   $("#status").textContent = "● CONNECTING";
@@ -1423,6 +1424,7 @@ function connect(message) {
       const sample = performance.now() - Number(m.t);
       if (Number.isFinite(sample) && sample >= 0 && sample < 5000)
         rttMs = rttMs ? rttMs + (sample - rttMs) * 0.25 : sample;
+      serverLagMs = Math.max(0, Number(m.lag) || 0);
       updatePingHud();
       return;
     }
@@ -1477,6 +1479,7 @@ function connect(message) {
       for (const vehicle of m.vehicles || []) vehicle.receivedAt = receivedAt;
       recordVehicleSnapshots(m.vehicles || [], m.now);
       snapshotServerTime = m.now;
+      recordSnapshotTiming(m.now);
       gameState = m;
       syncLootCrates(m.crates || []);
       // Đồng bộ đồng hồ với server để máy bay / đếm ngược khớp giữa các máy.
@@ -1546,6 +1549,7 @@ function connect(message) {
 }
 // ---- Đo ping (RTT) — dùng để dự đoán xe và hiện chất lượng mạng cho người chơi ----
 let rttMs = 0,
+  serverLagMs = 0, // server báo mình bị nghẽn CPU bao nhiêu ms (p99)
   pingTimer = null;
 function startPingLoop() {
   stopPingLoop();
@@ -1568,8 +1572,17 @@ function updatePingHud() {
     hud.append(el);
   }
   const ms = Math.round(rttMs);
-  setText(el, `PING ${ms} MS`);
-  const level = ms < 80 ? "good" : ms < 160 ? "ok" : "bad";
+  // Ngoài ping còn hiện 2 nguyên nhân lag để biết lỗi nằm ở đâu:
+  //  ±x   — độ dao động của mạng (gói tới lúc nhanh lúc chậm: Wi-Fi / tuyến cáp)
+  //  SV+x — server bị nghẽn CPU (Render gói free 0.1 CPU bị HĐH tạm dừng)
+  const jitter = Math.round(netTiming.late90);
+  setText(
+    el,
+    `PING ${ms} MS` +
+      (jitter >= 25 ? ` · ±${jitter}` : "") +
+      (serverLagMs >= 15 ? ` · SV+${serverLagMs}` : ""),
+  );
+  const level = ms < 80 && jitter < 40 ? "good" : ms < 160 && jitter < 90 ? "ok" : "bad";
   if (el.dataset.level !== level) el.dataset.level = level;
 }
 function send(data) {
@@ -3078,6 +3091,49 @@ function buildCarMesh(vehicle, forest) {
 // sử vị trí 1 s (claimAlong) nên bắn trúng thứ mình nhìn thấy vẫn được tính.
 const INTERP_DELAY_MS = 100;
 const MAX_EXTRAPOLATE_MS = 150;
+// ĐỆM NỘI SUY TỰ THÍCH NGHI. Chạy local gói tới đều tăm tắp nên 100 ms cố định
+// là dư; qua Internet (VN → Singapore, Wi-Fi) gói tới lệch nhau 30–100 ms —
+// mỗi gói tới muộn hơn khoảng đệm là avatar/xe phải đoán rồi khựng rồi giật
+// (cảm giác "lag" dù FPS cao). Ta đo độ trễ của TỪNG gói so với gói nhanh nhất
+// gần đây rồi đặt đệm = nhịp gói + trễ p90 (70–220 ms; server bù trễ bắn
+// 450 ms nên bắn trúng thứ mình thấy vẫn được tính).
+const netTiming = {
+  offsets: [], // (giờ server − giờ máy) của ~60 gói gần nhất
+  base: null, // offset của gói NHANH nhất trong cửa sổ = trễ mạng tối thiểu
+  interval: 60, // khoảng cách trung bình giữa 2 gói state (ms, theo giờ server)
+  lastServerT: 0,
+  delay: INTERP_DELAY_MS,
+  late90: 0,
+};
+function recordSnapshotTiming(serverT) {
+  if (!Number.isFinite(serverT)) return;
+  const nt = netTiming;
+  nt.offsets.push(serverT - Date.now());
+  if (nt.offsets.length > 60) nt.offsets.shift();
+  nt.base = Math.max(...nt.offsets);
+  if (nt.lastServerT) {
+    const gap = serverT - nt.lastServerT;
+    if (gap > 0 && gap < 1000) nt.interval += (Math.min(gap, 200) - nt.interval) * 0.1;
+  }
+  nt.lastServerT = serverT;
+  const late = nt.offsets.map((o) => nt.base - o).sort((a, b) => a - b);
+  nt.late90 = late[Math.floor(late.length * 0.9)] || 0;
+  const target = clamp(nt.interval + nt.late90 + 12, 70, 220);
+  // Tăng nhanh (tránh hụt gói), giảm chậm (tránh thời gian vẽ bị "tua").
+  nt.delay += (target - nt.delay) * (target > nt.delay ? 0.25 : 0.03);
+}
+function resetNetTiming() {
+  netTiming.offsets.length = 0;
+  netTiming.base = null;
+  netTiming.lastServerT = 0;
+  netTiming.delay = INTERP_DELAY_MS;
+  netTiming.late90 = 0;
+}
+// Mốc thời gian (giờ server) đang được vẽ cho người chơi khác / xe.
+const interpRenderTime = () =>
+  netTiming.base === null
+    ? serverNow() - INTERP_DELAY_MS
+    : Date.now() + netTiming.base - netTiming.delay;
 const angleDelta = (from, to) =>
   Math.atan2(Math.sin(to - from), Math.cos(to - from));
 function pushSnapshot(list, snap, teleportDistance = 8) {
@@ -3230,7 +3286,7 @@ function poseDriverForearms(ud) {
 function updateVehicleMeshes(dt) {
   const vehicles = gameState?.vehicles || [];
   const liveIds = new Set();
-  const renderT = serverNow() - INTERP_DELAY_MS;
+  const renderT = interpRenderTime();
   for (const vehicle of vehicles) {
     liveIds.add(vehicle.id);
     let mesh = vehicleMeshes.get(vehicle.id);
@@ -6559,7 +6615,7 @@ function animateAvatars(dt) {
 }
 function updateRemoteMotion(dt) {
   const t = plane ? planeTime() : 0;
-  const renderT = serverNow() - INTERP_DELAY_MS;
+  const renderT = interpRenderTime();
   for (const mesh of remoteMeshes.values()) {
     const ud = mesh.userData;
     if (ud.state === "plane" && plane) {
