@@ -1186,11 +1186,11 @@ function takeMap(mapId) {
   scheduleMapRefill();
   return map;
 }
-// Có trận đang đếm ngược / bay / đánh → đừng chiếm CPU lúc này.
+// Chỉ sinh map khi KHÔNG AI đang kết nối. Bản trước chỉ tránh lúc có trận
+// đang đánh nên vẫn sinh map lúc mọi người ở sảnh chờ → trên Render (0.1 CPU)
+// server khựng ~1.5 s ngay trước khi bay (ping vọt 310 ms lúc đầu trận).
 function matchInProgress() {
-  for (const room of rooms.values())
-    if (["countdown", "staging", "plane", "playing"].includes(room.phase)) return true;
-  return false;
+  return wss.clients.size > 0;
 }
 let mapRefillTimer = null;
 function scheduleMapRefill(delay = 4000) {
