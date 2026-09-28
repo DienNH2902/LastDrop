@@ -1896,7 +1896,14 @@ wss.on("connection", (ws) => {
       if (!Number.isFinite(dx)) dx = 0;
       if (!Number.isFinite(dz)) dz = 0;
       const distance = Math.hypot(dx, dz);
-      const maxDistance = moveSpeed * elapsed + 0.15;
+      // "Ngân sách" quãng đường tích luỹ theo thời gian thực (tối đa ~0.35 s
+      // chạy). Wi-Fi hay dồn gói: 2 gói "move" tới cách nhau vài ms — tính riêng
+      // từng gói thì gói sau bị cắt cụt, vị trí server tụt sau client (người
+      // khác thấy trễ, núp rồi vẫn trúng đạn). Ngân sách vẫn chặn chạy nhanh bất thường.
+      const budgetCap = moveSpeed * 0.35 + 0.15;
+      p.moveBudget = Math.min(budgetCap, (p.moveBudget ?? budgetCap) + moveSpeed * elapsed);
+      const maxDistance = Math.max(p.moveBudget, moveSpeed * elapsed) + 0.15;
+      p.moveBudget = Math.max(0, p.moveBudget - Math.min(distance, maxDistance));
       if (distance > maxDistance && distance > 0) {
         dx *= maxDistance / distance;
         dz *= maxDistance / distance;
@@ -2321,16 +2328,39 @@ wss.on("connection", (ws) => {
           y: baseY + y,
           z: o.z - Math.sin(o.yaw || 0) * lx + Math.cos(o.yaw || 0) * lz,
         });
+        // Tường hông có CỬA SỔ trống (khớp đúng khung vẽ ở client: bệ cửa
+        // 34% → đỉnh cửa 73% chiều cao tường, rộng ±0.72 m): đạn bay xuyên qua
+        // ô cửa, chỉ phần tường quanh nó chặn đạn. Cửa ra vào có lanh tô phía trên.
+        const sill = wallHeight * 0.34;
+        const windowTop = wallHeight * 0.73;
+        const windowHalf = 0.72;
+        const doorH = Math.min(2.25, wallHeight * 0.78);
+        const sideWalls = [];
+        for (const side of [-1, 1]) {
+          const lx = side * (half - thickness / 2);
+          const hx = thickness / 2;
+          sideWalls.push(
+            rayBox(centerAt(lx, 0, sill / 2), o.yaw || 0, { x: hx, y: sill / 2, z: half }),
+            rayBox(
+              centerAt(lx, 0, (wallHeight + windowTop) / 2),
+              o.yaw || 0,
+              { x: hx, y: (wallHeight - windowTop) / 2, z: half },
+            ),
+            ...[-1, 1].map((end) =>
+              rayBox(
+                centerAt(lx, (end * (half + windowHalf)) / 2, (sill + windowTop) / 2),
+                o.yaw || 0,
+                { x: hx, y: (windowTop - sill) / 2, z: (half - windowHalf) / 2 },
+              ),
+            ),
+          );
+        }
         const distances = [
+          ...sideWalls,
           rayBox(
-            centerAt(-half + thickness / 2, 0, wallHeight / 2),
+            centerAt(0, -half + thickness / 2, (wallHeight + doorH) / 2),
             o.yaw || 0,
-            { x: thickness / 2, y: wallHeight / 2, z: half },
-          ),
-          rayBox(
-            centerAt(half - thickness / 2, 0, wallHeight / 2),
-            o.yaw || 0,
-            { x: thickness / 2, y: wallHeight / 2, z: half },
+            { x: doorHalf, y: (wallHeight - doorH) / 2, z: thickness / 2 },
           ),
           rayBox(
             centerAt(0, half - thickness / 2, wallHeight / 2),

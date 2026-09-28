@@ -143,6 +143,7 @@ let keys = {},
   gunshotReverbBuffer = null,
   soundOn = true,
   lastMove = 0,
+  lastMoveKey = "",
   paused = false,
   scoped = false,
   verticalSpeed = 0,
@@ -338,6 +339,8 @@ const AUDIO_RANGE = {
   reload: { ref: 1.5, max: 14 },
   loot: { ref: 1.5, max: 18 },
 };
+let gunshotVoiceWindow = 0, // giới hạn số tiếng súng người khác phát cùng lúc
+  gunshotVoiceCount = 0;
 // Thời điểm (ms, tính từ lúc bắt đầu nạp) của từng tiếng trong 1.8 giây nạp đạn.
 // Thời điểm (ms, tính từ lúc bắt đầu nạp) của từng tiếng trong 1.8 giây nạp đạn,
 // theo đúng thao tác của từng khẩu:
@@ -799,6 +802,17 @@ function playSpatialGunshot(
 ) {
   const isSniper = weapon === "sniper";
   const isBeryl = weapon === "beryl";
+  // Giới hạn "giọng" cho tiếng súng NGƯỜI KHÁC: tầm nghe rất xa nên nhiều
+  // trận đánh xa xả đạn cùng lúc có thể tạo hàng trăm audio node/giây. Mỗi
+  // cửa sổ 100 ms chỉ phát tối đa 6 tiếng; súng của mình luôn được phát.
+  if (position) {
+    const nowMs = performance.now();
+    if (nowMs - gunshotVoiceWindow > 100) {
+      gunshotVoiceWindow = nowMs;
+      gunshotVoiceCount = 0;
+    }
+    if (++gunshotVoiceCount > 6) return;
+  }
   const a = spatialAudio(position, {
     volume: volume * (isSniper ? 1.5 : isBeryl ? 1.35 : 1.15),
     ...AUDIO_RANGE.gunshot,
@@ -1650,6 +1664,18 @@ function makeMat(color, roughness = 1) {
 // kỳ hình ảnh nào vì mỗi mảnh vẫn giữ đúng vị trí/xoay/scale gốc, chỉ khác là
 // được "đóng cứng" vào hình học chung thay vì làm một Mesh riêng.
 let mergeBuckets = null;
+// Bucket đặc biệt cần vật liệu riêng (không phải Lambert đục của makeMat).
+// Kính cửa sổ: cả map gộp chung MỘT mesh trong suốt → chỉ thêm 1 draw call.
+const BUCKET_MATERIALS = {
+  windowGlass: () =>
+    new THREE.MeshLambertMaterial({
+      color: "#a9cbd6",
+      transparent: true,
+      opacity: 0.14,
+      depthWrite: false,
+      side: THREE.DoubleSide, // nhìn được từ trong lẫn ngoài nhà
+    }),
+};
 function bucketAdd(key, color, geometry, build) {
   const temp = new THREE.Object3D();
   build(temp);
@@ -1664,7 +1690,9 @@ function flushMergeBuckets() {
     const bucket = mergeBuckets[key];
     if (!bucket.parts.length) continue;
     const merged = mergeGeometries(bucket.parts, false);
-    scene.add(new THREE.Mesh(merged, makeMat(bucket.color)));
+    const mesh = new THREE.Mesh(merged, BUCKET_MATERIALS[key]?.() || makeMat(bucket.color));
+    if (BUCKET_MATERIALS[key]) mesh.renderOrder = 1; // kính trong vẽ sau vật đục
+    scene.add(mesh);
   }
   mergeBuckets = null;
 }
@@ -2312,7 +2340,8 @@ function drawMapObject(o, forest) {
         thickness,
       );
       wall(0, wallH / 2, half, w, wallH, thickness);
-      // Side windows have a sill, lintel, and dark glass set inside the opening.
+      // Cửa sổ hai bên: bệ, lanh tô và kính TRONG SUỐT — nhìn và bắn xuyên được
+      // (server cũng để trống ô cửa trong phép thử đạn).
       for (const side of [-1, 1]) {
         wall(side * half, sill / 2, 0, thickness, sill, w);
         wall(
@@ -2339,14 +2368,14 @@ function drawMapObject(o, forest) {
           windowTop - sill,
           half - windowHalf,
         );
-        wall(
-          side * (half - 0.05),
-          (sill + windowTop) / 2,
-          0,
-          0.035,
-          windowTop - sill - 0.08,
-          windowHalf * 2 - 0.08,
-          "#29404a",
+        bucketAdd(
+          "windowGlass",
+          "#a9cbd6",
+          new THREE.PlaneGeometry(windowHalf * 2 - 0.08, windowTop - sill - 0.08),
+          (t) => {
+            at(t, side * (half - 0.05), (sill + windowTop) / 2, 0);
+            t.rotation.y = yaw + Math.PI / 2;
+          },
         );
         wall(
           side * (half - 0.02),
@@ -5722,24 +5751,50 @@ function lockPointer(element) {
 // ngược hướng) khi đang khóa chuột và xoay liên tục — đó là cú "giật màn hình về
 // sau một khúc". Bỏ các giá trị bất thường so với tốc độ tay gần đây, và bỏ vài
 // sự kiện đầu tiên ngay sau khi vừa khóa chuột (hay chứa bước nhảy rác).
+//
+// LƯU Ý (lỗi cũ): bản trước bỏ MỌI giá trị vượt ngưỡng và không cập nhật tốc độ
+// trung bình với giá trị bị bỏ → khi xoay nhanh đột ngột, ngưỡng không bao giờ
+// tăng kịp, mọi sự kiện đều bị bỏ → màn hình "đứng im" cho tới khi nhấc chuột.
+// Bây giờ chỉ bỏ cú nhảy ĐƠN LẺ: bước nhảy rác của trình duyệt là 1 sự kiện
+// khổng lồ, thường NGƯỢC hướng đang xoay; chuyển động thật thì liên tục và cùng
+// hướng. Tối đa bỏ 1 sự kiện liên tiếp, sau đó luôn nhận và thích nghi ngưỡng.
 let mouseAvg = 12,
+  mouseDirX = 0, // hướng xoay ngang gần đây (trung bình có dấu)
+  mouseRejects = 0,
   pointerLockedAt = 0;
 document.addEventListener("pointerlockchange", () => {
   pointerLockedAt = performance.now();
   mouseAvg = 12;
+  mouseDirX = 0;
+  mouseRejects = 0;
 });
 function saneMouseDelta(e) {
-  if (performance.now() - pointerLockedAt < 60) return false;
-  const mag = Math.max(Math.abs(e.movementX), Math.abs(e.movementY));
-  const limit = Math.max(180, mouseAvg * 8);
-  if (mag > limit) return false;
+  if (performance.now() - pointerLockedAt < 40) return false;
+  const mx = e.movementX || 0,
+    my = e.movementY || 0;
+  const mag = Math.max(Math.abs(mx), Math.abs(my));
+  const limit = Math.max(260, mouseAvg * 6);
+  if (mag > limit && mouseRejects < 1) {
+    // Cùng hướng đang xoay mạnh → chuyển động thật (vung chuột nhanh), nhận luôn.
+    const sameDirection = Math.abs(mouseDirX) > 20 && Math.sign(mx) === Math.sign(mouseDirX);
+    if (!sameDirection) {
+      mouseRejects++;
+      mouseAvg += (mag - mouseAvg) * 0.3; // vẫn thích nghi để lần sau không bỏ nữa
+      return false;
+    }
+  }
+  mouseRejects = 0;
   mouseAvg += (mag - mouseAvg) * 0.2;
+  mouseDirX += (mx - mouseDirX) * 0.3;
   return true;
 }
 function onMouse(e) {
   // While driving, steering controls the car and the POV follows its heading.
   if (local.vehicleId && local.vehicleSeat === 0) return;
   if (document.pointerLockElement !== renderer?.domElement) return;
+  // Mất sự kiện nhả chuột (trình duyệt đôi khi làm rơi mouseup khi khóa chuột):
+  // nút trái thực tế đã nhả mà vẫn đang "bóp cò" → dừng bắn ngay.
+  if (triggerHeld && !(e.buttons & 1)) stopFiring();
   if (!saneMouseDelta(e)) return;
   if (local.vehicleId) {
     const sens = Number($("#sensitivity").value) || 50;
@@ -5798,7 +5853,10 @@ function onFire(e) {
     document.pointerLockElement !== renderer?.domElement
   )
     return;
-  if (triggerHeld) return;
+  // Một lần NHẤN mới nghĩa là nút đã được nhả trước đó: nếu triggerHeld vẫn còn
+  // true là do mất sự kiện mouseup → trước đây mọi cú click sau đó đều bị bỏ qua
+  // ("click không nhận"). Giờ xoá trạng thái cũ và bắn bình thường.
+  if (triggerHeld) stopFiring();
   // Clicking repeatedly must not bypass the bolt-action cooldown.
   if (
     local.weapon === "sniper" &&
@@ -8239,22 +8297,29 @@ function frame() {
       camera.position.z -= Math.sin(local.yaw) * peekBlend * 0.28;
       camera.rotation.z = -peekBlend * 0.18;
     }
-    if (Date.now() - lastMove > 50) {
-      send({
-        type: "move",
-        x: local.x,
-        z: local.z,
-        yaw: local.yaw,
-        crouching: local.crouching,
-        prone: local.prone,
-        swimming: local.swimming,
-        swimY: local.swimY,
-        jumping: local.jumping,
-        slowWalking: isSlowWalking,
-        jumpY: jumpOffset,
-        peek: local.peek,
-      });
-      lastMove = Date.now();
+    const nowMove = Date.now();
+    if (nowMove - lastMove > 50) {
+      // Đứng yên, không xoay: bỏ gói trùng lặp (chỉ nhắc lại mỗi 250 ms) —
+      // giảm ~80% gói gửi lên khi núp/ngắm, đỡ nghẽn Wi-Fi yếu và đỡ tải server.
+      const moveKey = `${local.x.toFixed(2)}|${local.z.toFixed(2)}|${local.yaw.toFixed(3)}|${+local.crouching}${+local.prone}${+Boolean(local.swimming)}${+isSlowWalking}|${(local.swimY ?? 0).toFixed(2)}|${jumpOffset.toFixed(2)}|${local.peek.toFixed(2)}`;
+      if (moveKey !== lastMoveKey || nowMove - lastMove > 250) {
+        send({
+          type: "move",
+          x: local.x,
+          z: local.z,
+          yaw: local.yaw,
+          crouching: local.crouching,
+          prone: local.prone,
+          swimming: local.swimming,
+          swimY: local.swimY,
+          jumping: local.jumping,
+          slowWalking: isSlowWalking,
+          jumpY: jumpOffset,
+          peek: local.peek,
+        });
+        lastMove = nowMove;
+        lastMoveKey = moveKey;
+      }
     }
   }
   // if (recoilPitch > 0) {
