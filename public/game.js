@@ -155,7 +155,7 @@ let keys = {},
   mapHills = [],
   mapId = "forest",
   selectedMap =
-    localStorage.getItem("ld-selected-map") === "desert" ? "desert" : "forest",
+    normalizeMapId(localStorage.getItem("ld-selected-map")),
   triggerHeld = false,
   fireInterval = null,
   lastClientShotAt = 0,
@@ -290,6 +290,16 @@ const STAND_HEIGHT = 1.8;
 const CROUCH_HEIGHT = 1.34;
 const PRONE_HEIGHT = 0.48;
 
+// Ba map: rừng, sa mạc, THÀNH CỔ (rừng rậm nhiệt đới kiểu Sanhok).
+const MAP_INFO = {
+  forest: { label: "RỪNG", name: "VERDANT WILDS", count: "01 / 03", description: "CỎ XANH · HỒ · SÔNG · ĐỒI" },
+  desert: { label: "SA MẠC", name: "DUSTY BASIN", count: "02 / 03", description: "SA MẠC · ĐÁ · XƯƠNG RỒNG" },
+  jungle: { label: "THÀNH CỔ", name: "ANCIENT CITADEL", count: "03 / 03", description: "RỪNG RẬM · NHÀ SÀN · PHÁO ĐÀI · SÔNG LỚN · ĐỒI NÚI" },
+};
+function normalizeMapId(id) {
+  return id === "desert" || id === "jungle" ? id : "forest";
+}
+const isJungleMap = () => mapId === "jungle";
 const NORMAL_SPEED = 7;
 const SPRINT_SPEED = 9.5; // Shift giữ + W: chạy nhanh (khớp SPRINT_SPEED ở server)
 // Chạy nhanh: sprintCancelled = đã bị hủy bởi bắn/ngắm → phải NHẢ Shift rồi
@@ -320,6 +330,8 @@ $("#sfx").value = saved.sfx ?? 30;
 $("#music").value = saved.music ?? 10;
 $("#masterVolume").value = saved.masterVolume ?? 30;
 $("#quality").value = saved.quality || "Performance";
+$("#crouchMode").value = saved.crouchMode === "hold" ? "hold" : "toggle";
+$("#proneMode").value = saved.proneMode === "hold" ? "hold" : "toggle";
 delete saved.name; // nickname is kept separately from graphics/audio settings
 localStorage.setItem(
   "ld-settings",
@@ -938,7 +950,7 @@ function playLootSound(sound, position) {
 // Bề mặt dưới chân quyết định tiếng bước.
 function footSurface(x, z) {
   if (waterAt(x, z)) return "water";
-  if (mapId === "forest" && inSwamp(x, z)) return "mud";
+  if (mapId !== "desert" && inSwamp(x, z)) return "mud";
   for (const o of obstaclesNear(x, z)) {
     if (o.type !== "house" && o.type !== "hut") continue;
     const dx = x - o.x,
@@ -952,7 +964,7 @@ function footSurface(x, z) {
       return "wood";
   }
   if (isNearRoad(x, z, 0)) return "road";
-  return mapId === "forest" ? "grass" : "sand";
+  return mapId !== "desert" ? "grass" : "sand";
 }
 function playSpatialFootstep(x, y, z, intensity = 1, ownPlayer = false) {
   if (ownPlayer && local.vehicleId) return;
@@ -1218,7 +1230,11 @@ const settingsBindings = {
     suffix: "%",
   },
   quality: { main: "quality", pause: "pauseQuality" },
+  // Ngồi (C) / Nằm (Z): "toggle" = bấm để bật/tắt, "hold" = giữ phím (thả là đứng dậy).
+  crouchMode: { main: "crouchMode", pause: "pauseCrouchMode" },
+  proneMode: { main: "proneMode", pause: "pauseProneMode" },
 };
+const isHoldMode = (key) => document.getElementById(key)?.value === "hold";
 function syncSettingControl(key, value) {
   const binding = settingsBindings[key];
   if (!binding) return;
@@ -1319,6 +1335,8 @@ function saveSettings() {
       sfx: $("#sfx").value,
       music: $("#music").value,
       quality: $("#quality").value,
+      crouchMode: $("#crouchMode").value,
+      proneMode: $("#proneMode").value,
     }),
   );
 }
@@ -1368,7 +1386,7 @@ $("#nameInput").addEventListener("input", () => {
   localStorage.setItem("ld-player-name", $("#nameInput").value.slice(0, 18));
 });
 function renderMapChoice(id) {
-  selectedMap = id === "forest" ? "forest" : "desert";
+  selectedMap = normalizeMapId(id);
   localStorage.setItem("ld-selected-map", selectedMap);
   document.querySelectorAll("[data-map-choice]").forEach((button) => {
     button.classList.toggle(
@@ -1376,14 +1394,12 @@ function renderMapChoice(id) {
       button.dataset.mapChoice === selectedMap,
     );
   });
-  const forest = selectedMap === "forest";
-  $("#mapName").textContent = forest ? "VERDANT WILDS" : "DUSTY BASIN";
-  $("#mapCount").textContent = forest ? "01 / 02" : "02 / 02";
-  $("#mapDescription").textContent = forest
-    ? "CỎ XANH · HỒ · SÔNG · ĐỒI"
-    : "SA MẠC · ĐÁ · XƯƠNG RỒNG";
-  $("#mapArt").classList.toggle("forest-preview", forest);
-  $("#mapArt").classList.toggle("desert-preview", !forest);
+  const info = MAP_INFO[selectedMap];
+  $("#mapName").textContent = info.name;
+  $("#mapCount").textContent = info.count;
+  $("#mapDescription").textContent = info.description;
+  for (const id of Object.keys(MAP_INFO))
+    $("#mapArt").classList.toggle(`${id}-preview`, id === selectedMap);
 }
 document.querySelectorAll("[data-map-choice]").forEach((button) => {
   button.addEventListener("click", () =>
@@ -1467,7 +1483,7 @@ function connect(message) {
       roomCode = m.code;
       playerId = m.playerId;
       isHost = m.isHost;
-      mapId = m.mapId === "desert" ? "desert" : "forest";
+      mapId = normalizeMapId(m.mapId);
       setMapObstacles(m.obstacles || []);
       renderMapChoice(mapId);
       local.x = m.spawn.x;
@@ -1531,7 +1547,7 @@ function connect(message) {
       // Weather state handling is disabled for performance profiling.
       // if (typeof m.weatherActive === "boolean" && m.weatherActive !== weatherActive) {
       //   weatherActive = m.weatherActive;
-      //   const forest = mapId === "forest";
+      //   const forest = mapId !== "desert"; // Thành Cổ dùng chung nền xanh với rừng
       //   if (weatherActive) beginWeather(forest); else endWeather(forest);
       // }
       renderLobby();
@@ -1667,7 +1683,7 @@ function renderLobby() {
     slots.append(el);
   }
   $("#lobbyHint").textContent =
-    `${gameState.players.length}/5 người chơi · MAP ${mapId === "forest" ? "RỪNG" : "SA MẠC"}`;
+    `${gameState.players.length}/5 người chơi · MAP ${MAP_INFO[mapId].label}`;
   $("#startBtn").classList.toggle("hidden", !isHost);
   $("#leaveLobbyBtn")?.classList.remove("hidden");
 }
@@ -1884,8 +1900,22 @@ function isOnBridgeAt(x, z, clearance = 0) {
   });
 }
 // Return the walkable top of a roof or large rock, if the point is on it.
-function raisedSurfaceAt(x, z) {
-  let best = null;
+// Nhà sàn (Thành Cổ): sàn cao o.lift m, cầu thang dốc STILT_RAMP m trước cửa
+// (mặt -Z). KHỚP stiltSurfaces / raisedSurfacesAt của server.js.
+const STILT_RAMP = 3.4;
+function stiltSurfaces(o, ground, lx, lz, out) {
+  const half = o.w / 2,
+    floor = ground + o.lift;
+  if (Math.abs(lx) <= half && Math.abs(lz) <= half)
+    out.push({ height: floor + 0.08, base: floor - 1, type: "floor", obstacle: o });
+  if (Math.abs(lx) <= 0.95 && lz < -half && lz >= -half - STILT_RAMP) {
+    const t = (lz + half + STILT_RAMP) / STILT_RAMP;
+    const h = ground + o.lift * t + 0.05;
+    out.push({ height: h, base: h - 1, type: "ramp", obstacle: o });
+  }
+}
+function raisedSurfacesAt(x, z) {
+  const out = [];
   for (const o of obstaclesNear(x, z)) {
     if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
     if (o.type === "house" || o.type === "hut") {
@@ -1895,14 +1925,13 @@ function raisedSurfaceAt(x, z) {
         s = Math.sin(o.yaw || 0);
       const lx = c * dx - s * dz,
         lz = s * dx + c * dz;
+      if (o.lift) stiltSurfaces(o, groundHeightAt(o.x, o.z), lx, lz, out);
       // Vùng "trên mái" phải rộng bằng hoặc hơn vùng va chạm của tường nhà
-      // (blockedByBuilding dùng half + obstacleRadius) — nếu không sẽ có một
-      // dải hẹp nơi người chơi vừa rời mái (mất độ cao) nhưng vẫn còn nằm
-      // trong vùng chặn của tường -> bị kẹt cứng ở mép mái.
+      // (blockedByBuilding dùng half + obstacleRadius) để không kẹt ở mép mái.
       const halfX = Math.max(o.w * 0.53, o.w / 2 + 0.6);
       const halfZ = o.w / 2 + 0.6;
       if (Math.abs(lx) > halfX || Math.abs(lz) > halfZ) continue;
-      const base = groundHeightAt(o.x, o.z);
+      const base = groundHeightAt(o.x, o.z) + (o.lift || 0);
       const wallH = o.h * 0.72;
       const height =
         base +
@@ -1910,14 +1939,11 @@ function raisedSurfaceAt(x, z) {
         o.w * 0.16 +
         0.12 * Math.cos(0.48) +
         (o.w * 0.245 - Math.abs(lx)) * Math.sin(0.48);
-      if (!best || height > best.height)
-        best = { height, base, type: "roof", obstacle: o };
-    } else if (o.type === "rock") {
+      out.push({ height, base, type: "roof", obstacle: o });
+    } else {
       const dx = x - o.x,
         dz = z - o.z;
       const dist = Math.hypot(dx, dz);
-      // Tương tự: vùng "trên đá" phải rộng bằng hoặc hơn bán kính va chạm
-      // (o.w * 0.46) của chính khối đá đó, để tránh dải kẹt ở mép đá.
       const topRadius = o.w * 0.46 + 0.6;
       if (dist > topRadius) continue;
       const base = groundHeightAt(o.x, o.z);
@@ -1925,27 +1951,29 @@ function raisedSurfaceAt(x, z) {
         nz = dz / (o.w * 0.4);
       const r2 = Math.min(1, nx * nx + nz * nz);
       const height = base + o.h * (0.42 + 0.5 * Math.sqrt(1 - r2));
-      if (!best || height > best.height)
-        best = { height, base, type: "rock", obstacle: o };
+      out.push({ height, base, type: "rock", obstacle: o });
     }
   }
+  return out;
+}
+function raisedSurfaceAt(x, z) {
+  let best = null;
+  for (const c of raisedSurfacesAt(x, z)) if (!best || c.height > best.height) best = c;
   return best;
 }
 // During descent, only land on raised geometry if the player came down onto it.
 function landingHeightAt(x, z, previousY) {
-  const terrain = groundHeightAt(x, z);
-  const raised = raisedSurfaceAt(x, z);
-  return raised && previousY >= raised.height - 0.25
-    ? Math.max(terrain, raised.height)
-    : terrain;
+  let h = groundHeightAt(x, z);
+  for (const c of raisedSurfacesAt(x, z))
+    if (previousY >= c.height - 0.25 && c.height > h) h = c.height;
+  return h;
 }
-// Preserve an elevated support while the player walks across its top surface.
+// Giữ mặt đỡ trên cao khi đi trên nó; xét MỌI mặt (sàn nhà sàn nằm dưới mái).
 function standingHeightAt(x, z, previousGroundY) {
-  const terrain = groundHeightAt(x, z);
-  const raised = raisedSurfaceAt(x, z);
-  return raised && previousGroundY > raised.base + 0.55
-    ? Math.max(terrain, raised.height)
-    : terrain;
+  let h = groundHeightAt(x, z);
+  for (const c of raisedSurfacesAt(x, z))
+    if (previousGroundY > c.base + 0.55 && c.height > h) h = c.height;
+  return h;
 }
 function waterAt(x, z) {
   for (const water of obstaclesNear(x, z)) {
@@ -1996,7 +2024,20 @@ function terrainColor(forest, x, z, h, slope, bed, swamp, seed, out) {
   const n = window.LDTerrain.fbm(x / 18, z / 18, seed + 5, 3);
   const n2 = window.LDTerrain.fbm(x / 5, z / 5, seed + 9, 2);
   const mix = (hex, t) => out.lerp(tmpTerrainColor.set(hex), t);
-  if (forest) {
+  if (forest && isJungleMap()) {
+    // THÀNH CỔ: xanh rừng rậm đậm, mảng đất đỏ, vách đá phủ rêu, không tuyết.
+    out.set(n > 0.55 ? "#3e7a33" : n > 0.42 ? "#346e2e" : "#2b6229");
+    mix("#7a5a33", Math.max(0, n2 - 0.66) * 1.8); // mảng đất đỏ lộ ra
+    if (slope > 0.5) mix(n2 > 0.5 ? "#556046" : "#4b573f", Math.min(1, (slope - 0.5) * 2)); // đá rêu
+    if (h > 30) mix("#2f5a2c", Math.min(1, (h - 30) / 14)); // tán rừng trên đỉnh
+    if (swamp) out.set(n2 > 0.5 ? "#394a26" : "#3f4f29");
+    if (bed > 0) out.set("#3b4a36");
+    else if (
+      h < 0.7 &&
+      waterBedDepth(x + 6, z) + waterBedDepth(x - 6, z) + waterBedDepth(x, z + 6) + waterBedDepth(x, z - 6) > 0
+    )
+      out.set("#86623f"); // bờ sông đất đỏ
+  } else if (forest) {
     out.set(n > 0.55 ? "#5c8a43" : n > 0.42 ? "#4f7d3c" : "#44703a");
     mix("#7d8a4a", Math.max(0, n2 - 0.62) * 1.6); // mảng cỏ úa
     if (h > 18) mix("#56654a", Math.min(1, (h - 18) / 22)); // cỏ núi sẫm
@@ -2196,6 +2237,12 @@ function addRoadRibbons(forest) {
   for (const pts of segmentLines("road", "roadId", 0.6)) {
     const y = (lift) => (x, z) => groundHeightAt(x, z) + lift;
     const halfW = pts[0]?.seg.w / 2 || 4.5;
+    if (pts[0]?.seg.dirt) {
+      // THÀNH CỔ: đường đất đỏ (không nhựa, không vạch kẻ), lề đất sẫm.
+      bucketAdd("road-shoulder-dirt", "#6f4a2c", ribbonGeometry(pts, halfW + 1.3, y(0.05)), noop);
+      bucketAdd("road-dirt", "#9b5533", ribbonGeometry(pts, halfW, y(0.08)), noop);
+      continue;
+    }
     bucketAdd(
       "road-shoulder",
       forest ? "#7c7563" : "#9a8a6c",
@@ -2229,9 +2276,10 @@ function addRoadRibbons(forest) {
   // Mặt cầu dày + trụ cầu xuống lòng sông.
   for (const s of mapObstacles) {
     if (s.type !== "road" || !s.bridge) continue;
+    const deck = s.dirt ? "#6e4d31" : "#6b6358"; // Thành Cổ: cầu gỗ
     bucketAdd(
-      "bridge-deck",
-      "#6b6358",
+      "bridge-deck-" + deck,
+      deck,
       new THREE.BoxGeometry(s.w + 0.6, 0.4, s.length),
       (t) => {
         t.position.set(s.x, groundHeightAt(s.x, s.z) - 0.18, s.z);
@@ -2240,8 +2288,8 @@ function addRoadRibbons(forest) {
     );
     for (const side of [-1, 1])
       bucketAdd(
-        "bridge-deck",
-        "#6b6358",
+        "bridge-deck-" + deck,
+        deck,
         new THREE.BoxGeometry(0.7, 5.2, 0.7),
         (t) => {
           t.position.set(
@@ -2287,6 +2335,14 @@ function addWaterSurfaces(forest) {
     scene.add(m);
   }
 }
+// Cả khối gầm nhà sàn (xe và người đứng dưới đất không chui qua được).
+function stiltFootprint(o, x, z, radius) {
+  const dx = x - o.x,
+    dz = z - o.z;
+  const c = Math.cos(o.yaw || 0),
+    s = Math.sin(o.yaw || 0);
+  return Math.abs(c * dx - s * dz) < o.w / 2 + radius && Math.abs(s * dx + c * dz) < o.w / 2 + radius;
+}
 function blockedByBuilding(o, x, z, radius) {
   const dx = x - o.x;
   const dz = z - o.z;
@@ -2319,7 +2375,7 @@ function waterMaterial(kind, options) {
 }
 function drawMapObject(o, forest) {
   const baseY =
-    o.type === "hill" || o.solid === false ? 0 : groundHeightAt(o.x, o.z);
+    o.type === "hill" || o.solid === false ? 0 : groundHeightAt(o.x, o.z) + (o.lift || 0);
   const add = (geometry, color, x = o.x, y = 0, z = o.z, material = null) => {
     const mesh = new THREE.Mesh(geometry, material || makeMat(color));
     mesh.position.set(x, y + baseY, z);
@@ -2537,6 +2593,36 @@ function drawMapObject(o, forest) {
           at(t, 0, wallH, endZ);
           t.rotation.y = yaw;
         });
+      if (o.lift) {
+        // NHÀ SÀN: cột gỗ, vách nan che gầm (không chui qua được — khớp va
+        // chạm), dầm sàn và cầu thang dốc lên cửa.
+        const lift = o.lift;
+        const post = "#4a3521",
+          slat = "#6b5034";
+        for (const px of [-half, 0, half])
+          for (const pz of [-half, 0, half])
+            wall(px * 0.96, -lift / 2 - 0.25, pz * 0.96, 0.22, lift + 0.5, 0.22, post);
+        for (const side of [-1, 1]) {
+          wall(side * (half - 0.04), -lift / 2, 0, 0.06, lift, w - 0.1, slat);
+          wall(0, -lift / 2, side * (half - 0.04), w - 0.1, lift, 0.06, slat);
+        }
+        wall(0, -0.06, 0, w + 0.3, 0.12, w + 0.3, post); // dầm đỡ sàn
+        // Cầu thang: tấm ván nghiêng từ đất lên ngưỡng cửa + 2 tay vịn.
+        const run = STILT_RAMP,
+          slopeLen = Math.hypot(run, lift),
+          tilt = Math.atan2(lift, run);
+        bucketAdd(slat, slat, new THREE.BoxGeometry(1.9, 0.12, slopeLen), (t) => {
+          at(t, 0, -lift / 2 - 0.02, -half - run / 2);
+          t.rotation.order = "YXZ";
+          t.rotation.set(-tilt, yaw, 0); // đầu phía nhà (+Z) cao lên tới ngưỡng cửa
+        });
+        for (const side of [-1, 1])
+          bucketAdd(post, post, new THREE.BoxGeometry(0.08, 0.08, slopeLen), (t) => {
+            at(t, side * 0.95, -lift / 2 + 0.85, -half - run / 2);
+            t.rotation.order = "YXZ";
+            t.rotation.set(-tilt, yaw, 0); // đầu phía nhà (+Z) cao lên tới ngưỡng cửa
+          });
+      }
       // Door posts and lintel make the entrance visible without blocking it.
       wall(-doorHalf, doorH / 2, -half - 0.03, 0.12, doorH, 0.12, "#493826");
       wall(doorHalf, doorH / 2, -half - 0.03, 0.12, doorH, 0.12, "#493826");
@@ -2603,6 +2689,90 @@ function drawMapObject(o, forest) {
             },
           );
       }
+      break;
+    }
+    case "stonewall": {
+      // Tường thành đá dày + lỗ châu mai trên đỉnh.
+      const stone = "#8a8676",
+        dark = "#6f6c5e";
+      const len = o.length || w;
+      bucketAdd(stone, stone, new THREE.BoxGeometry(w, o.h, len), (t) => {
+        t.position.set(o.x, baseY + o.h / 2 - 0.4, o.z);
+        t.rotation.y = o.yaw || 0;
+      });
+      const merlons = Math.max(1, Math.floor(len / 1.6));
+      for (let i = 0; i < merlons; i++) {
+        const along = -len / 2 + (i + 0.5) * (len / merlons);
+        if (i % 2) continue;
+        bucketAdd(dark, dark, new THREE.BoxGeometry(w + 0.1, 0.7, len / merlons), (t) => {
+          t.position.set(o.x + Math.sin(o.yaw || 0) * along, baseY + o.h - 0.4 + 0.35, o.z + Math.cos(o.yaw || 0) * along);
+          t.rotation.y = o.yaw || 0;
+        });
+      }
+      break;
+    }
+    case "tower": {
+      // Tháp canh vuông ở góc thành: thân đá, gờ nhô, lan can răng cưa.
+      const stone = "#8a8676",
+        dark = "#6f6c5e";
+      bucketAdd(stone, stone, new THREE.BoxGeometry(w, o.h, w), (t) => t.position.set(o.x, baseY + o.h / 2 - 0.5, o.z));
+      bucketAdd(dark, dark, new THREE.BoxGeometry(w + 0.6, 0.5, w + 0.6), (t) => t.position.set(o.x, baseY + o.h - 0.5, o.z));
+      for (const [mx, mz] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]])
+        bucketAdd(dark, dark, new THREE.BoxGeometry(0.9, 0.8, 0.9), (t) =>
+          t.position.set(o.x + mx * (w / 2 - 0.15), baseY + o.h + 0.15, o.z + mz * (w / 2 - 0.15)),
+        );
+      break;
+    }
+    case "banana": {
+      // Cây chuối: thân mảnh + tàu lá dài rủ xuống tứ phía.
+      const trunkH = o.h * 0.55;
+      bucketAdd("banana-trunk", "#6f7a3a", new THREE.CylinderGeometry(w * 0.09, w * 0.13, trunkH + 0.3, 6), (t) =>
+        t.position.set(o.x, baseY - 0.3 + (trunkH + 0.3) / 2, o.z),
+      );
+      for (let i = 0; i < 6; i++) {
+        const a = (o.yaw || 0) + (i / 6) * Math.PI * 2;
+        const leafLen = o.h * 0.55;
+        bucketAdd(i % 2 ? "banana-leaf-a" : "banana-leaf-b", i % 2 ? "#4f8f35" : "#5ea23d", new THREE.BoxGeometry(w * 0.42, 0.04, leafLen), (t) => {
+          t.position.set(o.x + Math.sin(a) * leafLen * 0.42, baseY + trunkH + leafLen * 0.12, o.z + Math.cos(a) * leafLen * 0.42);
+          t.rotation.order = "YXZ";
+          t.rotation.set(0.5, a, 0); // chúc đầu lá xuống
+        });
+      }
+      break;
+    }
+    case "palm": {
+      // Cây dừa: thân cong 3 đốt nghiêng dần + tàu lá xoè + chùm quả.
+      const seg = o.h / 3;
+      const lean = 0.12;
+      let px = o.x,
+        pz = o.z,
+        py = baseY - 0.3;
+      const dirX = Math.sin(o.yaw || 0),
+        dirZ = Math.cos(o.yaw || 0);
+      for (let i = 0; i < 3; i++) {
+        const tilt = lean * (i + 1);
+        const cx = px + dirX * Math.sin(tilt) * seg * 0.5,
+          cz = pz + dirZ * Math.sin(tilt) * seg * 0.5,
+          cy = py + Math.cos(tilt) * seg * 0.5;
+        bucketAdd("palm-trunk", "#7d6443", new THREE.CylinderGeometry(w * (0.15 - i * 0.02), w * (0.19 - i * 0.02), seg + 0.1, 7), (t) => {
+          t.position.set(cx, cy, cz);
+          t.rotation.order = "YXZ";
+          t.rotation.set(tilt, o.yaw || 0, 0);
+        });
+        px += dirX * Math.sin(tilt) * seg;
+        pz += dirZ * Math.sin(tilt) * seg;
+        py += Math.cos(tilt) * seg;
+      }
+      for (let i = 0; i < 7; i++) {
+        const a = (o.yaw || 0) + (i / 7) * Math.PI * 2;
+        const frond = o.h * 0.42;
+        bucketAdd("palm-frond", "#4a8a3a", new THREE.BoxGeometry(w * 0.5, 0.04, frond), (t) => {
+          t.position.set(px + Math.sin(a) * frond * 0.45, py + 0.1, pz + Math.cos(a) * frond * 0.45);
+          t.rotation.order = "YXZ";
+          t.rotation.set(0.42, a, 0);
+        });
+      }
+      bucketAdd("palm-nut", "#6b5a2a", new THREE.IcosahedronGeometry(0.28, 0), (t) => t.position.set(px, py - 0.3, pz));
       break;
     }
     case "deadTree": {
@@ -2798,7 +2968,9 @@ function addGrass(forest) {
     chunks.get(key).matrices.push(dummy.matrix.clone());
     chunks.get(key).colors.push(color.clone());
   };
-  const spacing = (forest ? 1.2 : 3.6) * (lowQuality ? 1.45 : 1);
+  const jungleGrass = isJungleMap();
+  // Thành Cổ: cỏ dày hơn (~1.5×) và cao hơn, mọc cả lên sườn núi.
+  const spacing = (jungleGrass ? 0.98 : forest ? 1.2 : 3.6) * (lowQuality ? 1.45 : 1);
   for (let gz = -MAP_HALF + 1; gz < MAP_HALF - 1; gz += spacing)
     for (let gx = -MAP_HALF + 1; gx < MAP_HALF - 1; gx += spacing) {
       const x = gx + (rand() - 0.5) * spacing,
@@ -2822,13 +2994,14 @@ function addGrass(forest) {
       const slope = mapTerrain.slopeAt(x, z);
       if (forest) {
         // Thưa dần lên cao, không mọc trên vách đá / đỉnh núi.
-        if (slope > 0.55 || h > 40 || r > 1 - Math.min(0.85, h / 48)) {
+        const maxH = jungleGrass ? 52 : 40;
+        if (slope > (jungleGrass ? 0.7 : 0.55) || h > maxH || r > 1 - Math.min(jungleGrass ? 0.35 : 0.85, h / (jungleGrass ? 120 : 48))) {
         } else
           push(
             "grass",
             x,
             z,
-            0.75 + rand() * 0.7,
+            jungleGrass ? 1.05 + rand() * 0.85 : 0.75 + rand() * 0.7,
             tint.setHSL(
               0.22 + rand() * 0.07,
               0.45 + rand() * 0.2,
@@ -2914,6 +3087,8 @@ const PLAYER_RADIUS = 0.38;
 // Ground collision follows the visible footprint, not the full square map cell.
 function obstacleFootprintRadius(o) {
   if (o.type === "tree") return o.w * 0.25; // visible trunk
+  if (o.type === "banana") return o.w * 0.14; // thân chuối mảnh
+  if (o.type === "palm") return o.w * 0.2;
   if (o.type === "deadTree") return o.w * 0.28; // trunk
   if (o.type === "cactus") return o.w * 0.48; // body and short arms
   if (o.type === "rock") return o.w * 0.46; // faceted rock, narrower than its cell
@@ -2938,14 +3113,19 @@ function isBlockedAt(x, z) {
     if (o.solid === false) continue;
     if (o.type === "house" || o.type === "hut") {
       const isAboveThisRoof =
-        local.groundY > groundHeightAt(o.x, o.z) + o.h * 0.72 + 0.1 &&
+        local.groundY > groundHeightAt(o.x, o.z) + (o.lift || 0) + o.h * 0.72 + 0.1 &&
         support?.type === "roof" &&
         support.obstacle === o;
       if (isAboveThisRoof) continue;
+      if (o.lift && local.groundY < groundHeightAt(o.x, o.z) + o.lift - 0.45) {
+        // Dưới sàn nhà sàn: cột + vách lưới chắn kín (khớp server).
+        if (stiltFootprint(o, x, z, obstacleRadius)) return true;
+        continue;
+      }
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
       continue;
     }
-    if (o.type === "fence") {
+    if (o.type === "fence" || o.type === "stonewall") {
       const dx = x - o.x,
         dz = z - o.z;
       const c = Math.cos(o.yaw || 0),
@@ -3389,10 +3569,10 @@ function carPointBlocked(ownId, x, z) {
   for (const o of obstaclesNear(x, z)) {
     if (o.solid === false) continue;
     if (o.type === "house" || o.type === "hut") {
-      if (blockedByBuilding(o, x, z, r)) return true;
+      if (o.lift ? stiltFootprint(o, x, z, r) : blockedByBuilding(o, x, z, r)) return true;
       continue;
     }
-    if (o.type === "fence") {
+    if (o.type === "fence" || o.type === "stonewall") {
       if (fenceBlocks(o, x, z, r)) return true;
       continue;
     }
@@ -3419,7 +3599,7 @@ function carPointBlocked(ownId, x, z) {
 // Lan can đang chặn điểm này (khớp fenceAt của server).
 function fenceAtPoint(x, z) {
   for (const o of obstaclesNear(x, z))
-    if (o.type === "fence" && o.solid !== false && fenceBlocks(o, x, z, PLAYER_RADIUS)) return o;
+    if ((o.type === "fence" || o.type === "stonewall") && o.solid !== false && fenceBlocks(o, x, z, PLAYER_RADIUS)) return o;
   return null;
 }
 function carBlockInfo(ownId, x, z, yaw) {
@@ -3615,7 +3795,7 @@ function updateVehicleMeshes(dt) {
     liveIds.add(vehicle.id);
     let mesh = vehicleMeshes.get(vehicle.id);
     if (!mesh) {
-      mesh = buildCarMesh(vehicle, mapId === "forest");
+      mesh = buildCarMesh(vehicle, mapId !== "desert");
       mesh.rotation.order = "YXZ";
       scene.add(mesh);
       vehicleMeshes.set(vehicle.id, mesh);
@@ -3797,7 +3977,7 @@ function initWorld() {
   const host = $("#world");
   host.innerHTML = "";
   vehicleMeshes.clear();
-  const forest = mapId === "forest";
+  const forest = mapId !== "desert"; // Thành Cổ dùng chung nền xanh với rừng
   scene = new THREE.Scene();
   scene.background = new THREE.Color(forest ? "#879c88" : "#ad9367");
   scene.fog = new THREE.Fog(forest ? "#879c88" : "#ad9367", 1, 1);
@@ -4796,7 +4976,7 @@ function lootRestHeight(x, z, footprint) {
     const lz = Math.sin(yaw) * dx + Math.cos(yaw) * dz;
     const half = (o.w || 1) / 2;
     if (Math.abs(lx) <= half && Math.abs(lz) <= half)
-      y = Math.max(y, groundHeightAt(o.x, o.z) + HOUSE_FLOOR_TOP);
+      y = Math.max(y, groundHeightAt(o.x, o.z) + (o.lift || 0) + HOUSE_FLOOR_TOP); // nhà sàn: trên sàn cao
   }
   return y;
 }
@@ -6017,7 +6197,8 @@ function onKeyDown(e) {
     if (local.prone) {
       local.prone = false;
       local.crouchToggle = true;
-    } else local.crouchToggle = !local.crouchToggle;
+    } else if (isHoldMode("crouchMode")) local.crouchToggle = true; // giữ C: ngồi tới khi thả
+    else local.crouchToggle = !local.crouchToggle;
     if (local.crouchToggle) local.sprinting = false;
     lastMove = 0;
     e.preventDefault();
@@ -6033,7 +6214,7 @@ function onKeyDown(e) {
     !waterAt(local.x, local.z) &&
     $("#game").classList.contains("active")
   ) {
-    local.prone = !local.prone;
+    local.prone = isHoldMode("proneMode") ? true : !local.prone; // giữ Z: nằm tới khi thả
     if (local.prone) {
       local.crouching = false;
       local.crouchToggle = false;
@@ -6071,10 +6252,24 @@ function onKeyDown(e) {
 
 function onKeyUp(e) {
   keys[e.code] = false;
+  releaseHeldStance(e.code);
   if (e.code === "ShiftLeft" || e.code === "ShiftRight") sprintCancelled = false;
   if (e.code === "KeyQ" || e.code === "KeyE") lastMove = 0;
 }
+// Chế độ "giữ phím": thả C thì đứng dậy khỏi tư thế ngồi, thả Z thì đứng dậy
+// khỏi tư thế nằm. Rời cửa sổ game (mất sự kiện thả phím) cũng tính là thả.
+function releaseHeldStance(code) {
+  if ((code === "KeyC" || code === "*") && isHoldMode("crouchMode")) {
+    if (local.crouchToggle) lastMove = 0;
+    local.crouchToggle = false;
+  }
+  if ((code === "KeyZ" || code === "*") && isHoldMode("proneMode") && local.prone) {
+    local.prone = false;
+    lastMove = 0;
+  }
+}
 function onGameWindowBlur() {
+  releaseHeldStance("*");
   stopFiring();
   keys.KeyQ = false;
   keys.KeyE = false;
@@ -7221,7 +7416,7 @@ function updateEnvironment(dt) {
       1,
     );
   envBlend += (target - envBlend) * Math.min(1, 4 * dt);
-  const forest = mapId === "forest";
+  const forest = mapId !== "desert"; // Thành Cổ dùng chung nền xanh với rừng
   tmpColorA.set(forest ? "#879c88" : "#ad9367");
   tmpColorB.set("#9cc9ea");
   scene.background.lerpColors(tmpColorA, tmpColorB, envBlend);
@@ -7403,7 +7598,7 @@ function minimapBase(S, forest, k, X, Y) {
   const roadLines = segmentLines("road", "roadId", 0.6);
   for (const [color, width] of [
     ["#3c3a33", 1.7],
-    [forest ? "#d8cfae" : "#efe0bb", 0.9],
+    [isJungleMap() ? "#b8683e" : forest ? "#d8cfae" : "#efe0bb", 0.9],
   ]) {
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.max(1, 9 * k * width);
@@ -7413,6 +7608,23 @@ function minimapBase(S, forest, k, X, Y) {
         i ? ctx.lineTo(X(p.x), Y(p.z)) : ctx.moveTo(X(p.x), Y(p.z)),
       );
     ctx.stroke();
+  }
+  // Tường thành & tháp (Thành Cổ).
+  for (const o of mapObstacles) {
+    if (o.type === "stonewall") {
+      const hx = (Math.sin(o.yaw || 0) * o.length) / 2,
+        hz = (Math.cos(o.yaw || 0) * o.length) / 2;
+      ctx.strokeStyle = "#cfc6a8";
+      ctx.lineWidth = Math.max(1.5, o.w * k * 1.4);
+      ctx.beginPath();
+      ctx.moveTo(X(o.x - hx), Y(o.z - hz));
+      ctx.lineTo(X(o.x + hx), Y(o.z + hz));
+      ctx.stroke();
+    } else if (o.type === "tower") {
+      const sz = Math.max(3, o.w * k);
+      ctx.fillStyle = "#e2d8b8";
+      ctx.fillRect(X(o.x) - sz / 2, Y(o.z) - sz / 2, sz, sz);
+    }
   }
   for (const o of mapObstacles) {
     if (
@@ -7461,7 +7673,7 @@ function drawFlightMap() {
   const k = S / (MAP_HALF * 2);
   const X = (x) => S / 2 + x * k;
   const Y = (z) => S / 2 + z * k;
-  const forest = mapId === "forest";
+  const forest = mapId !== "desert"; // Thành Cổ dùng chung nền xanh với rừng
   // Lớp địa hình tĩnh (đất, sông, đường, đồi, nhà, cây...) chỉ vẽ MỘT lần mỗi
   // map rồi dán lại; trước đây ~500 vật thể được vẽ lại mỗi 150 ms.
   ctx.clearRect(0, 0, S, S);

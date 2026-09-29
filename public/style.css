@@ -992,10 +992,20 @@ h2 {
   color: #caff75;
 }
 .map-art.forest-preview {
-  background: #335c3b url("/forest-map.svg") center/cover no-repeat;
+  background: #335c3b url("/forest-map.png") center/cover no-repeat;
 }
 .map-art.desert-preview {
-  background: #ad905e url("/desert-map.svg") center/cover no-repeat;
+  background: #ad905e url("/desert-map.png") center/cover no-repeat;
+}
+.map-art.jungle-preview {
+  background: #2b5e2c url("/jungle-map.png") center/cover no-repeat;
+}
+.map-art.jungle-preview .ring {
+  border-color: #e0a15f;
+  box-shadow: 0 0 30px #c2703d66;
+}
+.map-art.jungle-preview .pin {
+  color: #ffcf7a;
 }
 .map-art .grid,
 .map-art .ring,

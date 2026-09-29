@@ -76,7 +76,7 @@
             <div class="ld-field"><span>2 · CHỌN BẢN ĐỒ <b id="mapCount">01 / 02</b></span>
               <div class="map-art ld-map-art" id="mapArt"><span class="map-label" id="mapName">VERDANT WILDS</span></div>
               <div class="ld-map-desc" id="mapDescription">CỎ XANH · HỒ · SÔNG · ĐỒI</div>
-              <div class="map-select"><button type="button" data-map-choice="forest">RỪNG</button><button type="button" data-map-choice="desert">SA MẠC</button></div>
+              <div class="map-select"><button type="button" data-map-choice="forest">RỪNG</button><button type="button" data-map-choice="desert">SA MẠC</button><button type="button" data-map-choice="jungle">THÀNH CỔ</button></div>
             </div>
             <div class="ld-field"><span>3 · VÀO TRẬN</span>
               <button class="primary ld-create" id="createBtn">TẠO PHÒNG MỚI <b>→</b></button>
@@ -134,6 +134,16 @@
               <option value="Balanced">Balanced</option>
               <option value="High">High</option>
             </select>
+          </label>
+
+          <label>
+            NGỒI (C)
+            <select id="crouchMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select>
+          </label>
+
+          <label>
+            NẰM (Z)
+            <select id="proneMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select>
           </label>
 
                     <label>
@@ -230,7 +240,7 @@
                     <option>Performance</option>
                     <option>Balanced</option>
                     <option>High</option>
-                                    </select></label><label>CHẾ ĐỘ HIỂN THỊ<select id="pauseFullscreen">
+                                    </select></label><label>NGỒI (C)<select id="pauseCrouchMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select></label><label>NẰM (Z)<select id="pauseProneMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select></label><label>CHẾ ĐỘ HIỂN THỊ<select id="pauseFullscreen">
                     <option value="off">Windowed</option>
                     <option value="on">Fullscreen</option>
                   </select></label><button id="closePauseSettings" class="secondary">QUAY LẠI ESC</button>

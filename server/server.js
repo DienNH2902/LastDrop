@@ -761,10 +761,24 @@ function groundHeightAt(room, x, z) {
   return height;
 }
 // Walkable upper surfaces: the pitched roof and the safe crown of large rocks.
-function raisedSurfaceAt(room, x, z) {
-  let best = null;
+// Nhà sàn (Thành Cổ): sàn cao o.lift m, cầu thang dốc dài STILT_RAMP trước cửa
+// (mặt -Z). Mặt đứng được: sàn trong nhà + mặt dốc cầu thang. KHỚP game.js.
+const STILT_RAMP = 3.4;
+function stiltSurfaces(o, ground, lx, lz, out) {
+  const half = o.w / 2,
+    floor = ground + o.lift;
+  if (Math.abs(lx) <= half && Math.abs(lz) <= half)
+    out.push({ height: floor + 0.08, base: floor - 1, type: "floor", obstacle: o });
+  if (Math.abs(lx) <= 0.95 && lz < -half && lz >= -half - STILT_RAMP) {
+    const t = (lz + half + STILT_RAMP) / STILT_RAMP; // 0 = chân thang, 1 = đỉnh
+    const h = ground + o.lift * t + 0.05;
+    out.push({ height: h, base: h - 1, type: "ramp", obstacle: o });
+  }
+}
+// Mọi mặt cao hơn đất tại (x, z): mái nhà, đỉnh đá, sàn / cầu thang nhà sàn.
+function raisedSurfacesAt(room, x, z) {
+  const out = [];
   for (const o of nearObstacles(room.obstacles, x, z)) {
-    // Chỉ nhà, chòi và đá mới có mặt "đứng được".
     if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
     if (o.type === "house" || o.type === "hut") {
       const dx = x - o.x,
@@ -773,10 +787,11 @@ function raisedSurfaceAt(room, x, z) {
         s = Math.sin(o.yaw || 0);
       const lx = c * dx - s * dz,
         lz = s * dx + c * dz;
+      if (o.lift) stiltSurfaces(o, obstacleBaseY(room, o), lx, lz, out);
       const halfX = Math.max(o.w * 0.53, o.w / 2 + 0.6);
       const halfZ = o.w / 2 + 0.6;
       if (Math.abs(lx) > halfX || Math.abs(lz) > halfZ) continue;
-      const base = obstacleBaseY(room, o);
+      const base = obstacleBaseY(room, o) + (o.lift || 0); // nhà sàn: mái trên sàn cao
       const wallH = o.h * 0.72;
       const height =
         base +
@@ -784,9 +799,8 @@ function raisedSurfaceAt(room, x, z) {
         o.w * 0.16 +
         0.12 * Math.cos(0.48) +
         (o.w * 0.245 - Math.abs(lx)) * Math.sin(0.48);
-      if (!best || height > best.height)
-        best = { height, base, type: "roof", obstacle: o };
-    } else if (o.type === "rock") {
+      out.push({ height, base, type: "roof", obstacle: o });
+    } else {
       const dx = x - o.x,
         dz = z - o.z;
       const dist = Math.hypot(dx, dz);
@@ -797,25 +811,29 @@ function raisedSurfaceAt(room, x, z) {
         nz = dz / (o.w * 0.4);
       const r2 = Math.min(1, nx * nx + nz * nz);
       const height = base + o.h * (0.42 + 0.5 * Math.sqrt(1 - r2));
-      if (!best || height > best.height)
-        best = { height, base, type: "rock", obstacle: o };
+      out.push({ height, base, type: "rock", obstacle: o });
     }
   }
+  return out;
+}
+// Mặt cao nhất (giữ nguyên nghĩa cũ cho các chỗ chỉ cần "đang đứng trên gì").
+function raisedSurfaceAt(room, x, z) {
+  let best = null;
+  for (const c of raisedSurfacesAt(room, x, z)) if (!best || c.height > best.height) best = c;
   return best;
 }
+// Xét MỌI mặt: đứng trên sàn nhà sàn thì mái ở trên không được chọn nhầm.
 function landingHeightAt(room, x, z, previousY) {
-  const terrain = groundHeightAt(room, x, z);
-  const raised = raisedSurfaceAt(room, x, z);
-  return raised && previousY >= raised.height - 0.25
-    ? Math.max(terrain, raised.height)
-    : terrain;
+  let h = groundHeightAt(room, x, z);
+  for (const c of raisedSurfacesAt(room, x, z))
+    if (previousY >= c.height - 0.25 && c.height > h) h = c.height;
+  return h;
 }
 function standingHeightAt(room, x, z, previousGroundY) {
-  const terrain = groundHeightAt(room, x, z);
-  const raised = raisedSurfaceAt(room, x, z);
-  return raised && previousGroundY > raised.base + 0.55
-    ? Math.max(terrain, raised.height)
-    : terrain;
+  let h = groundHeightAt(room, x, z);
+  for (const c of raisedSurfacesAt(room, x, z))
+    if (previousGroundY > c.base + 0.55 && c.height > h) h = c.height;
+  return h;
 }
 function waterAt(room, x, z) {
   for (const water of nearObstacles(room.obstacles, x, z)) {
@@ -876,6 +894,8 @@ const SPRINT_SPEED = 9.5;
 // Keep server movement blockers aligned with the visible prop footprints.
 function obstacleFootprintRadius(o) {
   if (o.type === "tree") return o.w * 0.25;
+  if (o.type === "banana") return o.w * 0.14; // thân chuối mảnh, lách qua được
+  if (o.type === "palm") return o.w * 0.2;
   if (o.type === "deadTree") return o.w * 0.28;
   if (o.type === "cactus") return o.w * 0.48;
   if (o.type === "rock") return o.w * 0.46;
@@ -912,10 +932,20 @@ function blockedPosition(
         support.obstacle === o &&
         mover.groundY > support.base + o.h * 0.72 + 0.1;
       if (moverIsOnRoof) continue;
+      if (o.lift && !(mover && mover.groundY >= obstacleBaseY(room, o) + o.lift - 0.45)) {
+        // Dưới sàn nhà sàn: cột + vách lưới chắn kín, không chui gầm được.
+        const dx = x - o.x,
+          dz = z - o.z;
+        const c = Math.cos(o.yaw || 0),
+          sn = Math.sin(o.yaw || 0);
+        if (Math.abs(c * dx - sn * dz) < o.w / 2 + obstacleRadius && Math.abs(sn * dx + c * dz) < o.w / 2 + obstacleRadius)
+          return true;
+        continue;
+      }
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
       continue;
     }
-    if (o.type === "fence") {
+    if (o.type === "fence" || o.type === "stonewall") {
       if (blockedByFence(o, x, z, obstacleRadius)) return true;
       continue;
     }
@@ -1169,7 +1199,7 @@ function lootSfx(room, p, sound, x = p.x, z = p.z) {
 // Nay map được sinh SẴN lúc server rảnh (không có trận nào đang diễn ra);
 // tạo phòng chỉ lấy ra dùng. Hết bể (hiếm) mới sinh tại chỗ như cũ.
 const MAP_POOL_SIZE = 2; // mỗi loại map giữ sẵn 2 bản (~vài MB RAM)
-const mapPool = { forest: [], desert: [] };
+const mapPool = { forest: [], desert: [], jungle: [] };
 function buildMap(mapId) {
   const mapSeed = Math.floor(Math.random() * 0xffffffff);
   const obstacles = attachObstacleGrid(createObstacles(mapSeed, mapId));
@@ -1415,7 +1445,7 @@ function vehicleFootprintBlocked(room, vehicle, x, z, yaw) {
 // Lan can / hàng rào đang chặn điểm này (để xe trượt dọc theo nó).
 function fenceAt(room, x, z) {
   for (const o of nearObstacles(room.obstacles, x, z))
-    if (o.type === "fence" && blockedByFence(o, x, z, PLAYER_RADIUS)) return o;
+    if ((o.type === "fence" || o.type === "stonewall") && blockedByFence(o, x, z, PLAYER_RADIUS)) return o;
   return null;
 }
 // Di chuyển xe một bước có xử lý va chạm:
@@ -1744,7 +1774,7 @@ wss.on("connection", (ws) => {
       if (m.type === "join" && !room)
         return send(ws, { type: "error", message: "Không tìm thấy phòng." });
       if (!room) {
-        const mapId = m.mapId === "desert" ? "desert" : "forest";
+        const mapId = ["desert", "jungle"].includes(m.mapId) ? m.mapId : "forest";
         const { mapSeed, obstacles, terrain } = takeMap(mapId);
         room = {
           code,
@@ -2570,7 +2600,7 @@ wss.on("connection", (ws) => {
         return t >= 0 && t <= nearest ? t : null;
       };
       const rayBuilding = (o) => {
-        const baseY = obstacleBaseY(room, o);
+        const baseY = obstacleBaseY(room, o) + (o.lift || 0); // nhà sàn: tường đứng trên sàn cao
         const half = o.w / 2;
         const wallHeight = o.h * 0.72;
         const thickness = 0.16;
@@ -2625,6 +2655,11 @@ wss.on("connection", (ws) => {
               ),
             );
           }
+        if (o.lift)
+          // Gầm nhà sàn (cột dày + vách lưới): coi như khối đặc chặn đạn.
+          sideWalls.push(
+            rayBox(centerAt(0, 0, -o.lift / 2), o.yaw || 0, { x: half, y: o.lift / 2, z: half }),
+          );
         const distances = [
           ...sideWalls,
           rayBox(
@@ -2736,7 +2771,10 @@ wss.on("connection", (ws) => {
             y: o.h / 2,
             z: o.w * 0.27,
           });
-        } else if (o.type === "fence") {
+        } else if (o.type === "banana" || o.type === "palm") {
+          const r = o.w * (o.type === "palm" ? 0.2 : 0.14);
+          wallDistance = rayBox({ x: o.x, y: baseY + o.h * 0.35, z: o.z }, 0, { x: r, y: o.h * 0.35, z: r });
+        } else if (o.type === "fence" || o.type === "stonewall") {
           wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, o.yaw || 0, {
             x: o.w / 2,
             y: o.h / 2,
