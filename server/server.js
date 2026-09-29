@@ -7,6 +7,8 @@ const zlib = require("node:zlib");
 const crypto = require("node:crypto");
 const { WebSocketServer } = require("ws");
 const Terrain = require("../public/terrain.js");
+// Nhà sàn + thành chính: hình học dùng chung với client (public/structures.js).
+const Structures = require("../public/structures.js");
 const { createObstacles } = require("./mapgen.js");
 
 const ROOT = path.join(__dirname, "..", "public");
@@ -664,6 +666,18 @@ function createLoot(room) {
   const houses = room.obstacles.filter(
     (o) => o.type === "house" || o.type === "hut",
   );
+  // Thành chính: mỗi tầng là một "nhà" riêng trong vòng chia đồ (đồ nằm đúng tầng).
+  const keepFloors = [];
+  for (const keep of room.obstacles.filter((o) => o.type === "keep")) {
+    const ground = obstacleBaseY(room, keep);
+    const byLevel = new Map();
+    for (const slot of Structures.keepLootSlots()) {
+      const [x, z] = Structures.toWorld(keep, slot.lx, slot.lz);
+      if (!byLevel.has(slot.level)) byLevel.set(slot.level, []);
+      byLevel.get(slot.level).push({ x, z, y: Math.round((ground + slot.y) * 100) / 100 });
+    }
+    for (const cells of byLevel.values()) keepFloors.push(cells);
+  }
   const slots = houses.map((house) => {
     const inner = house.w / 2 - 0.8;
     const cells = [];
@@ -685,7 +699,15 @@ function createLoot(room) {
     }
     return cells;
   });
-  const order = houses.map((_, i) => i);
+  for (const cells of keepFloors) {
+    for (let i = cells.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [cells[i], cells[j]] = [cells[j], cells[i]];
+    }
+    // Mỗi tầng thành chính được chia đồ nhiều lượt (công trình lớn, nhiều đồ hơn nhà).
+    for (let k = 0; k < 3; k++) slots.push(cells);
+  }
+  const order = slots.map((_, i) => i);
   for (let i = order.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [order[i], order[j]] = [order[j], order[i]];
@@ -708,6 +730,7 @@ function createLoot(room) {
         type,
         x: Math.round(cell.x * 100) / 100,
         z: Math.round(cell.z * 100) / 100,
+        ...(cell.y !== undefined ? { y: cell.y } : {}), // đồ ở tầng trên thành chính
         amount,
       });
       made++;
@@ -761,24 +784,15 @@ function groundHeightAt(room, x, z) {
   return height;
 }
 // Walkable upper surfaces: the pitched roof and the safe crown of large rocks.
-// Nhà sàn (Thành Cổ): sàn cao o.lift m, cầu thang dốc dài STILT_RAMP trước cửa
-// (mặt -Z). Mặt đứng được: sàn trong nhà + mặt dốc cầu thang. KHỚP game.js.
-const STILT_RAMP = 3.4;
-function stiltSurfaces(o, ground, lx, lz, out) {
-  const half = o.w / 2,
-    floor = ground + o.lift;
-  if (Math.abs(lx) <= half && Math.abs(lz) <= half)
-    out.push({ height: floor + 0.08, base: floor - 1, type: "floor", obstacle: o });
-  if (Math.abs(lx) <= 0.95 && lz < -half && lz >= -half - STILT_RAMP) {
-    const t = (lz + half + STILT_RAMP) / STILT_RAMP; // 0 = chân thang, 1 = đỉnh
-    const h = ground + o.lift * t + 0.05;
-    out.push({ height: h, base: h - 1, type: "ramp", obstacle: o });
-  }
-}
 // Mọi mặt cao hơn đất tại (x, z): mái nhà, đỉnh đá, sàn / cầu thang nhà sàn.
 function raisedSurfacesAt(room, x, z) {
   const out = [];
   for (const o of nearObstacles(room.obstacles, x, z)) {
+    if (o.type === "keep") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      Structures.keepSurfaces(o, obstacleBaseY(room, o), lx, lz, out);
+      continue;
+    }
     if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
     if (o.type === "house" || o.type === "hut") {
       const dx = x - o.x,
@@ -787,7 +801,7 @@ function raisedSurfacesAt(room, x, z) {
         s = Math.sin(o.yaw || 0);
       const lx = c * dx - s * dz,
         lz = s * dx + c * dz;
-      if (o.lift) stiltSurfaces(o, obstacleBaseY(room, o), lx, lz, out);
+      if (o.lift) Structures.stiltSurfaces(o, obstacleBaseY(room, o), lx, lz, out);
       const halfX = Math.max(o.w * 0.53, o.w / 2 + 0.6);
       const halfZ = o.w / 2 + 0.6;
       if (Math.abs(lx) > halfX || Math.abs(lz) > halfZ) continue;
@@ -908,6 +922,7 @@ function blockedPosition(
   ignoreId,
   ignoreVehicleId = null,
   ignorePlayers = false,
+  radiusOverride = null, // đang kẹt trong vùng đệm: chỉ chặn khi TÂM lọt vào vật rắn
 ) {
   if (
     x < -MAP_HALF + 1 ||
@@ -917,8 +932,8 @@ function blockedPosition(
   )
     return true;
   const mover = room.players.get(ignoreId);
-  const moverRadius = mover?.prone ? 1.15 : PLAYER_RADIUS;
-  const obstacleRadius = mover?.prone ? 0.55 : PLAYER_RADIUS;
+  const moverRadius = radiusOverride ?? (mover?.prone ? 1.15 : PLAYER_RADIUS);
+  const obstacleRadius = radiusOverride ?? (mover?.prone ? 0.55 : PLAYER_RADIUS);
   // Tương tự client: dùng vị trí hiện tại của người chơi để biết họ đang đứng
   // trên mái/đá nào, không dùng điểm đến — tránh chặn nhầm khi đi xuống.
   const support =
@@ -932,21 +947,27 @@ function blockedPosition(
         support.obstacle === o &&
         mover.groundY > support.base + o.h * 0.72 + 0.1;
       if (moverIsOnRoof) continue;
-      if (o.lift && !(mover && mover.groundY >= obstacleBaseY(room, o) + o.lift - 0.45)) {
-        // Dưới sàn nhà sàn: cột + vách lưới chắn kín, không chui gầm được.
-        const dx = x - o.x,
-          dz = z - o.z;
-        const c = Math.cos(o.yaw || 0),
-          sn = Math.sin(o.yaw || 0);
-        if (Math.abs(c * dx - sn * dz) < o.w / 2 + obstacleRadius && Math.abs(sn * dx + c * dz) < o.w / 2 + obstacleRadius)
-          return true;
-        continue;
+      if (o.lift) {
+        // Gầm nhà sàn: chỉ vướng cột gỗ khi NGỒI / NẰM; đứng thẳng / xe thì vướng sàn.
+        const [lx, lz] = Structures.toLocal(o, x, z);
+        const rel = mover ? mover.groundY - obstacleBaseY(room, o) : null;
+        const hit = Structures.stiltBlocked(o, lx, lz, obstacleRadius, rel, Boolean(mover?.crouching || mover?.prone));
+        if (hit !== null) {
+          if (hit) return true;
+          continue;
+        }
       }
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
       continue;
     }
     if (o.type === "fence" || o.type === "stonewall") {
       if (blockedByFence(o, x, z, obstacleRadius)) return true;
+      continue;
+    }
+    if (o.type === "keep") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      const rel = mover ? mover.groundY - obstacleBaseY(room, o) : null;
+      if (Structures.keepBlocked(o, lx, lz, obstacleRadius, rel)) return true;
       continue;
     }
     const footprint = obstacleFootprintRadius(o);
@@ -2192,10 +2213,15 @@ wss.on("connection", (ws) => {
       const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.1));
       const stepX = dx / steps,
         stepZ = dz / steps;
+      // Đã lọt vào vùng đệm va chạm (vd. rơi khỏi mép cầu thang xuống sát chân
+      // tường): mọi bước đều "chạm" → kẹt cứng. Khi đó chỉ chặn nếu TÂM người
+      // chơi lọt vào vật rắn → bước ra được, vẫn không đi xuyên tường.
+      const stuck = blockedPosition(room, p.x, p.z, p.id);
+      const blockedStep = (x, z) => blockedPosition(room, x, z, p.id, null, false, stuck ? 0.05 : null);
       for (let i = 0; i < steps; i++) {
         const nextX = p.x + stepX;
         if (
-          !blockedPosition(room, nextX, p.z, p.id) &&
+          !blockedStep(nextX, p.z) &&
           (!stayInWaterWhileSubmerged ||
             waterAt(room, nextX, p.z) ||
             isOnBridge(room.obstacles, nextX, p.z, 0.8))
@@ -2203,7 +2229,7 @@ wss.on("connection", (ws) => {
           p.x = nextX;
         const nextZ = p.z + stepZ;
         if (
-          !blockedPosition(room, p.x, nextZ, p.id) &&
+          !blockedStep(p.x, nextZ) &&
           (!stayInWaterWhileSubmerged ||
             waterAt(room, p.x, nextZ) ||
             isOnBridge(room.obstacles, p.x, nextZ, 0.8))
@@ -2239,6 +2265,7 @@ wss.on("connection", (ws) => {
       const best = (room.loot || []).find((item) => item.id === m.itemId);
       if (!best || Math.hypot(best.x - p.x, best.z - p.z) > PICKUP_RADIUS)
         return;
+      if (Number.isFinite(best.y) && Math.abs((p.groundY || 0) - best.y) > 1.6) return; // khác tầng
       // Keep the active magazine size stable for the duration of a reload.
       if (best.type === "weapon" && p.reloadingUntil > Date.now())
         return send(ws, {
@@ -2656,10 +2683,9 @@ wss.on("connection", (ws) => {
             );
           }
         if (o.lift)
-          // Gầm nhà sàn (cột dày + vách lưới): coi như khối đặc chặn đạn.
-          sideWalls.push(
-            rayBox(centerAt(0, 0, -o.lift / 2), o.yaw || 0, { x: half, y: o.lift / 2, z: half }),
-          );
+          // Gầm nhà sàn: tấm sàn + 9 cột gỗ chặn đạn, khoảng giữa các cột bắn xuyên được.
+          for (const b of Structures.stiltBulletBoxes(o))
+            sideWalls.push(rayBox(centerAt(b.x, b.z, b.y - o.lift), o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz }));
         const distances = [
           ...sideWalls,
           rayBox(
@@ -2750,7 +2776,16 @@ wss.on("connection", (ws) => {
         if (farOnRay(o)) continue;
         const baseY = obstacleBaseY(room, o);
         let wallDistance;
-        if (o.type === "house" || o.type === "hut") {
+        if (o.type === "keep") {
+          // Thành chính: từng khối tường / sàn / lan can / cột (cửa sổ, cửa bắn xuyên).
+          const c = Math.cos(o.yaw || 0),
+            sn = Math.sin(o.yaw || 0);
+          for (const b of Structures.keepParts(o)) {
+            if (b.kind === "floor") continue;
+            const d = rayBox({ x: o.x + c * b.x + sn * b.z, y: baseY + b.y, z: o.z - sn * b.x + c * b.z }, o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz });
+            if (d !== null && (wallDistance === undefined || wallDistance === null || d < wallDistance)) wallDistance = d;
+          }
+        } else if (o.type === "house" || o.type === "hut") {
           wallDistance = rayBuilding(o);
         } else if (o.type === "tree") {
           // Only the visible trunk blocks shots; foliage is not a solid wall.

@@ -701,7 +701,8 @@ h2 {
 }
 .scope-overlay small {
   position: absolute;
-  bottom: 19%;
+  /* Nằm giữa thanh HUD dưới (~25–80px) và ô "F NHẶT ĐỒ" (từ 118px) — không bị đè. */
+  bottom: 90px;
   color: #d6ff45;
   font: 9px "DM Mono";
   letter-spacing: 1px;
@@ -1581,7 +1582,7 @@ body:has(#game.active) #game {
   display: none;
 }
 .scope-overlay.reflex small {
-  bottom: 12%;
+  bottom: 90px;
   color: #e3e6dc;
   text-shadow: 0 1px 3px #000;
 }
@@ -2413,7 +2414,7 @@ body:has(#game.active) #game {
   display: none;
 }
 .scope-overlay.iron small {
-  bottom: 12%;
+  bottom: 90px;
   color: #e3e6dc;
   text-shadow: 0 1px 3px #000;
 }

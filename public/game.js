@@ -1900,23 +1900,17 @@ function isOnBridgeAt(x, z, clearance = 0) {
   });
 }
 // Return the walkable top of a roof or large rock, if the point is on it.
-// Nhà sàn (Thành Cổ): sàn cao o.lift m, cầu thang dốc STILT_RAMP m trước cửa
-// (mặt -Z). KHỚP stiltSurfaces / raisedSurfacesAt của server.js.
-const STILT_RAMP = 3.4;
-function stiltSurfaces(o, ground, lx, lz, out) {
-  const half = o.w / 2,
-    floor = ground + o.lift;
-  if (Math.abs(lx) <= half && Math.abs(lz) <= half)
-    out.push({ height: floor + 0.08, base: floor - 1, type: "floor", obstacle: o });
-  if (Math.abs(lx) <= 0.95 && lz < -half && lz >= -half - STILT_RAMP) {
-    const t = (lz + half + STILT_RAMP) / STILT_RAMP;
-    const h = ground + o.lift * t + 0.05;
-    out.push({ height: h, base: h - 1, type: "ramp", obstacle: o });
-  }
-}
+// Nhà sàn + thành chính (Thành Cổ): hình học dùng chung với server.
+const Structures = window.LDStructures;
+const STILT_RAMP = Structures.STILT_RAMP;
 function raisedSurfacesAt(x, z) {
   const out = [];
   for (const o of obstaclesNear(x, z)) {
+    if (o.type === "keep") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      Structures.keepSurfaces(o, groundHeightAt(o.x, o.z), lx, lz, out);
+      continue;
+    }
     if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
     if (o.type === "house" || o.type === "hut") {
       const dx = x - o.x,
@@ -1925,7 +1919,7 @@ function raisedSurfacesAt(x, z) {
         s = Math.sin(o.yaw || 0);
       const lx = c * dx - s * dz,
         lz = s * dx + c * dz;
-      if (o.lift) stiltSurfaces(o, groundHeightAt(o.x, o.z), lx, lz, out);
+      if (o.lift) Structures.stiltSurfaces(o, groundHeightAt(o.x, o.z), lx, lz, out);
       // Vùng "trên mái" phải rộng bằng hoặc hơn vùng va chạm của tường nhà
       // (blockedByBuilding dùng half + obstacleRadius) để không kẹt ở mép mái.
       const halfX = Math.max(o.w * 0.53, o.w / 2 + 0.6);
@@ -2594,18 +2588,13 @@ function drawMapObject(o, forest) {
           t.rotation.y = yaw;
         });
       if (o.lift) {
-        // NHÀ SÀN: cột gỗ, vách nan che gầm (không chui qua được — khớp va
-        // chạm), dầm sàn và cầu thang dốc lên cửa.
+        // NHÀ SÀN: gầm để trống, chỉ có 9 cột gỗ (ngồi / nằm chui qua được —
+        // khớp va chạm), dầm đỡ sàn và cầu thang dốc lên cửa.
         const lift = o.lift;
         const post = "#4a3521",
           slat = "#6b5034";
-        for (const px of [-half, 0, half])
-          for (const pz of [-half, 0, half])
-            wall(px * 0.96, -lift / 2 - 0.25, pz * 0.96, 0.22, lift + 0.5, 0.22, post);
-        for (const side of [-1, 1]) {
-          wall(side * (half - 0.04), -lift / 2, 0, 0.06, lift, w - 0.1, slat);
-          wall(0, -lift / 2, side * (half - 0.04), w - 0.1, lift, 0.06, slat);
-        }
+        for (const [px, pz] of Structures.stiltPosts(o))
+          wall(px, -lift / 2 - 0.25, pz, 0.24, lift + 0.5, 0.24, post);
         wall(0, -0.06, 0, w + 0.3, 0.12, w + 0.3, post); // dầm đỡ sàn
         // Cầu thang: tấm ván nghiêng từ đất lên ngưỡng cửa + 2 tay vịn.
         const run = STILT_RAMP,
@@ -2689,6 +2678,50 @@ function drawMapObject(o, forest) {
             },
           );
       }
+      break;
+    }
+    case "keep": {
+      // THÀNH CHÍNH: khối đá 2 tầng + sân thượng (hình học: structures.js).
+      const colors = {
+        wall: "#8d8878",
+        parapet: "#7f7a6b",
+        merlon: "#6f6c5e",
+        slab: "#5f5a4f",
+        floor: "#6b665a",
+        pillar: "#9c9684",
+      };
+      const kyaw = o.yaw || 0;
+      const place = (t, lx, y, lz) => {
+        const [wx, wz] = Structures.toWorld(o, lx, lz);
+        t.position.set(wx, baseY + y, wz);
+        t.rotation.y = kyaw;
+      };
+      for (const b of Structures.keepParts(o))
+        bucketAdd(colors[b.kind], colors[b.kind], new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2), (t) => place(t, b.x, b.y, b.z));
+      // Cầu thang đá: khối nêm đặc (mặt cắt tam giác kéo dài theo bề rộng thang).
+      for (const r of Structures.KEEP_RAMPS) {
+        const pts =
+          r.dir > 0
+            ? [[r.z0, r.from - 0.02], [r.z1, r.from - 0.02], [r.z1, r.to]]
+            : [[r.z0, r.to], [r.z0, r.from - 0.02], [r.z1, r.from - 0.02]];
+        const geo = prismGeometry(pts, r.x1 - r.x0).rotateY(-Math.PI / 2);
+        bucketAdd("#7a7466", "#7a7466", geo, (t) => place(t, (r.x0 + r.x1) / 2, 0, 0));
+        // Bậc thang (gờ sẫm) để nhìn ra là cầu thang.
+        const steps = 12;
+        for (let i = 1; i < steps; i++) {
+          const zz = r.z0 + ((r.z1 - r.z0) * i) / steps;
+          const t2 = r.dir > 0 ? i / steps : 1 - i / steps;
+          bucketAdd("#5f5a4f", "#5f5a4f", new THREE.BoxGeometry(r.x1 - r.x0, 0.06, 0.12), (t) =>
+            place(t, (r.x0 + r.x1) / 2, r.from + (r.to - r.from) * t2 + 0.03, zz),
+          );
+        }
+      }
+      // Cờ đỏ trên nóc + hai băng rôn trước cửa: uy nghiêm, dễ nhận ra từ xa.
+      const K = Structures.KEEP;
+      bucketAdd("#3b3a33", "#3b3a33", new THREE.CylinderGeometry(0.08, 0.1, 4.2, 6), (t) => place(t, 0, K.roof + 2.1, 3));
+      bucketAdd("#9b2020", "#9b2020", new THREE.BoxGeometry(1.8, 1.1, 0.06), (t) => place(t, 0.95, K.roof + 3.6, 3));
+      for (const side of [-1, 1])
+        bucketAdd("#8e1f1f", "#8e1f1f", new THREE.BoxGeometry(1.3, 3.4, 0.06), (t) => place(t, side * 2.9, 6.3, -K.half - 0.06));
       break;
     }
     case "stonewall": {
@@ -2930,7 +2963,18 @@ function grassTuftGeometry(blades, height, seed) {
   g.computeVertexNormals();
   return g;
 }
+// Đang ở gầm một nhà sàn (thấp hơn sàn): phải ngồi / nằm.
+function underStiltFloorAt(x, z) {
+  for (const o of obstaclesNear(x, z)) {
+    if (!o.lift) continue;
+    const [lx, lz] = Structures.toLocal(o, x, z);
+    if (Structures.underStiltFloor(o, lx, lz, local.groundY - groundHeightAt(o.x, o.z))) return true;
+  }
+  return false;
+}
 function nearHouse(x, z, margin) {
+  for (const o of obstaclesNear(x, z))
+    if (o.type === "keep" && Math.max(...Structures.toLocal(o, x, z).map(Math.abs)) < o.w / 2 + margin + 0.5) return true; // không mọc cỏ xuyên sàn thành
   for (const o of obstaclesNear(x, z))
     if (
       (o.type === "house" || o.type === "hut") &&
@@ -3094,7 +3138,7 @@ function obstacleFootprintRadius(o) {
   if (o.type === "rock") return o.w * 0.46; // faceted rock, narrower than its cell
   return null;
 }
-function isBlockedAt(x, z) {
+function isBlockedAt(x, z, radiusOverride = null) {
   if (
     x < -MAP_HALF + 1 ||
     x > MAP_HALF - 1 ||
@@ -3102,8 +3146,9 @@ function isBlockedAt(x, z) {
     z > MAP_HALF - 1
   )
     return true;
-  const selfRadius = local.prone ? 1.15 : PLAYER_RADIUS;
-  const obstacleRadius = local.prone ? 0.55 : PLAYER_RADIUS;
+  // radiusOverride: đang kẹt trong vùng đệm → chỉ chặn khi TÂM lọt vào vật rắn (khớp server).
+  const selfRadius = radiusOverride ?? (local.prone ? 1.15 : PLAYER_RADIUS);
+  const obstacleRadius = radiusOverride ?? (local.prone ? 0.55 : PLAYER_RADIUS);
   // Dùng vị trí HIỆN TẠI (không phải điểm sắp tới) để biết người chơi đang
   // đứng trên mái nhà/đá nào — nhờ vậy khi bước qua mép để đi xuống, họ
   // không bị chặn lại như thể đang đi xuyên tường/đá từ bên ngoài.
@@ -3117,12 +3162,21 @@ function isBlockedAt(x, z) {
         support?.type === "roof" &&
         support.obstacle === o;
       if (isAboveThisRoof) continue;
-      if (o.lift && local.groundY < groundHeightAt(o.x, o.z) + o.lift - 0.45) {
-        // Dưới sàn nhà sàn: cột + vách lưới chắn kín (khớp server).
-        if (stiltFootprint(o, x, z, obstacleRadius)) return true;
-        continue;
+      if (o.lift) {
+        // Gầm nhà sàn: ngồi / nằm chỉ vướng cột gỗ; đứng thẳng vướng sàn (khớp server).
+        const [lx, lz] = Structures.toLocal(o, x, z);
+        const hit = Structures.stiltBlocked(o, lx, lz, obstacleRadius, local.groundY - groundHeightAt(o.x, o.z), Boolean(local.crouching || local.prone));
+        if (hit !== null) {
+          if (hit) return true;
+          continue;
+        }
       }
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
+      continue;
+    }
+    if (o.type === "keep") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Structures.keepBlocked(o, lx, lz, obstacleRadius, local.groundY - groundHeightAt(o.x, o.z))) return true;
       continue;
     }
     if (o.type === "fence" || o.type === "stonewall") {
@@ -3574,6 +3628,11 @@ function carPointBlocked(ownId, x, z) {
     }
     if (o.type === "fence" || o.type === "stonewall") {
       if (fenceBlocks(o, x, z, r)) return true;
+      continue;
+    }
+    if (o.type === "keep") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Structures.keepBlocked(o, lx, lz, r, null)) return true;
       continue;
     }
     const footprint = obstacleFootprintRadius(o);
@@ -5035,6 +5094,7 @@ function addLootMesh(item) {
     ]);
   }
 
+  if (Number.isFinite(item.y)) restY = item.y; // tầng trên thành chính
   root.position.set(item.x, restY, item.z);
 
   root.visible = false;
@@ -7624,6 +7684,16 @@ function minimapBase(S, forest, k, X, Y) {
       const sz = Math.max(3, o.w * k);
       ctx.fillStyle = "#e2d8b8";
       ctx.fillRect(X(o.x) - sz / 2, Y(o.z) - sz / 2, sz, sz);
+    } else if (o.type === "keep") {
+      const sz = o.w * k;
+      ctx.save();
+      ctx.translate(X(o.x), Y(o.z));
+      ctx.rotate(-(o.yaw || 0));
+      ctx.fillStyle = "#cfc6a8";
+      ctx.fillRect(-sz / 2, -sz / 2, sz, sz);
+      ctx.fillStyle = "#7a7466";
+      ctx.fillRect(-sz * 0.32, -sz * 0.32, sz * 0.64, sz * 0.64);
+      ctx.restore();
     }
   }
   for (const o of mapObstacles) {
@@ -8835,7 +8905,9 @@ function frame() {
     }
     local.sprinting = wantSprint;
     const isSprinting = wantSprint;
-    const isCrouching = !currentlyInWater && !isProne && Boolean(local.crouchToggle);
+    const underFloor = !isProne && underStiltFloorAt(local.x, local.z);
+    if (underFloor) local.sprinting = false;
+    const isCrouching = !currentlyInWater && !isProne && (Boolean(local.crouchToggle) || underFloor);
 
     local.crouching = isCrouching;
 
@@ -8876,8 +8948,12 @@ function frame() {
     // Resolve axes separately so the player slides along walls instead of sticking.
     const stayInWaterWhileSubmerged =
       currentlyInWater && (local.swimDepth || 0) > 0.12;
+    // Rơi khỏi mép cầu thang xuống sát chân tường → đã nằm trong vùng đệm va
+    // chạm, mọi bước đều bị chặn (kẹt, giật). Khi đó chỉ chặn nếu tâm lọt vào
+    // vật rắn để bước ra được (cùng luật với server).
+    const stuck = isBlockedAt(local.x, local.z);
     const canMoveTo = (x, z) =>
-      !isBlockedAt(x, z) &&
+      !isBlockedAt(x, z, stuck ? 0.05 : null) &&
       (!stayInWaterWhileSubmerged || waterAt(x, z) || isOnBridgeAt(x, z, 0.8));
     if (canMoveTo(local.x + moveX, local.z)) local.x += moveX;
     if (canMoveTo(local.x, local.z + moveZ)) local.z += moveZ;

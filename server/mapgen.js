@@ -315,6 +315,7 @@ function createObstacles(seed, mapId) {
       const W = (lx, lz) => ({ x: x + c * lx + sn * lz, z: z - sn * lx + c * lz });
       const gate = W(0, -HALF - 7);
       fortresses.push({ x, z, yaw, HALF, level: h, gate });
+      occ.add(x, z, HALF * 1.45 + 4); // chiếm chỗ NGAY (làng / nhà / cây không mọc trong thành)
       villages.push({ x: gate.x, z: gate.z, R: 6, size: 0, mountain: h > 8, fortress: true });
       break;
     }
@@ -338,6 +339,7 @@ function createObstacles(seed, mapId) {
         z = rand(-MAP_HALF + 45, MAP_HALF - 45);
       if (Math.hypot(x, z) < SPAWN_CLEAR + R + 10) continue;
       if (villages.some((v) => Math.hypot(v.x - x, v.z - z) < v.R + R + 18)) continue;
+      if (fortresses.some((fo) => Math.hypot(fo.x - x, fo.z - z) < fo.HALF * 1.45 + R + 8)) continue;
       if (nearWater(x, z, R * 0.8 + 6)) continue;
       if (!flatAround(x, z, R * reach, flatMax)) continue;
       villages.push({ x, z, R, size, mountain: false });
@@ -354,6 +356,7 @@ function createObstacles(seed, mapId) {
           z = rand(-MAP_HALF + 45, MAP_HALF - 45);
         if (Math.hypot(x, z) < SPAWN_CLEAR + R + 10) continue;
         if (villages.some((v) => Math.hypot(v.x - x, v.z - z) < v.R + R + 14)) continue;
+        if (fortresses.some((fo) => Math.hypot(fo.x - x, fo.z - z) < fo.HALF * 1.45 + R + 8)) continue;
         if (nearWater(x, z, R * 0.8 + 6)) continue;
         const h = T0.heightAt(x, z);
         if (h > 30) continue;
@@ -772,7 +775,7 @@ function createObstacles(seed, mapId) {
   // ---------------- Nhà trong làng ----------------
   const houses = [];
   // Thành Cổ: nhà sàn — sàn cao STILT_LIFT m trên cột, cầu thang dốc trước cửa.
-  const STILT_LIFT = 1.6,
+  const STILT_LIFT = 1.8, // đủ cao để NGỒI / NẰM chui qua gầm (đứng thẳng thì vướng sàn)
     STILT_RAMP = 3.4;
   const tryHouse = (x, z, yaw, hut, village) => {
     const stilt = jungle && !village.fortress;
@@ -786,6 +789,9 @@ function createObstacles(seed, mapId) {
       const fx = x - Math.sin(yaw) * (w / 2 + STILT_RAMP),
         fz = z - Math.cos(yaw) * (w / 2 + STILT_RAMP);
       if (nearRoad(fx, fz, 0.8) || nearWater(fx, fz, 2)) return false;
+      // Chân cầu thang phải gần cùng cao độ nền nhà — trên sườn dốc, cầu thang
+      // từng treo lơ lửng như cây cầu hoặc cắm xuống đất như cửa sập.
+      if (Math.abs(T0.heightAt(fx, fz) - T0.heightAt(x, z)) > 1.5) return false;
     }
     if (nearWater(x, z, w + 4)) return false;
     // Nền nhà phải khá bằng (không dựng nhà treo lưng chừng vách núi).
@@ -803,7 +809,8 @@ function createObstacles(seed, mapId) {
       lift: stilt ? STILT_LIFT : undefined,
     };
     obstacles.push(house);
-    obstacles.push({ type: "pad", x, z, r: w * 0.75 + 0.6, solid: false });
+    // Nhà sàn: nền san phẳng phủ cả cầu thang trước cửa (chân thang chạm đất).
+    obstacles.push({ type: "pad", x, z, r: stilt ? w / 2 + STILT_RAMP + 0.8 : w * 0.75 + 0.6, solid: false });
     houses.push(house);
     occ.add(x, z, r);
     return true;
@@ -865,15 +872,11 @@ function createObstacles(seed, mapId) {
       const p = W(lx, lz);
       obstacles.push({ type: "tower", x: p.x, z: p.z, w: 6, h: 9.5, yaw: 0, solid: true });
     }
-    // Nhà đá trong sân (chứa đồ), cửa quay vào giữa sân.
-    for (const [lx, lz] of [[-11, 3], [11, 3], [-11, 13], [11, 13]]) {
-      const p = W(lx, lz);
-      const w = rand(6.6, 7.6);
-      const house = { type: "house", x: p.x, z: p.z, w, h: rand(4.4, 5.2), yaw: Math.atan2(-(x - p.x), -(z - p.z)), solid: true, fortress: true };
-      obstacles.push(house);
-      obstacles.push({ type: "pad", x: p.x, z: p.z, r: w * 0.75 + 0.6, solid: false });
-      houses.push(house);
-    }
+    // THÀNH CHÍNH (keep): pháo đài đá 2 tầng + sân thượng giữa sân, lùi về
+    // phía sau để trước cửa có sân rộng; cửa chính quay ra cổng thành.
+    // Hình học chi tiết: public/structures.js (dùng chung server + client).
+    const kp = W(0, 4);
+    obstacles.push({ type: "keep", x: kp.x, z: kp.z, w: 16, h: 9.8, yaw, solid: true });
     occ.add(x, z, HALF * 1.45 + 4);
   }
   if (process.env.MAPGEN_DEBUG) console.log("villages", villages.map((v) => `${v.mountain ? "M" : ""}${v.size}:${houses.filter((h) => Math.hypot(h.x - v.x, h.z - v.z) < v.R + 10).length}`).join(" "), "roads", roadLines.length);
