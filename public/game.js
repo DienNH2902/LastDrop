@@ -6423,7 +6423,7 @@ function setScope(enabled) {
     local.weapon === "sniper"
       ? `ỐNG NGẮM ${Math.round(baseFov / sniperZoomFov)}X · CUỘN CHUỘT ĐỔI 4X–8X · CHUỘT PHẢI ĐỂ THOÁT`
       : local.weapon === "beryl"
-        ? "KÍNH TOÀN ẢNH · CHUỘT PHẢI ĐỂ THOÁT"
+        ? "RED DOT OVAL · CHUỘT PHẢI ĐỂ THOÁT"
         : "RED DOT · CHUỘT PHẢI ĐỂ THOÁT";
 }
 function onScopeWheel(event) {
@@ -6444,7 +6444,7 @@ function onScopeWheel(event) {
 const WEAPON_INFO = {
   none: { name: "TAY KHÔNG", sub: "ĐẤM · ĐẦU −50 · THÂN −5" },
   ranger: { name: "AUG", sub: "SÚNG TRƯỜNG TẤN CÔNG · RED DOT" },
-  beryl: { name: "BERYL M762", sub: "SÚNG TRƯỜNG TẤN CÔNG · KÍNH TOÀN ẢNH" },
+  beryl: { name: "BERYL M762", sub: "SÚNG TRƯỜNG TẤN CÔNG · RED DOT OVAL" },
   sniper: { name: "KAR98K", sub: "SÚNG BẮN TỈA · SCOPE 8X" },
 };
 const weaponKey = (w) => (WEAPON_INFO[w] ? w : "none");
