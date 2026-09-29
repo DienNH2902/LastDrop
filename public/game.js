@@ -1724,6 +1724,42 @@ const BUCKET_MATERIALS = {
       side: THREE.DoubleSide, // nhìn được từ trong lẫn ngoài nhà
     }),
 };
+// Lăng trụ từ một đa giác lồi (mặt phẳng XY, theo chiều ngược kim đồng hồ),
+// dày `depth` theo trục Z. Có chỉ mục + pháp tuyến + UV như BoxGeometry để gộp
+// chung bucket được (mergeGeometries đòi mọi phần cùng kiểu).
+function prismGeometry(points, depth) {
+  const pos = [],
+    nor = [],
+    uv = [],
+    idx = [];
+  const d = depth / 2;
+  const face = (verts, n) => {
+    const base = pos.length / 3;
+    for (const [x, y, z] of verts) {
+      pos.push(x, y, z);
+      nor.push(...n);
+      uv.push(x, y);
+    }
+    for (let i = 1; i < verts.length - 1; i++) idx.push(base, base + i, base + i + 1);
+  };
+  face(points.map(([x, y]) => [x, y, d]), [0, 0, 1]); // mặt trước
+  face([...points].reverse().map(([x, y]) => [x, y, -d]), [0, 0, -1]); // mặt sau
+  for (let i = 0; i < points.length; i++) {
+    const [ax, ay] = points[i],
+      [bx, by] = points[(i + 1) % points.length];
+    const len = Math.hypot(bx - ax, by - ay) || 1;
+    face(
+      [[ax, ay, d], [ax, ay, -d], [bx, by, -d], [bx, by, d]],
+      [(by - ay) / len, -(bx - ax) / len, 0],
+    );
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
+}
 function bucketAdd(key, color, geometry, build) {
   const temp = new THREE.Object3D();
   build(temp);
@@ -2467,6 +2503,24 @@ function drawMapObject(o, forest) {
           },
         );
       }
+      // TƯỜNG HỒI: mái dốc về hai bên hông nên ở mặt có cửa ra vào và mặt đối
+      // diện có khe tam giác giữa đỉnh tường và mái (nhìn thủng lên trời). Lấp
+      // bằng tường ngũ giác có mép trên bám ĐƯỜNG GIỮA tấm mái (0.027w ở mép
+      // mái → 0.288w ở nóc): ngàm vào trong bề dày mái, không hở, không lòi ra.
+      const eave = w * 0.027,
+        ridge = w * 0.2876;
+      const gable = [
+        [-half, 0],
+        [half, 0],
+        [half, eave],
+        [0, ridge],
+        [-half, eave],
+      ];
+      for (const endZ of [-half, half])
+        bucketAdd(wallColor, wallColor, prismGeometry(gable, thickness), (t) => {
+          at(t, 0, wallH, endZ);
+          t.rotation.y = yaw;
+        });
       // Door posts and lintel make the entrance visible without blocking it.
       wall(-doorHalf, doorH / 2, -half - 0.03, 0.12, doorH, 0.12, "#493826");
       wall(doorHalf, doorH / 2, -half - 0.03, 0.12, doorH, 0.12, "#493826");
@@ -4940,17 +4994,24 @@ function onInteract() {
     return;
   }
   if (backpackOpen) return;
-  if (nearestVehicle()) {
-    send({ type: "vehicleInteract" });
-    return;
-  }
+  // Thứ đang NGẮM TRÚNG (hòm, súng, đồ) được ưu tiên hơn vào xe: trước đây
+  // xe luôn được ưu tiên nên hòm/súng của người lái xe bị hạ (rơi sát xe)
+  // không bao giờ mở/nhặt được — bấm F là vào xe.
   const target = aimedInteractable();
   if (target?.kind === "crate" && target.data) {
     openBackpack(target.data.id);
     return;
   }
-  if (target?.kind === "loot" && target.data && packHasRoom(target.data.type))
-    send({ type: "pickup", itemId: target.data.id });
+  if (target?.kind === "loot" && target.data) {
+    if (packHasRoom(target.data.type)) send({ type: "pickup", itemId: target.data.id });
+    return;
+  }
+  if (nearestVehicle()) {
+    send({ type: "vehicleInteract" });
+    return;
+  }
+  const crate = nearestCrate(); // không ngắm gì nhưng đứng sát hòm → mở hòm
+  if (crate) openBackpack(crate.id);
 }
 function useMedkit() {
   if (local.healing) return showLootToast("ĐANG HỒI MÁU · NHẤN F ĐỂ HỦY");
@@ -5348,12 +5409,18 @@ function updateLootHud(dt) {
     prompt.classList.remove("hidden");
     return;
   }
-  if (nearestVehicle()) {
+  // Cùng thứ tự ưu tiên với onInteract: thứ đang ngắm → xe → hòm ở sát bên.
+  const target = aimedInteractable();
+  if (!target && nearestVehicle()) {
     setHtml(prompt, `<b>F</b>VÀO LÁI XE · TỐI ĐA 2 NGƯỜI`);
     prompt.classList.remove("hidden");
     return;
   }
-  const target = aimedInteractable();
+  if (!target && nearestCrate()) {
+    setHtml(prompt, `<b>F</b>MỞ HÒM TIẾP TẾ`);
+    prompt.classList.remove("hidden");
+    return;
+  }
   if (target?.kind === "crate" && target.data) {
     setHtml(prompt, `<b>F</b>MỞ HÒM TIẾP TẾ`);
     prompt.classList.remove("hidden");
