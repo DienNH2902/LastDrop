@@ -340,6 +340,7 @@ const snapshot = (room) => ({
     crouching: p.crouching,
     prone: p.prone,
     slowWalking: p.slowWalking,
+    sprinting: Boolean(p.sprinting && p.alive && !p.vehicleId && !p.swimming),
     vehicleId: p.vehicleId || null,
     vehicleSeat: Number.isInteger(p.vehicleSeat) ? p.vehicleSeat : -1,
     jumpY: r2(p.jumpY),
@@ -870,6 +871,8 @@ function blockedByFence(o, x, z, radius) {
   );
 }
 const PLAYER_RADIUS = 0.38;
+// Tốc độ chạy nhanh (Shift) — khớp SPRINT_SPEED ở client.
+const SPRINT_SPEED = 9.5;
 // Keep server movement blockers aligned with the visible prop footprints.
 function obstacleFootprintRadius(o) {
   if (o.type === "tree") return o.w * 0.25;
@@ -2051,6 +2054,7 @@ wss.on("connection", (ws) => {
       p.vehicleId = vehicle.id;
       p.vehicleSeat = seat;
       p.crouching = false;
+      p.sprinting = false;
       p.prone = false;
       p.jumping = false;
       p.swimming = false;
@@ -2104,6 +2108,8 @@ wss.on("connection", (ws) => {
       p.prone = Boolean(m.prone);
       if (p.prone) p.crouching = false;
       p.slowWalking = Boolean(m.slowWalking);
+      // Chạy nhanh (Shift): chỉ khi đứng, không đi chậm; hết chạy khi ngồi/nằm.
+      p.sprinting = Boolean(m.sprinting) && !p.crouching && !p.prone && !p.slowWalking;
       p.jumpY = Math.max(0, Math.min(1.7, Number(m.jumpY) || 0));
       p.jumping = p.jumpY > 0.02;
       p.yaw = Number(m.yaw) || 0;
@@ -2133,7 +2139,9 @@ wss.on("connection", (ws) => {
               ? 3.8
               : p.slowWalking
                 ? 3.2
-                : 7;
+                : p.sprinting
+                  ? SPRINT_SPEED
+                  : 7;
       let dx = Number(m.x) - p.x;
       let dz = Number(m.z) - p.z;
       if (!Number.isFinite(dx)) dx = 0;
@@ -2474,6 +2482,7 @@ wss.on("connection", (ws) => {
       const stats = weaponStats(p);
       const melee = stats === WEAPON_STATS.none;
       if (
+        p.sprinting || // đang chạy nhanh thì không bắn/đấm được (client dừng chạy trước khi bắn)
         p.healingUntil > shotTime ||
         p.reloadingUntil > shotTime ||
         (!melee && p.ammo <= 0) ||

@@ -323,7 +323,8 @@ const damp = (current, target, rate, dt) =>
 const _t = new THREE.Vector3();
 export function poseAvatar(rig, pose, state, dt) {
   const { stance } = state;
-  const speed = Math.min(state.speed || 0, 8);
+  const speed = Math.min(state.speed || 0, 10);
+  const sprint = Boolean(state.sprint);
   const moving = speed > 0.3;
   // Nhịp bước: 1 chu kỳ = 2 bước; bước dài hơn khi chạy.
   const stride =
@@ -333,7 +334,9 @@ export function poseAvatar(rig, pose, state, dt) {
         ? 0.7
         : state.slow
           ? 1.0
-          : 1.5;
+          : sprint
+            ? 1.9
+            : 1.5;
   pose.phase =
     (pose.phase || 0) + (moving ? (speed / stride) * Math.PI * dt : 0);
   const sinP = Math.sin(pose.phase),
@@ -389,6 +392,13 @@ export function poseAvatar(rig, pose, state, dt) {
     lean = 0.1;
     swing = 0.35;
     kneeSwing = 0.4;
+  } else if (sprint && moving) {
+    // CHẠY NHANH: sải chân dài, gối nhấc cao, người đổ hẳn về trước, nhún mạnh.
+    swing = 0.8;
+    kneeSwing = 1.35;
+    lean = 0.3;
+    bob = Math.abs(cosP) * 0.085;
+    roll = sinP * 0.05;
   } else {
     // Đứng / đi / chạy: biên độ theo tốc độ, chạy thì người đổ về trước.
     swing = moving ? Math.min(run ? 0.62 : 0.42, 0.1 + speed * 0.075) : 0;
@@ -429,13 +439,19 @@ export function poseAvatar(rig, pose, state, dt) {
   const prone = stance === "prone" ? 1 : 0;
   pose.prone = damp(pose.prone ?? prone, prone, 8, dt);
   rig.head.rotation.x = pose.prone * 1.25;
-  rig.weaponMount.rotation.x =
-    pose.prone * (Math.PI / 2) + pose.reload * 0.35 + (state.kick || 0);
+  // Chạy nhanh: súng ôm chéo trước ngực (nòng chúc xuống, xoay sang trái);
+  // tay cầm súng theo IK nên tự đi theo tư thế này.
+  pose.sprint = damp(pose.sprint ?? 0, sprint && moving ? 1 : 0, 12, dt);
+  rig.weaponMount.rotation.set(
+    pose.prone * (Math.PI / 2) + pose.reload * 0.35 + (state.kick || 0) - pose.sprint * 0.45,
+    pose.sprint * 0.9,
+    pose.sprint * 0.3,
+  );
   // Nằm: báng tì vai phải, súng nằm cạnh má (không xuyên qua đầu mèo).
   rig.weaponMount.position.set(
-    0.07 + pose.prone * 0.15,
-    0.33 + pose.prone * 0.27 - pose.reload * 0.06,
-    -0.25 + pose.prone * 0.45,
+    0.07 + pose.prone * 0.15 - pose.sprint * 0.05,
+    0.33 + pose.prone * 0.27 - pose.reload * 0.06 - pose.sprint * 0.06,
+    -0.25 + pose.prone * 0.45 + pose.sprint * 0.1,
   );
   // Tay: cầm súng (IK) hoặc tư thế riêng khi bay / lái xe / bơi.
   const grip = state.weaponGrip;
@@ -447,10 +463,12 @@ export function poseAvatar(rig, pose, state, dt) {
       // Tay không: thế thủ, hai nắm tay trước mặt; cú đấm duỗi thẳng tay ra trước.
       const punching = state.punchSide === arm.side ? state.punch || 0 : 0;
       const reach = Math.sin(Math.min(1, punching) * Math.PI);
+      // Chạy nhanh tay không: hai tay đánh trước–sau ngược pha theo nhịp chân.
+      const pump = (pose.sprint || 0) * (i ? sinP : -sinP);
       _t.set(
-        arm.side * (0.17 - reach * 0.12),
-        0.6 + reach * 0.04,
-        -0.24 - reach * 0.36,
+        arm.side * (0.17 - reach * 0.12 + (pose.sprint || 0) * 0.05),
+        0.6 + reach * 0.04 - (pose.sprint || 0) * 0.18,
+        -0.24 - reach * 0.36 - pump * 0.22,
       );
       solveArm(arm, _t);
     } else if (
