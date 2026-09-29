@@ -2630,3 +2630,64 @@ body:has(#game.active) #game {
 #grenadeWarn.close small {
   color: #ff5a4a;
 }
+
+/* Bản đồ lớn (phím M) */
+#bigMap {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(6, 8, 6, 0.55);
+  pointer-events: auto;
+  z-index: 6;
+}
+#bigMap.hidden {
+  display: none;
+}
+#bigMap .bm-frame {
+  display: grid;
+  gap: 8px;
+  width: min(88vh, 94vw);
+}
+#bigMapCanvas {
+  width: 100%;
+  aspect-ratio: 1;
+  border: 2px solid #c8f27a;
+  box-shadow: 0 15px 60px #000a;
+  cursor: grab;
+  touch-action: none;
+}
+#bigMapCanvas.dragging {
+  cursor: grabbing;
+}
+#bigMap .bm-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-family: "DM Mono", monospace;
+  color: #f3f3ed;
+}
+#bigMap .bm-bar button {
+  min-width: 34px;
+  height: 30px;
+  padding: 0 10px;
+  background: #171a14;
+  color: #d6ff45;
+  border: 1px solid #555b48;
+  font: inherit;
+  cursor: pointer;
+}
+#bigMap .bm-bar button:hover {
+  border-color: #d6ff45;
+}
+#bigMap .bm-bar span {
+  min-width: 40px;
+  text-align: center;
+}
+#bigMap .bm-bar small {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 1px;
+  opacity: 0.75;
+}

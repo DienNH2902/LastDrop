@@ -5915,6 +5915,7 @@ function beginGame() {
   local.healing = false;
   local.healEndsAt = 0;
   backpackOpen = false;
+  closeBigMap(false);
   paused = false;
   scoped = false;
   ammo = 30;
@@ -5931,7 +5932,7 @@ function beginGame() {
     $("#chuteOverlay").innerHTML = buildChuteOverlay();
   setMode("lobby"); // vào map chờ: tay không, không vật phẩm
   $("#world").onclick = () => {
-    if (paused || backpackOpen) return;
+    if (paused || backpackOpen || bigMap.open) return;
     // Bật fullscreen/keyboard lock từ cú click của người chơi. Đây là cách
     // trình duyệt hỗ trợ để gửi các tổ hợp như Ctrl+W về game khi có thể.
     enterGameInputMode();
@@ -6236,7 +6237,7 @@ function blockContextMenu(e) {
 function onPointerLockChange() {
   if (document.pointerLockElement !== renderer?.domElement) stopFiring();
   if (deathView || $("#result")?.classList.contains("active")) return;
-  if (backpackOpen) return; // đang mở balo: thả chuột là chủ ý, không tạm dừng
+  if (backpackOpen || bigMap.open) return; // đang mở balo / bản đồ: thả chuột là chủ ý, không tạm dừng
   if (
     document.pointerLockElement !== renderer?.domElement &&
     $("#game").classList.contains("active") &&
@@ -6275,6 +6276,10 @@ function onKeyDown(e) {
 
     if (backpackOpen) {
       closeBackpack();
+      return;
+    }
+    if (bigMap.open) {
+      closeBigMap();
       return;
     }
     if (paused && !$("#pauseSettings").classList.contains("hidden"))
@@ -6333,6 +6338,11 @@ function onKeyDown(e) {
     }
   }
 
+  if (e.code === "KeyM" && !paused && $("#game").classList.contains("active")) {
+    e.preventDefault();
+    if (!e.repeat) toggleBigMap();
+    return;
+  }
   if (e.code === "Tab" && !paused && $("#game").classList.contains("active")) {
     e.preventDefault(); // không cho Tab đổi focus của trình duyệt
     if (!e.repeat) toggleBackpack();
@@ -6517,6 +6527,7 @@ function pauseGame() {
   )
     return;
   closeBackpack(false);
+  closeBigMap(false);
   paused = true;
   document.exitPointerLock?.(); // ESC bị khóa nên trình duyệt không tự thả chuột
   stopFiring();
@@ -8028,13 +8039,15 @@ function updateFlightHud() {
   hint.classList.toggle("ok", ok);
   drawFlightMap();
 }
-let minimapBaseCanvas = null,
-  minimapBaseKey = "";
+const minimapBaseCache = new Map(); // S -> { key, canvas }
 function minimapBase(S, forest, k, X, Y) {
   const key = `${mapId}|${gameState?.mapSeed}|${mapObstacles.length}|${S}`;
-  if (minimapBaseCanvas && minimapBaseKey === key) return minimapBaseCanvas;
-  minimapBaseKey = key;
-  minimapBaseCanvas ||= document.createElement("canvas");
+  let entry = minimapBaseCache.get(S);
+  if (entry?.key === key) return entry.canvas;
+  entry ||= { canvas: document.createElement("canvas") };
+  entry.key = key;
+  minimapBaseCache.set(S, entry);
+  const minimapBaseCanvas = entry.canvas;
   minimapBaseCanvas.width = minimapBaseCanvas.height = S;
   const ctx = minimapBaseCanvas.getContext("2d");
   // Nền: tô theo độ cao + đổ bóng sườn núi từ chính lưới địa hình (vẽ 1 lần).
@@ -8164,6 +8177,250 @@ function minimapBase(S, forest, k, X, Y) {
   ctx.lineWidth = 2;
   ctx.strokeRect(1, 1, S - 2, S - 2);
   return minimapBaseCanvas;
+}
+// ================= BẢN ĐỒ LỚN (phím M): lăn chuột zoom, kéo để di chuyển =================
+const BIGMAP_BASE = 1024; // độ phân giải nền (vẽ một lần mỗi map)
+const bigMap = { open: false, zoom: 1, cx: 0, cz: 0, drag: null, lastDraw: 0, el: null };
+function ensureBigMap() {
+  if (bigMap.el) return bigMap.el;
+  const el = document.createElement("div");
+  el.id = "bigMap";
+  el.className = "hidden";
+  el.innerHTML = `<div class="bm-frame"><canvas id="bigMapCanvas"></canvas>
+    <div class="bm-bar"><button type="button" data-bm-zoom="-1" aria-label="Thu nhỏ">−</button><span id="bigMapZoom">1×</span><button type="button" data-bm-zoom="1" aria-label="Phóng to">+</button><button type="button" data-bm-center>VỀ VỊ TRÍ</button><small>LĂN CHUỘT · ZOOM &nbsp;·&nbsp; KÉO · DI CHUYỂN &nbsp;·&nbsp; M / ESC · ĐÓNG</small></div></div>`;
+  $(".hud").append(el);
+  const canvas = el.querySelector("canvas");
+  const view = () => {
+    const r = canvas.getBoundingClientRect();
+    return { r, K: (r.width / (MAP_HALF * 2)) * bigMap.zoom };
+  };
+  // Zoom quanh con trỏ: điểm dưới chuột đứng yên.
+  canvas.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      const { r, K } = view();
+      const mx = e.clientX - r.left - r.width / 2,
+        my = e.clientY - r.top - r.height / 2;
+      const wx = bigMap.cx + mx / K,
+        wz = bigMap.cz + my / K;
+      setBigMapZoom(bigMap.zoom * (e.deltaY < 0 ? 1.25 : 0.8));
+      const K2 = (r.width / (MAP_HALF * 2)) * bigMap.zoom;
+      bigMap.cx = wx - mx / K2;
+      bigMap.cz = wz - my / K2;
+      clampBigMap();
+      drawBigMap(true);
+    },
+    { passive: false },
+  );
+  canvas.addEventListener("pointerdown", (e) => {
+    bigMap.drag = { x: e.clientX, y: e.clientY, cx: bigMap.cx, cz: bigMap.cz };
+    canvas.setPointerCapture(e.pointerId);
+    canvas.classList.add("dragging");
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!bigMap.drag) return;
+    const { K } = view();
+    bigMap.cx = bigMap.drag.cx - (e.clientX - bigMap.drag.x) / K;
+    bigMap.cz = bigMap.drag.cz - (e.clientY - bigMap.drag.y) / K;
+    clampBigMap();
+    drawBigMap(true);
+  });
+  const endDrag = () => {
+    bigMap.drag = null;
+    canvas.classList.remove("dragging");
+  };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  el.addEventListener("click", (e) => {
+    const z = e.target.closest("[data-bm-zoom]");
+    if (z) {
+      setBigMapZoom(bigMap.zoom * (Number(z.dataset.bmZoom) > 0 ? 1.5 : 1 / 1.5));
+      clampBigMap();
+      drawBigMap(true);
+    } else if (e.target.closest("[data-bm-center]")) {
+      centerBigMapOnMe();
+      drawBigMap(true);
+    }
+  });
+  bigMap.el = el;
+  return el;
+}
+function setBigMapZoom(z) {
+  bigMap.zoom = Math.max(1, Math.min(10, z));
+  setText($("#bigMapZoom"), `${bigMap.zoom < 10 ? bigMap.zoom.toFixed(1) : 10}×`);
+}
+function clampBigMap() {
+  const hv = MAP_HALF / bigMap.zoom;
+  bigMap.cx = Math.max(-MAP_HALF + hv, Math.min(MAP_HALF - hv, bigMap.cx));
+  bigMap.cz = Math.max(-MAP_HALF + hv, Math.min(MAP_HALF - hv, bigMap.cz));
+}
+function bigMapMe() {
+  return local.state === "plane" && plane ? planePosAt(planeTime()) : { x: local.x, z: local.z };
+}
+function centerBigMapOnMe() {
+  const me = bigMapMe();
+  bigMap.cx = me.x;
+  bigMap.cz = me.z;
+  clampBigMap();
+}
+function openBigMap() {
+  if (bigMap.open || paused || !$("#game").classList.contains("active") || $("#result")?.classList.contains("active")) return;
+  closeBackpack(false);
+  stopFiring();
+  if (scoped) setScope(false);
+  const el = ensureBigMap();
+  bigMap.open = true;
+  if (bigMap.zoom === 1 && bigMapMe()) setBigMapZoom(2.5); // lần đầu: zoom vừa, quanh mình
+  centerBigMapOnMe();
+  el.classList.remove("hidden");
+  // Thả chuột để kéo / zoom bản đồ; trận vẫn chạy, WASD vẫn đi được.
+  if (document.pointerLockElement) document.exitPointerLock();
+  drawBigMap(true);
+}
+function closeBigMap(relock = true) {
+  if (!bigMap.open) return;
+  bigMap.open = false;
+  bigMap.drag = null;
+  bigMap.el?.classList.add("hidden");
+  if (relock && !paused && !deathView && $("#game").classList.contains("active")) lockPointer(renderer?.domElement);
+}
+function toggleBigMap() {
+  if (bigMap.open) closeBigMap();
+  else openBigMap();
+}
+function drawBigMap(force = false) {
+  if (!bigMap.open) return;
+  if (!force && performance.now() - bigMap.lastDraw < 50) return;
+  bigMap.lastDraw = performance.now();
+  const canvas = $("#bigMapCanvas");
+  const ctx = canvas?.getContext("2d");
+  if (!ctx) return;
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const W = Math.max(64, Math.round(rect.width * dpr));
+  if (canvas.width !== W) canvas.width = canvas.height = W;
+  const K = (W / (MAP_HALF * 2)) * bigMap.zoom; // pixel / mét
+  const X = (x) => W / 2 + (x - bigMap.cx) * K;
+  const Y = (z) => W / 2 + (z - bigMap.cz) * K;
+  const forest = mapId !== "desert";
+  const B = BIGMAP_BASE,
+    kB = B / (MAP_HALF * 2);
+  const base = minimapBase(B, forest, kB, (x) => B / 2 + x * kB, (z) => B / 2 + z * kB);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#0d110c";
+  ctx.fillRect(0, 0, W, W);
+  ctx.imageSmoothingEnabled = true;
+  const s = K / kB;
+  ctx.drawImage(base, X(-MAP_HALF), Y(-MAP_HALF), B * s, B * s);
+  // Lưới ô vuông (100 m) + ký hiệu A, B, C… / 1, 2, 3… như bản đồ quân sự.
+  const cell = 100;
+  ctx.strokeStyle = "rgba(255,255,255,.16)";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "rgba(255,255,255,.75)";
+  ctx.font = `${Math.round(11 * dpr)}px 'DM Mono', monospace`;
+  const cells = Math.round((MAP_HALF * 2) / cell);
+  for (let i = 0; i <= cells; i++) {
+    const v = -MAP_HALF + i * cell;
+    ctx.beginPath();
+    ctx.moveTo(X(v), Y(-MAP_HALF));
+    ctx.lineTo(X(v), Y(MAP_HALF));
+    ctx.moveTo(X(-MAP_HALF), Y(v));
+    ctx.lineTo(X(MAP_HALF), Y(v));
+    ctx.stroke();
+    if (i < cells) {
+      const mid = v + cell / 2;
+      ctx.fillText(String.fromCharCode(65 + i), X(mid) - 4 * dpr, Math.max(14 * dpr, Y(-MAP_HALF) + 14 * dpr));
+      ctx.fillText(String(i + 1), Math.max(5 * dpr, X(-MAP_HALF) + 5 * dpr), Y(mid) + 4 * dpr);
+    }
+  }
+  // Bo: ngoài vòng tô đỏ, vòng sắp tới nét đứt.
+  const zone = zoneCircleNow();
+  if (zone) {
+    const zx = X(zone.x),
+      zy = Y(zone.z),
+      zr = Math.max(0, zone.radius * K);
+    ctx.beginPath();
+    ctx.rect(0, 0, W, W);
+    ctx.moveTo(zx + zr, zy);
+    ctx.arc(zx, zy, zr, 0, Math.PI * 2, true);
+    ctx.fillStyle = "rgba(150,20,20,.32)";
+    ctx.fill("evenodd");
+    ctx.beginPath();
+    ctx.arc(zx, zy, zr, 0, Math.PI * 2);
+    ctx.strokeStyle = "#6fd8ff";
+    ctx.lineWidth = 2 * dpr;
+    ctx.stroke();
+    const next = gameState.zone?.nextCenter
+      ? { c: gameState.zone.nextCenter, r: gameState.zone.nextRadius }
+      : gameState.zone?.phase === "shrink"
+        ? { c: gameState.zone.toCenter, r: gameState.zone.toRadius }
+        : null;
+    if (next) {
+      ctx.setLineDash([6 * dpr, 5 * dpr]);
+      ctx.strokeStyle = gameState.zone.phase === "wait" ? "#d6ff45" : "#ffffff";
+      ctx.lineWidth = 1.8 * dpr;
+      ctx.beginPath();
+      ctx.arc(X(next.c.x), Y(next.c.z), Math.max(0, next.r * K), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+  // Đường bay máy bay.
+  if (plane) {
+    const a = planePosAt(0),
+      b = planePosAt(plane.tExit + 8);
+    ctx.setLineDash([5 * dpr, 5 * dpr]);
+    ctx.strokeStyle = "rgba(255,255,255,.45)";
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(X(a.x), Y(a.z));
+    ctx.lineTo(X(b.x), Y(b.z));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // Vị trí + hướng nhìn của mình.
+  const me = bigMapMe();
+  const px = X(me.x),
+    py = Y(me.z);
+  const fx = -Math.sin(local.yaw),
+    fz = -Math.cos(local.yaw);
+  const ang = Math.atan2(fz, fx);
+  ctx.beginPath();
+  ctx.moveTo(px, py);
+  ctx.arc(px, py, Math.max(26 * dpr, 18 * K), ang - Math.PI / 6, ang + Math.PI / 6);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(255,255,255,.3)";
+  ctx.fill();
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.rotate(ang + Math.PI / 2);
+  ctx.beginPath();
+  ctx.moveTo(0, -9 * dpr);
+  ctx.lineTo(6 * dpr, 7 * dpr);
+  ctx.lineTo(0, 3.5 * dpr);
+  ctx.lineTo(-6 * dpr, 7 * dpr);
+  ctx.closePath();
+  ctx.fillStyle = "#ffe14a";
+  ctx.strokeStyle = "#1a1a12";
+  ctx.lineWidth = 2 * dpr;
+  ctx.stroke();
+  ctx.fill();
+  ctx.restore();
+  // Thước tỉ lệ.
+  const meters = [10, 25, 50, 100, 200, 500].find((m) => m * K >= 70 * dpr) || 500;
+  const len = meters * K;
+  ctx.fillStyle = "rgba(0,0,0,.55)";
+  ctx.fillRect(W - len - 28 * dpr, W - 30 * dpr, len + 18 * dpr, 22 * dpr);
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 2 * dpr;
+  ctx.beginPath();
+  ctx.moveTo(W - len - 19 * dpr, W - 14 * dpr);
+  ctx.lineTo(W - 19 * dpr, W - 14 * dpr);
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.fillText(`${meters} m`, W - len - 19 * dpr, W - 18 * dpr);
 }
 function drawFlightMap() {
   // The map is detailed and only needs refreshing a few times per second.
@@ -9303,6 +9560,7 @@ function frame() {
   updateGrassVisibility();
   // updateWeather(dt); // weather particle update disabled for performance testing
   updateFlightHud();
+  drawBigMap();
   updateMatchClock();
   updateZoneHud();
   updateZoneWorld();
