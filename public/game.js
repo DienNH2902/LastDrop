@@ -291,6 +291,22 @@ const CROUCH_HEIGHT = 1.34;
 const PRONE_HEIGHT = 0.48;
 
 const NORMAL_SPEED = 7;
+const SPRINT_SPEED = 9.5; // Shift giữ + W: chạy nhanh (khớp SPRINT_SPEED ở server)
+// Chạy nhanh: sprintCancelled = đã bị hủy bởi bắn/ngắm → phải NHẢ Shift rồi
+// bấm lại mới chạy tiếp (giống PUBG). sprintBlend 0→1 cho hoạt ảnh súng.
+let sprintCancelled = false,
+  sprintBlend = 0,
+  // Bắn khi đang chạy: hạ súng về tư thế bắn (~150 ms) rồi mới nổ phát đầu.
+  sprintShotAt = 0;
+const SPRINT_RECOVER_MS = 150;
+// Hủy chạy ngay (click bắn / ngắm): gửi gói move ngay để server biết đã hết chạy.
+function cancelSprint() {
+  if (!local.sprinting) return false;
+  local.sprinting = false;
+  sprintCancelled = true;
+  lastMove = 0;
+  return true;
+}
 const SLOW_SPEED = 3.2;
 const CROUCH_SPEED = 3.8;
 const CROUCH_SLOW_SPEED = 2.0;
@@ -945,7 +961,7 @@ function playSpatialFootstep(x, y, z, intensity = 1, ownPlayer = false) {
   const ref = Math.min(AUDIO_RANGE.footstep.ref, max * 0.3);
   const a = spatialAudio(
     { x, y, z },
-    { volume: (ownPlayer ? 0.22 : 0.6) * (0.5 + 0.5 * intensity), ref, max },
+    { volume: (ownPlayer ? 0.3 : 0.72) * (0.5 + 0.5 * intensity), ref, max }, // to hơn trước (0.22 / 0.6)
   );
   if (!a) return;
   const v = 0.92 + Math.random() * 0.16; // mỗi bước hơi khác nhau
@@ -1724,6 +1740,42 @@ const BUCKET_MATERIALS = {
       side: THREE.DoubleSide, // nhìn được từ trong lẫn ngoài nhà
     }),
 };
+// Lăng trụ từ một đa giác lồi (mặt phẳng XY, theo chiều ngược kim đồng hồ),
+// dày `depth` theo trục Z. Có chỉ mục + pháp tuyến + UV như BoxGeometry để gộp
+// chung bucket được (mergeGeometries đòi mọi phần cùng kiểu).
+function prismGeometry(points, depth) {
+  const pos = [],
+    nor = [],
+    uv = [],
+    idx = [];
+  const d = depth / 2;
+  const face = (verts, n) => {
+    const base = pos.length / 3;
+    for (const [x, y, z] of verts) {
+      pos.push(x, y, z);
+      nor.push(...n);
+      uv.push(x, y);
+    }
+    for (let i = 1; i < verts.length - 1; i++) idx.push(base, base + i, base + i + 1);
+  };
+  face(points.map(([x, y]) => [x, y, d]), [0, 0, 1]); // mặt trước
+  face([...points].reverse().map(([x, y]) => [x, y, -d]), [0, 0, -1]); // mặt sau
+  for (let i = 0; i < points.length; i++) {
+    const [ax, ay] = points[i],
+      [bx, by] = points[(i + 1) % points.length];
+    const len = Math.hypot(bx - ax, by - ay) || 1;
+    face(
+      [[ax, ay, d], [ax, ay, -d], [bx, by, -d], [bx, by, d]],
+      [(by - ay) / len, -(bx - ax) / len, 0],
+    );
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
+}
 function bucketAdd(key, color, geometry, build) {
   const temp = new THREE.Object3D();
   build(temp);
@@ -2467,6 +2519,24 @@ function drawMapObject(o, forest) {
           },
         );
       }
+      // TƯỜNG HỒI: mái dốc về hai bên hông nên ở mặt có cửa ra vào và mặt đối
+      // diện có khe tam giác giữa đỉnh tường và mái (nhìn thủng lên trời). Lấp
+      // bằng tường ngũ giác có mép trên bám ĐƯỜNG GIỮA tấm mái (0.027w ở mép
+      // mái → 0.288w ở nóc): ngàm vào trong bề dày mái, không hở, không lòi ra.
+      const eave = w * 0.027,
+        ridge = w * 0.2876;
+      const gable = [
+        [-half, 0],
+        [half, 0],
+        [half, eave],
+        [0, ridge],
+        [-half, eave],
+      ];
+      for (const endZ of [-half, half])
+        bucketAdd(wallColor, wallColor, prismGeometry(gable, thickness), (t) => {
+          at(t, 0, wallH, endZ);
+          t.rotation.y = yaw;
+        });
       // Door posts and lintel make the entrance visible without blocking it.
       wall(-doorHalf, doorH / 2, -half - 0.03, 0.12, doorH, 0.12, "#493826");
       wall(doorHalf, doorH / 2, -half - 0.03, 0.12, doorH, 0.12, "#493826");
@@ -4379,6 +4449,7 @@ function renderPlayers(state) {
     }
     mesh.userData.chute.visible = curState === "parachute";
     mesh.userData.slowWalking = Boolean(p.slowWalking);
+    mesh.userData.sprinting = Boolean(p.sprinting);
     mesh.userData.crouching = Boolean(p.crouching);
     mesh.userData.prone = Boolean(p.prone);
     mesh.userData.swimming = Boolean(p.swimming);
@@ -4419,8 +4490,15 @@ function renderPlayers(state) {
       // (such as firing/reloading) cannot break footstep timing.
       mesh.userData.footstepDistance += motionDistance;
       mesh.userData.gaitDistance = motionDistance > 0.0004 ? 1 : 0;
-      const strideDistance = p.slowWalking ? 1.75 : p.crouching ? 1.9 : 1.85;
-      const intensity = p.slowWalking ? 0.24 : p.crouching ? 0.38 : 1;
+      const strideDistance = p.slowWalking
+        ? 1.75
+        : p.crouching
+          ? 1.9
+          : p.sprinting
+            ? 2.2
+            : 1.85;
+      // Đối thủ chạy nhanh: tiếng bước to và nghe xa hơn (~54 m thay vì 40 m).
+      const intensity = p.slowWalking ? 0.24 : p.crouching ? 0.38 : p.sprinting ? 1.35 : 1;
       while (mesh.userData.footstepDistance >= strideDistance) {
         const soundY = p.groundY || 0;
         playSpatialFootstep(p.x, soundY + 0.08, p.z, intensity, false);
@@ -4940,17 +5018,24 @@ function onInteract() {
     return;
   }
   if (backpackOpen) return;
-  if (nearestVehicle()) {
-    send({ type: "vehicleInteract" });
-    return;
-  }
+  // Thứ đang NGẮM TRÚNG (hòm, súng, đồ) được ưu tiên hơn vào xe: trước đây
+  // xe luôn được ưu tiên nên hòm/súng của người lái xe bị hạ (rơi sát xe)
+  // không bao giờ mở/nhặt được — bấm F là vào xe.
   const target = aimedInteractable();
   if (target?.kind === "crate" && target.data) {
     openBackpack(target.data.id);
     return;
   }
-  if (target?.kind === "loot" && target.data && packHasRoom(target.data.type))
-    send({ type: "pickup", itemId: target.data.id });
+  if (target?.kind === "loot" && target.data) {
+    if (packHasRoom(target.data.type)) send({ type: "pickup", itemId: target.data.id });
+    return;
+  }
+  if (nearestVehicle()) {
+    send({ type: "vehicleInteract" });
+    return;
+  }
+  const crate = nearestCrate(); // không ngắm gì nhưng đứng sát hòm → mở hòm
+  if (crate) openBackpack(crate.id);
 }
 function useMedkit() {
   if (local.healing) return showLootToast("ĐANG HỒI MÁU · NHẤN F ĐỂ HỦY");
@@ -5219,6 +5304,26 @@ function updateGunPose(dt) {
     -0.14 * gunBusy + 0.075 * gunAimBlend,
     0.05 * gunBusy + adsPull * gunAimBlend,
   );
+  // CHẠY NHANH: súng ôm chéo trước ngực (nòng chúc xuống, xoay sang trái),
+  // nhún + lắc theo nhịp bước. Hoà dần vào/ra (~0.15 s) nên dừng chạy để bắn
+  // là súng nâng lên mượt đúng lúc phát đầu nổ.
+  const sprintTarget = local.sprinting && !deathView ? 1 : 0;
+  sprintBlend += (sprintTarget - sprintBlend) * Math.min(1, 14 * dt);
+  if (Math.abs(sprintTarget - sprintBlend) < 0.002) sprintBlend = sprintTarget;
+  if (sprintBlend > 0) {
+    const sb = sprintBlend,
+      ph = localGaitPhase;
+    if (weaponKey(local.weapon) === "none") {
+      gun.position.y -= 0.06 * sb; // tay không: hạ tay, đánh tay theo nhịp chạy (bên dưới)
+    } else {
+      gun.rotation.x -= 0.3 * sb;
+      gun.rotation.y += 0.78 * sb;
+      gun.rotation.z += (0.32 + Math.sin(ph) * 0.05) * sb;
+      gun.position.x += (-0.07 + Math.cos(ph) * 0.02) * sb;
+      gun.position.y += (-0.07 + Math.abs(Math.sin(ph)) * 0.025) * sb;
+      gun.position.z += 0.05 * sb;
+    }
+  }
   if (reloading) {
     // Kéo súng vào giữa và lại gần camera để thấy rõ thao tác nạp đạn.
     gun.position.x -= 0.16 * reloadBlend;
@@ -5278,10 +5383,12 @@ function updateGunPose(dt) {
       const side = hand.userData.rest.x < 0 ? -1 : 1;
       const active = side === gun.userData.punchSide && t >= 0 && t < 1;
       const reach = active ? (t < 0.38 ? t / 0.38 : 1 - (t - 0.38) / 0.62) : 0;
+      // Chạy nhanh: hai tay đánh trước–sau ngược pha nhau theo nhịp chân.
+      const pump = sprintBlend * Math.sin(localGaitPhase + (side > 0 ? 0 : Math.PI));
       hand.position.set(
         hand.userData.rest.x - side * reach * 0.2,
-        hand.userData.rest.y + breathe + reach * 0.12,
-        hand.userData.rest.z - reach * 0.38,
+        hand.userData.rest.y + breathe + reach * 0.12 + pump * 0.05,
+        hand.userData.rest.z - reach * 0.38 - pump * 0.14,
       );
     }
   }
@@ -5348,12 +5455,18 @@ function updateLootHud(dt) {
     prompt.classList.remove("hidden");
     return;
   }
-  if (nearestVehicle()) {
+  // Cùng thứ tự ưu tiên với onInteract: thứ đang ngắm → xe → hòm ở sát bên.
+  const target = aimedInteractable();
+  if (!target && nearestVehicle()) {
     setHtml(prompt, `<b>F</b>VÀO LÁI XE · TỐI ĐA 2 NGƯỜI`);
     prompt.classList.remove("hidden");
     return;
   }
-  const target = aimedInteractable();
+  if (!target && nearestCrate()) {
+    setHtml(prompt, `<b>F</b>MỞ HÒM TIẾP TẾ`);
+    prompt.classList.remove("hidden");
+    return;
+  }
   if (target?.kind === "crate" && target.data) {
     setHtml(prompt, `<b>F</b>MỞ HÒM TIẾP TẾ`);
     prompt.classList.remove("hidden");
@@ -5372,6 +5485,10 @@ function updateLootHud(dt) {
 }
 function beginGame() {
   inMatch = true;
+  local.crouchToggle = false;
+  local.sprinting = false;
+  sprintCancelled = false;
+  sprintBlend = 0;
   matchKills = [];
   readySent = false;
   jumpRequestedAt = 0;
@@ -5887,6 +6004,26 @@ function onKeyDown(e) {
     return;
   }
 
+  // C: ngồi / đứng dậy (bật-tắt). Đang nằm bấm C thì chuyển sang ngồi.
+  if (
+    e.code === "KeyC" &&
+    !e.repeat &&
+    !paused &&
+    (local.state === "ground" || local.state === "lobby") &&
+    !local.vehicleId &&
+    !waterAt(local.x, local.z) &&
+    $("#game").classList.contains("active")
+  ) {
+    if (local.prone) {
+      local.prone = false;
+      local.crouchToggle = true;
+    } else local.crouchToggle = !local.crouchToggle;
+    if (local.crouchToggle) local.sprinting = false;
+    lastMove = 0;
+    e.preventDefault();
+    return;
+  }
+
   if (
     e.code === "KeyZ" &&
     !e.repeat &&
@@ -5897,7 +6034,11 @@ function onKeyDown(e) {
     $("#game").classList.contains("active")
   ) {
     local.prone = !local.prone;
-    if (local.prone) local.crouching = false;
+    if (local.prone) {
+      local.crouching = false;
+      local.crouchToggle = false;
+      local.sprinting = false;
+    }
     e.preventDefault();
     return;
   }
@@ -5911,10 +6052,13 @@ function onKeyDown(e) {
     grounded &&
     !paused &&
     !local.prone &&
-    !waterAt(local.x, local.z) &&
-    !keys.ShiftLeft &&
-    !keys.ShiftRight
+    !waterAt(local.x, local.z)
   ) {
+    if (local.crouchToggle) {
+      local.crouchToggle = false; // đang ngồi: Space = đứng dậy
+      e.preventDefault();
+      return;
+    }
     verticalSpeed = 8;
     jumpOffset = 0;
     grounded = false;
@@ -5927,6 +6071,7 @@ function onKeyDown(e) {
 
 function onKeyUp(e) {
   keys[e.code] = false;
+  if (e.code === "ShiftLeft" || e.code === "ShiftRight") sprintCancelled = false;
   if (e.code === "KeyQ" || e.code === "KeyE") lastMove = 0;
 }
 function onGameWindowBlur() {
@@ -6126,6 +6271,14 @@ function onMouse(e) {
   );
 }
 function onFire(e) {
+  // Đang chạy nhanh: không bắn/ngắm được. Click (trái hoặc phải) sẽ DỪNG CHẠY
+  // (về đi bộ WASD bình thường); súng được nâng lên trong ~150 ms rồi mới nổ.
+  const wasSprinting =
+    (e.button === 0 || e.button === 2) &&
+    !local.vehicleId &&
+    document.pointerLockElement === renderer?.domElement &&
+    cancelSprint();
+  if (wasSprinting) sprintShotAt = performance.now() + SPRINT_RECOVER_MS;
   if (e.button === 2) {
     if (
       !deathView &&
@@ -6171,6 +6324,11 @@ function onFire(e) {
   )
     return;
   triggerHeld = true;
+  // Vừa dừng chạy: phát đầu nổ khi súng đã nâng lên (updateAutoFire lo việc này).
+  if (performance.now() < sprintShotAt) {
+    nextAutoShotAt = sprintShotAt;
+    return;
+  }
   nextAutoShotAt = performance.now() + currentFireInterval();
   shootOnce();
 }
@@ -6251,6 +6409,8 @@ function shootOnce() {
     return;
   }
   if (local.reloading || local.healing) return;
+  // Đang chạy / súng chưa nâng xong sau khi dừng chạy: không nổ.
+  if (local.sprinting || performance.now() < sprintShotAt) return;
   const now = Date.now();
   if (
     local.weapon === "sniper" &&
@@ -6356,7 +6516,7 @@ function setScope(enabled) {
     local.weapon === "sniper"
       ? `ỐNG NGẮM ${Math.round(baseFov / sniperZoomFov)}X · CUỘN CHUỘT ĐỔI 4X–8X · CHUỘT PHẢI ĐỂ THOÁT`
       : local.weapon === "beryl"
-        ? "KÍNH TOÀN ẢNH · CHUỘT PHẢI ĐỂ THOÁT"
+        ? "RED DOT OVAL · CHUỘT PHẢI ĐỂ THOÁT"
         : "RED DOT · CHUỘT PHẢI ĐỂ THOÁT";
 }
 function onScopeWheel(event) {
@@ -6377,7 +6537,7 @@ function onScopeWheel(event) {
 const WEAPON_INFO = {
   none: { name: "TAY KHÔNG", sub: "ĐẤM · ĐẦU −50 · THÂN −5" },
   ranger: { name: "AUG", sub: "SÚNG TRƯỜNG TẤN CÔNG · RED DOT" },
-  beryl: { name: "BERYL M762", sub: "SÚNG TRƯỜNG TẤN CÔNG · KÍNH TOÀN ẢNH" },
+  beryl: { name: "BERYL M762", sub: "SÚNG TRƯỜNG TẤN CÔNG · RED DOT OVAL" },
   sniper: { name: "KAR98K", sub: "SÚNG BẮN TỈA · SCOPE 8X" },
 };
 const weaponKey = (w) => (WEAPON_INFO[w] ? w : "none");
@@ -6624,6 +6784,8 @@ function landNow() {
   local.groundY = standingHeightAt(local.x, local.z, local.groundY);
   // Mắt đặt ngay đúng độ cao đứng tại chỗ tiếp đất (không trượt từ độ cao cũ ở sảnh).
   cameraBaseY = local.groundY + STAND_HEIGHT;
+  local.crouchToggle = false;
+  local.sprinting = false;
   stopLoop("wind", 0.6);
   setMode("ground");
   grounded = true;
@@ -6854,6 +7016,7 @@ function animateAvatars(dt) {
         stance,
         speed: ud.state === "plane" ? 0 : ud.speed,
         slow: ud.slowWalking,
+        sprint: Boolean(ud.sprinting) && stance === "stand",
         reloading: ud.reloading,
         driver: ud.driver,
         steerSpin: ud.steerSpin || 0,
@@ -8440,14 +8603,37 @@ function frame() {
   } else if (!paused && (local.state === "ground" || local.state === "lobby")) {
     const currentlyInWater = Boolean(waterAt(local.x, local.z));
     const isProne = !currentlyInWater && Boolean(local.prone);
-    const isCrouching =
-      !currentlyInWater && !isProne && (keys.ShiftLeft || keys.ShiftRight);
+    const isSlowWalking = keys.ControlLeft || keys.ControlRight;
+    // Chạy nhanh: giữ Shift + W (không lùi), đang đứng trên cạn, không bóp cò,
+    // không hồi máu, chưa bị hủy bởi bắn/ngắm (nhả Shift để chạy lại).
+    const wantSprint =
+      (keys.ShiftLeft || keys.ShiftRight) &&
+      keys.KeyW &&
+      !keys.KeyS &&
+      !isProne &&
+      !currentlyInWater &&
+      !isSlowWalking &&
+      !sprintCancelled &&
+      !triggerHeld &&
+      !local.healing &&
+      !backpackOpen;
+    if (wantSprint && !local.sprinting) {
+      local.crouchToggle = false; // chạy thì đứng dậy
+      if (scoped) setScope(false); // chạy thì không ngắm được
+    }
+    local.sprinting = wantSprint;
+    const isSprinting = wantSprint;
+    const isCrouching = !currentlyInWater && !isProne && Boolean(local.crouchToggle);
 
     local.crouching = isCrouching;
 
-    const isSlowWalking = keys.ControlLeft || keys.ControlRight;
-
-    let moveSpeed = currentlyInWater ? 3.2 : isProne ? 1.3 : NORMAL_SPEED;
+    let moveSpeed = currentlyInWater
+      ? 3.2
+      : isProne
+        ? 1.3
+        : isSprinting
+          ? SPRINT_SPEED
+          : NORMAL_SPEED;
 
     if (!isProne && isCrouching && isSlowWalking) {
       moveSpeed = CROUCH_SLOW_SPEED;
@@ -8492,7 +8678,9 @@ function frame() {
         ? 5
         : isSlowWalking
           ? 5.2
-          : 9.5;
+          : isSprinting
+            ? 12.5
+            : 9.5;
     localGaitPhase =
       (localGaitPhase + dt * gaitRate * (isMoving ? 1 : 0)) % (Math.PI * 2);
     const swingAmount = isMoving ? (crouchWalking ? 0.25 : 0.52) : 0;
@@ -8512,8 +8700,17 @@ function frame() {
           ? 1.8
           : isSlowWalking
             ? 2.1
-            : 1.65;
-      const intensity = crouchWalking ? 0.34 : isSlowWalking ? 0.22 : 0.82;
+            : isSprinting
+              ? 2.05
+              : 1.65;
+      // Chạy nhanh: tiếng bước dồn dập và to hơn hẳn (bước nặng, nghe xa hơn).
+      const intensity = crouchWalking
+        ? 0.34
+        : isSlowWalking
+          ? 0.22
+          : isSprinting
+            ? 1.25
+            : 0.82;
       while (localFootstepDistance >= stride) {
         playSpatialFootstep(
           local.x,
@@ -8574,7 +8771,10 @@ function frame() {
         // Độ cao gốc của mắt đuổi mượt theo mặt đất; nhún đầu khi đi là một
         // ĐỘ LỆCH theo nhịp bước (trước đây cộng dồn sin mỗi khung hình → rung).
         cameraBaseY += (targetHeight - cameraBaseY) * Math.min(12 * dt, 1);
-        const bob = !isCrouching && isMoving ? Math.sin(localGaitPhase * 2) * 0.022 : 0;
+        const bob =
+          !isCrouching && isMoving
+            ? Math.sin(localGaitPhase * 2) * (isSprinting ? 0.04 : 0.022)
+            : 0;
         headBob += (bob - headBob) * Math.min(14 * dt, 1);
         camera.position.y = cameraBaseY + headBob;
       } else {
@@ -8611,7 +8811,7 @@ function frame() {
     if (nowMove - lastMove > 50) {
       // Đứng yên, không xoay: bỏ gói trùng lặp (chỉ nhắc lại mỗi 250 ms) —
       // giảm ~80% gói gửi lên khi núp/ngắm, đỡ nghẽn Wi-Fi yếu và đỡ tải server.
-      const moveKey = `${local.x.toFixed(2)}|${local.z.toFixed(2)}|${local.yaw.toFixed(3)}|${+local.crouching}${+local.prone}${+Boolean(local.swimming)}${+isSlowWalking}|${(local.swimY ?? 0).toFixed(2)}|${jumpOffset.toFixed(2)}|${local.peek.toFixed(2)}`;
+      const moveKey = `${local.x.toFixed(2)}|${local.z.toFixed(2)}|${local.yaw.toFixed(3)}|${+local.crouching}${+local.prone}${+Boolean(local.swimming)}${+isSlowWalking}${+isSprinting}|${(local.swimY ?? 0).toFixed(2)}|${jumpOffset.toFixed(2)}|${local.peek.toFixed(2)}`;
       if (moveKey !== lastMoveKey || nowMove - lastMove > 250) {
         send({
           type: "move",
@@ -8624,6 +8824,7 @@ function frame() {
           swimY: local.swimY,
           jumping: local.jumping,
           slowWalking: isSlowWalking,
+          sprinting: isSprinting,
           jumpY: jumpOffset,
           peek: local.peek,
         });

@@ -48,63 +48,69 @@ export function buildBeryl() {
   for (const side of [-1, 1]) part(g, box(0.008, 0.028, 0.012), black, side * 0.016, ironY + 0.004, -0.57);
   part(g, box(0.004, 0.022, 0.006), black, 0, ironY - 0.004, -0.57); // đầu ruồi
   part(g, box(0.03, 0.05, 0.03), black, 0, 0.03, -0.57); // đế đầu ruồi
-  // Kính ngắm toàn ảnh (holographic) trên ray nắp che bụi — khác hẳn ống tròn
-  // của AUG: thân hộp vuông, cửa sổ chữ nhật có mái che, lưới ngắm vòng tròn đỏ
-  // + chấm giữa. Đường ngắm (tâm cửa sổ) ở độ cao sightY.
+  // Red dot kiểu ống giống AUG nhưng tiết diện OVAL (rộng ngang hơn cao) —
+  // nhìn là phân biệt được với ống tròn của AUG. Gắn trên ray nắp che bụi;
+  // tâm ống (đường ngắm) ở độ cao sightY.
   const sightY = 0.132;
   const sightZ = -0.01;
+  const R = 0.03, // bán kính dọc
+    OVAL = 1.32; // bề ngang = R × OVAL
   part(g, box(0.026, 0.01, 0.2), black, 0, 0.063, -0.01); // ray Picatinny
   for (let i = 0; i < 7; i++) part(g, box(0.03, 0.004, 0.008), steel, 0, 0.069, -0.1 + i * 0.03);
-  const winW = 0.058,
-    winH = 0.044,
-    depth = 0.07,
-    frame = 0.006;
-  const bodyTop = sightY - winH / 2;
-  part(g, box(winW + 2 * frame, bodyTop - 0.068, depth + 0.02), polymer, 0, (bodyTop + 0.068) / 2, sightZ); // thân pin/đèn
-  part(g, box(0.014, 0.012, 0.03), steel, (winW + 2 * frame) / 2 + 0.005, bodyTop - 0.012, sightZ); // núm độ sáng
-  for (const side of [-1, 1])
-    part(g, box(frame, winH, depth), black, side * (winW + frame) / 2, sightY, sightZ); // hai vách
-  part(g, box(winW + 2 * frame, frame, depth + 0.012), black, 0, sightY + (winH + frame) / 2, sightZ - 0.004); // mái che
-  // Viền cửa sổ trước (mỏng) để thấy rõ khung chữ nhật khi ngắm.
-  part(g, box(winW + 2 * frame, 0.004, 0.006), black, 0, bodyTop + 0.002, sightZ - depth / 2);
-  const glass = part(
+  part(g, box(0.034, sightY - R - 0.066, 0.05), black, 0, (sightY - R + 0.066) / 2, sightZ); // chân đế ống
+  // Ống rỗng oval: chỉ thành ống + 2 vành (không nắp đặc che tầm nhìn).
+  const tube = new THREE.Mesh(
+    new THREE.CylinderGeometry(R, R, 0.075, 28, 1, true).rotateX(Math.PI / 2),
+    new THREE.MeshLambertMaterial({ color: "#121412", side: THREE.DoubleSide }),
+  );
+  tube.scale.x = OVAL;
+  tube.position.set(0, sightY, sightZ);
+  g.add(tube);
+  for (const z of [sightZ - 0.037, sightZ + 0.037])
+    part(g, new THREE.TorusGeometry(R, 0.0045, 6, 28), black, 0, sightY, z).scale.x = OVAL;
+  part(g, box(0.012, 0.012, 0.02), steel, R * OVAL + 0.005, sightY, sightZ); // núm chỉnh
+  // Kính trong, ngả tối nhẹ (oval theo ống).
+  const lens = part(
     g,
-    new THREE.PlaneGeometry(winW, winH),
+    new THREE.CircleGeometry(R - 0.002, 28),
     new THREE.MeshBasicMaterial({
-      color: 0x2a4a55,
+      color: 0x14231d,
       transparent: true,
-      opacity: 0.16,
+      opacity: 0.2,
       depthWrite: false,
       side: THREE.DoubleSide,
     }),
     0,
     sightY,
-    sightZ - depth / 2 + 0.004,
+    sightZ - 0.035,
   );
-  glass.renderOrder = 2;
-  glass.userData.redDot = true;
-  // Lưới ngắm: vòng tròn 65 MOA + chấm giữa, vẽ bằng canvas, hoà màu cộng.
-  const c = document.createElement("canvas");
-  c.width = c.height = 128;
-  const ctx = c.getContext("2d");
-  ctx.shadowColor = "rgba(255,40,30,0.9)";
-  ctx.shadowBlur = 6;
-  ctx.strokeStyle = "rgba(255,70,50,0.95)";
-  ctx.lineWidth = 3.2;
-  ctx.beginPath();
-  ctx.arc(64, 64, 44, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.fillStyle = "rgba(255,90,70,1)";
-  ctx.beginPath();
-  ctx.arc(64, 64, 4.2, 0, Math.PI * 2);
-  ctx.fill();
-  const reticleTex = new THREE.CanvasTexture(c);
-  reticleTex.colorSpace = THREE.SRGBColorSpace;
-  const reticle = part(
+  lens.scale.x = OVAL;
+  lens.renderOrder = 2;
+  lens.userData.redDot = true;
+  // Chấm đỏ phát sáng + quầng sáng (giống AUG).
+  const dot = part(
     g,
-    new THREE.PlaneGeometry(0.024, 0.024),
+    new THREE.SphereGeometry(0.0012, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xff2a1f, toneMapped: false }),
+    0,
+    sightY,
+    sightZ - 0.037,
+  );
+  dot.userData.redDot = true;
+  const glowCanvas = document.createElement("canvas");
+  glowCanvas.width = glowCanvas.height = 32;
+  const gc = glowCanvas.getContext("2d");
+  const grd = gc.createRadialGradient(16, 16, 0, 16, 16, 16);
+  grd.addColorStop(0, "rgba(255,70,50,1)");
+  grd.addColorStop(0.35, "rgba(255,40,30,0.5)");
+  grd.addColorStop(1, "rgba(255,0,0,0)");
+  gc.fillStyle = grd;
+  gc.fillRect(0, 0, 32, 32);
+  const glow = part(
+    g,
+    new THREE.PlaneGeometry(0.009, 0.009),
     new THREE.MeshBasicMaterial({
-      map: reticleTex,
+      map: new THREE.CanvasTexture(glowCanvas),
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -112,10 +118,10 @@ export function buildBeryl() {
     }),
     0,
     sightY,
-    sightZ - depth / 2 + 0.002,
+    sightZ - 0.0365,
   );
-  reticle.renderOrder = 3;
-  reticle.userData.redDot = true;
+  glow.renderOrder = 3;
+  glow.userData.redDot = true;
   // Ốp tay có ray + ống trích khí.
   part(g, box(0.064, 0.074, 0.27), tan, 0, -0.012, -0.3);
   part(g, box(0.03, 0.014, 0.27), black, 0, 0.032, -0.3);

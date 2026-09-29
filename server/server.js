@@ -340,6 +340,7 @@ const snapshot = (room) => ({
     crouching: p.crouching,
     prone: p.prone,
     slowWalking: p.slowWalking,
+    sprinting: Boolean(p.sprinting && p.alive && !p.vehicleId && !p.swimming),
     vehicleId: p.vehicleId || null,
     vehicleSeat: Number.isInteger(p.vehicleSeat) ? p.vehicleSeat : -1,
     jumpY: r2(p.jumpY),
@@ -719,7 +720,7 @@ function createLoot(room) {
     place("weapon", count, 1);
     for (const item of items.slice(before)) {
       item.weapon = weapon;
-      item.ammo = WEAPON_STATS[weapon].mag;
+      item.ammo = 0; // súng mới nhặt KHÔNG có đạn sẵn — phải tìm hộp đạn rồi nạp (R)
       item.yaw = Math.round(Math.random() * 628) / 100;
     }
   }
@@ -870,6 +871,8 @@ function blockedByFence(o, x, z, radius) {
   );
 }
 const PLAYER_RADIUS = 0.38;
+// Tốc độ chạy nhanh (Shift) — khớp SPRINT_SPEED ở client.
+const SPRINT_SPEED = 9.5;
 // Keep server movement blockers aligned with the visible prop footprints.
 function obstacleFootprintRadius(o) {
   if (o.type === "tree") return o.w * 0.25;
@@ -1135,16 +1138,7 @@ function tickZone(room, now) {
         killerId: null,
         killerName: "Vòng bo",
       };
-      room.crates ||= [];
-      room.crates.push({
-        id: `crate-${room.nextCrateId++}`,
-        x: p.x,
-        z: p.z,
-        contents: {
-          ammo: (p.reserveAmmo || 0) + (p.ammo || 0),
-          medkit: p.medkits || 0,
-        },
-      });
+      dropDeathLoot(room, p);
       const remaining = [...room.players.values()].filter((pl) => pl.alive);
       if (remaining.length <= 1 && !room.finishAt) {
         room.finishAt = now + MATCH_END_DELAY_MS;
@@ -1260,6 +1254,76 @@ function findFreeSpot(room, x, z, id, landingY = null) {
   }
   return { x, z };
 }
+// Đồ rơi khi bị hạ (dùng chung cho: bị bắn, bị xe tông / nổ xe, chết trong bo):
+//  - HÒM chứa đạn dự trữ + bịch máu;
+//  - KHẨU SÚNG đang cầm nằm ngay cạnh hòm (kèm đạn còn trong băng).
+// Trước đây hòm đặt đúng chỗ người chết — người lái xe chết thì hòm nằm TRONG
+// thân xe: tới gần bấm F là vào xe chứ không mở được hòm → tưởng hòm rỗng.
+// Nay hòm/súng được đặt ở chỗ trống cạnh đó (ngoài xe, ngoài tường).
+function dropDeathLoot(room, victim) {
+  // Chỗ trống: không tường/đá/cây, cách thân mọi xe ≥ 0.8 m (hòm rộng ~1 m,
+  // chỉ ra khỏi xe thôi thì vẫn lấn vào hông xe) và không đè lên vật vừa rơi.
+  const placed = [];
+  const clearOfCars = (x, z) =>
+    (room.vehicles || []).every((v) => {
+      const dx = x - v.x,
+        dz = z - v.z,
+        c = Math.cos(v.yaw),
+        s = Math.sin(v.yaw);
+      return Math.abs(c * dx - s * dz) > 1.03 + 0.8 || Math.abs(s * dx + c * dz) > 1.84 + 0.8;
+    });
+  const ok = (x, z) =>
+    !blockedPosition(room, x, z, victim.id, null, true) &&
+    clearOfCars(x, z) &&
+    placed.every((p) => Math.hypot(p.x - x, p.z - z) > 0.9);
+  const freeNear = (x, z) => {
+    for (let r = 0; r <= 8; r += 0.5)
+      for (let k = 0; k < (r ? 16 : 1); k++) {
+        const a = (k / 16) * Math.PI * 2;
+        const nx = x + Math.cos(a) * r,
+          nz = z + Math.sin(a) * r;
+        if (ok(nx, nz)) return placed.push({ x: nx, z: nz }), { x: nx, z: nz };
+      }
+    return { x, z }; // hiếm: kẹt giữa nhiều vật cản → để nguyên chỗ
+  };
+  const spot = freeNear(victim.x, victim.z);
+  const weapon = victim.weapon && victim.weapon !== "none" ? victim.weapon : null;
+  // Súng nằm trong băng đạn của súng; hòm chỉ giữ đạn dự trữ (tay không thì
+  // không có băng nào → dồn hết vào hòm như cũ).
+  const crateAmmo = (victim.reserveAmmo || 0) + (weapon ? 0 : victim.ammo || 0);
+  const medkit = victim.medkits || 0;
+  room.crates ||= [];
+  if (crateAmmo > 0 || medkit > 0)
+    room.crates.push({
+      id: `crate-${room.nextCrateId++}`,
+      x: Math.round(spot.x * 100) / 100,
+      z: Math.round(spot.z * 100) / 100,
+      contents: { ammo: crateAmmo, medkit },
+    });
+  if (weapon) {
+    // Ngay cạnh hòm (bên phải theo hướng nhìn của người chết), không chồng lên hòm.
+    const yaw = victim.yaw || 0;
+    const side = freeNear(spot.x + Math.cos(yaw) * 1.1, spot.z - Math.sin(yaw) * 1.1);
+    const dropped = {
+      id: room.nextLootId++,
+      type: "weapon",
+      weapon,
+      x: Math.round(side.x * 100) / 100,
+      z: Math.round(side.z * 100) / 100,
+      yaw: Math.round(Math.random() * 628) / 100,
+      amount: 1,
+      ammo: Math.max(0, victim.ammo || 0),
+    };
+    room.loot ||= [];
+    room.loot.push(dropped);
+    broadcastRaw(room, { type: "lootAdded", item: dropped });
+  }
+  // Người chết không còn giữ gì (tránh rơi đồ 2 lần nếu có đường chết khác).
+  victim.reserveAmmo = 0;
+  victim.medkits = 0;
+  victim.ammo = 0;
+  victim.weapon = "none";
+}
 function killByVehicle(
   room,
   victim,
@@ -1291,16 +1355,7 @@ function killByVehicle(
         : killer?.name ||
           (candidateKiller === victim ? "Rời xe khi đang chạy" : "Xe tông"),
   };
-  room.crates ||= [];
-  room.crates.push({
-    id: `crate-${room.nextCrateId++}`,
-    x: victim.x,
-    z: victim.z,
-    contents: {
-      ammo: (victim.reserveAmmo || 0) + (victim.ammo || 0),
-      medkit: victim.medkits || 0,
-    },
-  });
+  dropDeathLoot(room, victim);
   const alive = [...room.players.values()].filter((player) => player.alive);
   if (alive.length <= 1 && !room.finishAt) {
     room.finishAt = now + MATCH_END_DELAY_MS;
@@ -1999,6 +2054,7 @@ wss.on("connection", (ws) => {
       p.vehicleId = vehicle.id;
       p.vehicleSeat = seat;
       p.crouching = false;
+      p.sprinting = false;
       p.prone = false;
       p.jumping = false;
       p.swimming = false;
@@ -2052,6 +2108,8 @@ wss.on("connection", (ws) => {
       p.prone = Boolean(m.prone);
       if (p.prone) p.crouching = false;
       p.slowWalking = Boolean(m.slowWalking);
+      // Chạy nhanh (Shift): chỉ khi đứng, không đi chậm; hết chạy khi ngồi/nằm.
+      p.sprinting = Boolean(m.sprinting) && !p.crouching && !p.prone && !p.slowWalking;
       p.jumpY = Math.max(0, Math.min(1.7, Number(m.jumpY) || 0));
       p.jumping = p.jumpY > 0.02;
       p.yaw = Number(m.yaw) || 0;
@@ -2081,7 +2139,9 @@ wss.on("connection", (ws) => {
               ? 3.8
               : p.slowWalking
                 ? 3.2
-                : 7;
+                : p.sprinting
+                  ? SPRINT_SPEED
+                  : 7;
       let dx = Number(m.x) - p.x;
       let dz = Number(m.z) - p.z;
       if (!Number.isFinite(dx)) dx = 0;
@@ -2422,6 +2482,7 @@ wss.on("connection", (ws) => {
       const stats = weaponStats(p);
       const melee = stats === WEAPON_STATS.none;
       if (
+        p.sprinting || // đang chạy nhanh thì không bắn/đấm được (client dừng chạy trước khi bắn)
         p.healingUntil > shotTime ||
         p.reloadingUntil > shotTime ||
         (!melee && p.ammo <= 0) ||
@@ -2546,6 +2607,24 @@ wss.on("connection", (ws) => {
             ),
           );
         }
+        // Tường hồi (ngũ giác dưới mái ở mặt cửa ra vào và mặt đối diện — khớp
+        // tường hồi vẽ ở client): xấp xỉ bằng 3 tấm xếp chồng, hẹp dần lên nóc.
+        const eave = o.w * 0.027,
+          ridge = o.w * 0.2876;
+        for (const end of [-1, 1])
+          for (let k = 0; k < 3; k++) {
+            const y0 = (ridge * k) / 3,
+              y1 = (ridge * (k + 1)) / 3,
+              mid = (y0 + y1) / 2;
+            const halfWidth = mid <= eave ? half : (half * (ridge - mid)) / (ridge - eave);
+            sideWalls.push(
+              rayBox(
+                centerAt(0, end * (half - thickness / 2), wallHeight + mid),
+                o.yaw || 0,
+                { x: halfWidth, y: (y1 - y0) / 2, z: thickness / 2 },
+              ),
+            );
+          }
         const distances = [
           ...sideWalls,
           rayBox(
@@ -2808,16 +2887,7 @@ wss.on("connection", (ws) => {
             headshot: targetPart === "head",
             distance: Math.round(nearest),
           };
-          room.crates ||= [];
-          room.crates.push({
-            id: `crate-${room.nextCrateId++}`,
-            x: target.x,
-            z: target.z,
-            contents: {
-              ammo: (target.reserveAmmo || 0) + (target.ammo || 0),
-              medkit: target.medkits || 0,
-            },
-          });
+          dropDeathLoot(room, target);
         }
       }
       // Không kết thúc trận ngay: giữ phase "playing" thêm vài giây để người
