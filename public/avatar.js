@@ -359,8 +359,11 @@ export function poseAvatar(rig, pose, state, dt) {
   } else if (stance === "seat") {
     hipY = 0.46;
     lean = -0.08;
-    thighBase = 1.45;
-    kneeBase = -1.5;
+    thighBase = 1.52;
+    // Cẳng chân DUỖI về trước (như ngồi ghế xe) thay vì buông thẳng xuống:
+    // gối gập -1.5 làm bàn chân tụt xuống ~0.1 m trên gốc xe, thò ra dưới đáy
+    // thân xe (đáy ở 0.32 m). Đùi 1.52 + gối 0 → bàn chân ở ~0.45 m, khuất trong thân xe.
+    kneeBase = 0;
   } else if (stance === "air") {
     lean = 0;
     thighBase = -0.25;
