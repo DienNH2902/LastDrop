@@ -279,9 +279,11 @@ export function buildAvatar(headMaterial, earMat) {
   }
   return {
     root,
-    rig: { hips, torso, head, legs, arms, weaponMount, hitboxes },
+    // handR: khớp khuỷu tay phải — bàn tay nằm ở đầu cẳng tay (y = -FOREARM).
+    rig: { hips, torso, head, legs, arms, weaponMount, hitboxes, handR: arms[1].elbow },
   };
 }
+export const HAND_OFFSET = -FOREARM - 0.03;
 
 // --- IK hai khớp cho cánh tay (vai → khuỷu → tay) trong không gian thân ---
 const _d = new THREE.Vector3(),
@@ -456,7 +458,25 @@ export function poseAvatar(rig, pose, state, dt) {
   // Tay: cầm súng (IK) hoặc tư thế riêng khi bay / lái xe / bơi.
   const grip = state.weaponGrip;
   rig.arms.forEach((arm, i) => {
-    if (
+    if (state.throwable && (stance === "stand" || stance === "crouch" || stance === "jump")) {
+      // LỰU ĐẠN: tay trái chỉ hướng ném; tay phải cầm quả lựu đạn — giơ cao khi
+      // rút chốt, khi ném thì vung ra sau rồi quăng mạnh về trước.
+      if (arm.side < 0) {
+        _t.set(-0.22, 0.6, -0.38);
+      } else {
+        const t = state.throwT;
+        const hold = state.cooking ? [0.28, 0.8, 0.12] : [0.26, 0.6, -0.08];
+        if (t === null || t === undefined || t >= 1) _t.set(...hold);
+        else if (t < 0.35) {
+          const k = t / 0.35;
+          _t.set(hold[0] + (0.3 - hold[0]) * k, hold[1] + (0.9 - hold[1]) * k, hold[2] + (0.26 - hold[2]) * k);
+        } else {
+          const k = Math.sin(((t - 0.35) / 0.65) * Math.PI * 0.5);
+          _t.set(0.3 - 0.18 * k, 0.9 - 0.32 * k, 0.26 - 0.84 * k);
+        }
+      }
+      solveArm(arm, _t, "free");
+    } else if (
       state.fists &&
       (stance === "stand" || stance === "crouch" || stance === "jump")
     ) {

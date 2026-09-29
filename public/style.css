@@ -2533,3 +2533,100 @@ body:has(#game.active) #game {
     transform: scale(1);
   }
 }
+
+/* Lựu đạn: vòng đếm ngược kíp nổ (xanh → vàng → đỏ) */
+#cookHud {
+  position: absolute;
+  left: 50%;
+  bottom: 170px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+  font-family: "DM Mono", monospace;
+  z-index: 5;
+}
+#cookHud.hidden {
+  display: none;
+}
+#cookHud .ck-ring {
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  transition: box-shadow 0.2s;
+}
+#cookHud .ck-ring b {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #0d100cdd;
+  font-size: 20px;
+  font-weight: 700;
+}
+#cookHud small {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #fff;
+  text-shadow: 0 1px 4px #000;
+}
+#cookHud.danger .ck-ring {
+  animation: cook-pulse 0.3s ease-in-out infinite alternate;
+}
+@keyframes cook-pulse {
+  from { transform: scale(1); }
+  to { transform: scale(1.1); }
+}
+/* Lựu đạn choáng: loá trắng toàn màn hình */
+.flash-overlay {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 8;
+}
+
+/* Cảnh báo lựu đạn nổ ở gần: 💣 + mũi tên chỉ hướng + khoảng cách */
+#grenadeWarn {
+  position: absolute;
+  left: 50%;
+  top: 38%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  pointer-events: none;
+  font-family: "DM Mono", monospace;
+  z-index: 5;
+  text-shadow: 0 1px 4px #000;
+}
+#grenadeWarn.hidden {
+  display: none;
+}
+#grenadeWarn i {
+  color: #ffb13b;
+  font-style: normal;
+  font-size: 18px;
+  transform-origin: 50% 140%;
+}
+#grenadeWarn b {
+  font-size: 22px;
+  filter: drop-shadow(0 0 6px #ff6a2a);
+}
+#grenadeWarn small {
+  color: #ffd27a;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+#grenadeWarn.close b {
+  animation: cook-pulse 0.25s ease-in-out infinite alternate;
+}
+#grenadeWarn.close small {
+  color: #ff5a4a;
+}

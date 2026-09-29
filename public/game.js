@@ -10,7 +10,7 @@ import {
   buildBakedWeapon,
   buildBeryl,
 } from "./weapons.js";
-import { buildAvatar, poseAvatar } from "./avatar.js";
+import { buildAvatar, poseAvatar, HAND_OFFSET } from "./avatar.js";
 
 // querySelector được gọi hàng chục lần MỖI khung hình (HUD, vòng bo, loot...).
 // Nhớ lại phần tử đã tìm; nếu phần tử đó bị gỡ khỏi trang thì tìm lại.
@@ -300,6 +300,10 @@ function normalizeMapId(id) {
   return id === "desert" || id === "jungle" ? id : "forest";
 }
 const isJungleMap = () => mapId === "jungle";
+// Lựu đạn: nổ (frag, kíp 6 s) và choáng (flash, kíp 2 s) — khớp GRENADE ở server.
+const GRENADE_FUSE = { frag: 6000, flash: 2000 };
+const GRENADE_NAME = { frag: "LỰU ĐẠN NỔ", flash: "LỰU ĐẠN CHOÁNG" };
+const throwCount = (kind) => (kind === "flash" ? local.flashes : local.frags) || 0;
 const NORMAL_SPEED = 7;
 const SPRINT_SPEED = 9.5; // Shift giữ + W: chạy nhanh (khớp SPRINT_SPEED ở server)
 // Chạy nhanh: sprintCancelled = đã bị hủy bởi bắn/ngắm → phải NHẢ Shift rồi
@@ -881,12 +885,57 @@ function playPunchWhoosh(position) {
 //  Beryl— thép nặng "cạch" trầm + kéo tay kéo khoá nòng
 //  Kar  — báng gỗ "cộc" + khoá nòng thép
 // position = null: của chính mình (không pan, không suy giảm).
+// Rút chốt: tiếng "tách" kim loại + lò xo cần gạt.
+function playPinPull() {
+  const a = spatialAudio(null, { volume: 0.5 });
+  if (!a) return;
+  noiseBurst(a, { duration: 0.03, filter: "highpass", freq: 3200, gain: 0.6 });
+  toneBurst(a, { at: 0.01, duration: 0.05, type: "triangle", from: 2600, to: 1800, gain: 0.08 });
+  noiseBurst(a, { at: 0.12, duration: 0.05, filter: "bandpass", freq: 1900, q: 3, gain: 0.35 });
+}
+function playThrowWhoosh(position = null) {
+  const a = spatialAudio(position, { volume: position ? 0.8 : 0.5, ref: 2, max: 24 });
+  if (!a) return;
+  noiseBurst(a, { duration: 0.22, filter: "bandpass", freq: 700, q: 0.8, gain: 0.7 });
+}
+// Tiếng nổ lựu đạn: trầm, dày, dội xa (nghe được ~250 m như tiếng súng lớn).
+function playGrenadeBlast(position) {
+  const a = spatialAudio(position, { volume: 1.6, ref: 14, max: 260 });
+  if (!a) return;
+  noiseBurst(a, { duration: 0.05, filter: "highpass", freq: 2500, gain: 1.4, drive: 30 });
+  noiseBurst(a, { at: 0.005, duration: 0.45, filter: "lowpass", freq: 520, gain: 1.8, drive: 14 });
+  toneBurst(a, { duration: 0.35, from: 90, to: 28, gain: 1.4 });
+  toneBurst(a, { at: 0.02, duration: 0.6, from: 55, to: 22, gain: 1.0 });
+  noiseBurst(a, { at: 0.25, duration: 0.5, filter: "bandpass", freq: 400, q: 0.7, gain: 0.45 });
+  gunshotReverbTail(a, { wet: 0.5, tone: 1100, predelay: 0.02 });
+}
+function playFlashBang(position) {
+  const a = spatialAudio(position, { volume: 1.4, ref: 10, max: 200 });
+  if (!a) return;
+  noiseBurst(a, { duration: 0.04, filter: "highpass", freq: 3800, gain: 1.6, drive: 34 });
+  noiseBurst(a, { at: 0.003, duration: 0.18, filter: "bandpass", freq: 1500, q: 0.7, gain: 1.0, drive: 10 });
+  toneBurst(a, { duration: 0.12, from: 140, to: 60, gain: 0.7 });
+  gunshotReverbTail(a, { wet: 0.4, tone: 2400, predelay: 0.01 });
+}
+// Ù tai sau khi bị choáng: tiếng "píííp" cao tắt dần.
+function playEarRinging(power) {
+  const a = spatialAudio(null, { volume: 0.18 + power * 0.25 });
+  if (!a) return;
+  toneBurst(a, { duration: 1.2 + power * 2.6, type: "sine", from: 3400, to: 3200, gain: 0.5 });
+}
 function playLootSound(sound, position) {
   const a = spatialAudio(position, { volume: position ? 0.9 : 0.6, ...AUDIO_RANGE.loot });
   if (!a) return;
   const r = () => 0.9 + Math.random() * 0.2;
   const [action, kind] = sound.split("-");
   if (action === "pickup") {
+    if (kind === "grenade") {
+      // Lựu đạn: vỏ thép chạm nhau "keng" + cài vào đai.
+      toneBurst(a, { duration: 0.18, type: "triangle", from: 1700 * r(), to: 1500, gain: 0.12 });
+      noiseBurst(a, { duration: 0.04, filter: "bandpass", freq: 2400, q: 3, gain: 0.5 });
+      noiseBurst(a, { at: 0.16, duration: 0.08, filter: "lowpass", freq: 600, gain: 0.4 });
+      return;
+    }
     if (kind === "ammo") {
       noiseBurst(a, { duration: 0.05, filter: "lowpass", freq: 700, gain: 0.5 }); // nhấc hộp
       for (let i = 0; i < 7; i++) {
@@ -1506,6 +1555,7 @@ function connect(message) {
     if (m.type === "lootRemoved") removeLootItem(m.id);
     if (m.type === "lootAdded" && m.item) addLootItem(m.item);
     if (m.type === "toast") showLootToast(m.text);
+    if (m.type === "explosion") onExplosion(m);
     if (m.type === "lootSfx" && typeof m.sound === "string")
       playLootSound(
         m.sound,
@@ -1815,6 +1865,10 @@ function flushMergeBuckets() {
 function updateAmmoHud() {
   const reserve = local.reserveAmmo ?? 0;
   const hud = $("#ammo");
+  if (local.throwable) {
+    setHtml(hud, `${throwCount(local.throwable)} <i>/ 3 · ${local.cookAt ? "ĐÃ RÚT CHỐT" : "R RÚT CHỐT"}</i>`);
+    return;
+  }
   if (weaponKey(local.weapon) === "none") {
     setHtml(hud, `👊 <i>VÀO NHÀ TÌM SÚNG · DỰ TRỮ ${reserve}</i>`);
     return;
@@ -4156,7 +4210,39 @@ function initWorld() {
     beryl: beryl.userData.magazine,
   };
   // Mô hình theo từng loại vũ khí; "none" = hai nắm đấm.
-  gun.userData.models = { ranger: aug, sniper: kar, beryl, none: fists };
+  // Lựu đạn trên tay phải (nổ: quả tròn xanh rêu có cần gạt; choáng: ống trụ xám).
+  const makeThrowable = (flash) => {
+    const g = new THREE.Group();
+    const body = flash
+      ? new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.11, 12), makeMat("#6e7472"))
+      : new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 10), makeMat("#3d4a2e"));
+    if (!flash) body.scale.set(1, 1.18, 1);
+    g.add(body);
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.02, 0.03, 8), makeMat("#2a2c28"));
+    cap.position.y = flash ? 0.07 : 0.06;
+    g.add(cap);
+    const lever = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.09, 0.02), makeMat("#8a8d86"));
+    lever.position.set(0.03, 0.03, 0);
+    lever.rotation.z = -0.25;
+    g.add(lever);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.016, 0.003, 5, 12), makeMat("#b7b9b3"));
+    ring.position.set(-0.024, 0.075, 0);
+    g.add(ring);
+    g.userData.ring = ring;
+    const hand = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.08, 0.1), makeMat("#26261f"));
+    hand.position.set(0.01, -0.05, 0.02);
+    g.add(hand);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.3, 4, 8).rotateX(Math.PI / 2), makeMat("#5a5f48"));
+    arm.position.set(0.02, -0.08, 0.22);
+    g.add(arm);
+    g.position.set(0.22, -0.2, -0.42);
+    g.visible = false;
+    return g;
+  };
+  const grenadeModel = makeThrowable(false),
+    flashModel = makeThrowable(true);
+  gun.add(grenadeModel, flashModel);
+  gun.userData.models = { ranger: aug, sniper: kar, beryl, none: fists, grenade: grenadeModel, flashbang: flashModel };
   gun.userData.fists = fists;
   gun.userData.punchAt = 0;
   gun.userData.punchSide = 1;
@@ -4567,6 +4653,10 @@ function renderPlayers(state) {
       ammo = Math.max(0, Number(p.ammo) || 0);
       local.reserveAmmo = p.reserveAmmo;
       local.medkits = p.medkits || 0;
+      local.frags = p.frags || 0;
+      local.flashes = p.flashes || 0;
+      // Hết lựu đạn đang cầm (đã ném quả cuối / bị lấy mất) → quay về súng.
+      if (local.throwable && !throwCount(local.throwable) && !local.cookAt) setThrowable(null);
       local.healing = Boolean(p.healing);
       local.healEndsAt = local.healing
         ? performance.now() + (p.healLeftMs || 0)
@@ -4604,6 +4694,14 @@ function renderPlayers(state) {
       sniperWeapon.add(sniperFlash);
       const berylWeapon = buildBakedWeapon("beryl", mergeGeometries);
       rig.weaponMount.add(berylWeapon);
+      // Lựu đạn trên tay phải (nổ: tròn xanh rêu; choáng: trụ xám) — ẩn / hiện theo snapshot.
+      const handGrenade = new THREE.Mesh(sharedGrenadeGeo.frag, makeMat("#3d4a2e"));
+      const handFlash = new THREE.Mesh(sharedGrenadeGeo.flash, makeMat("#7a807d"));
+      for (const m of [handGrenade, handFlash]) {
+        m.position.y = HAND_OFFSET;
+        m.visible = false;
+        rig.handR.add(m);
+      }
       const berylFlash = makeMuzzleFlash(1.15);
       berylFlash.position.copy(berylWeapon.userData.muzzle);
       berylWeapon.add(berylFlash);
@@ -4637,6 +4735,8 @@ function renderPlayers(state) {
         weapon,
         sniperWeapon,
         berylWeapon,
+        handGrenade,
+        handFlash,
         muzzleFlash,
         sniperFlash,
         berylFlash,
@@ -4678,6 +4778,22 @@ function renderPlayers(state) {
     mesh.userData.weapon.visible = holding && p.weapon === "ranger";
     mesh.userData.sniperWeapon.visible = holding && p.weapon === "sniper";
     mesh.userData.berylWeapon.visible = holding && p.weapon === "beryl";
+    // Lựu đạn: cầm (throwable), rút chốt (cooking), vừa ném (throwId tăng).
+    const ud0 = mesh.userData;
+    const thrown = (Number(p.throwId) || 0) - (ud0.throwId ?? (Number(p.throwId) || 0));
+    ud0.throwId = Number(p.throwId) || 0;
+    if (thrown > 0) {
+      ud0.throwAt = nowMs;
+      playThrowWhoosh({ x: p.x, y: (p.groundY || 0) + 1.5, z: p.z });
+    }
+    if (holding && p.throwable) ud0.lastThrowable = p.throwable;
+    ud0.throwable = holding ? p.throwable || null : null;
+    ud0.cooking = Boolean(p.cooking);
+    // Đang vung tay ném quả cuối (server đã xoá throwable) vẫn giữ tư thế ném.
+    ud0.throwPose = ud0.throwable || (holding && nowMs - (ud0.throwAt || -1e9) < 450 ? ud0.lastThrowable : null);
+    if (ud0.throwPose) {
+      ud0.weapon.visible = ud0.sniperWeapon.visible = ud0.berylWeapon.visible = false;
+    }
     // Cú đấm mới (punchId tăng): hoạt ảnh tay luân phiên + tiếng vút.
     const punchCount = (Number(p.punchId) || 0) - (mesh.userData.punchId || 0);
     if (punchCount > 0) {
@@ -4816,6 +4932,7 @@ function renderPlayers(state) {
 // Client chỉ vẽ vật phẩm, hiện gợi ý "F" và gửi yêu cầu lên server.
 function lootLabel(item) {
   if (item.type === "ammo") return `ĐẠN 5.56 (+${item.amount})`;
+  if (item.type === "frag" || item.type === "flash") return GRENADE_NAME[item.type];
   if (item.type === "weapon")
     return `${{ sniper: "KAR98K · SCOPE 8X", beryl: "BERYL M762", ranger: "AUG · RED DOT" }[item.weapon] || "SÚNG"} · NHẤN F ${weaponKey(local.weapon) === "none" ? "NHẶT" : "ĐỔI"} SÚNG`;
   return "BỊCH MÁU";
@@ -5005,6 +5122,17 @@ function buildLootAssets() {
     sniper: weapon("sniper"),
     beryl: weapon("beryl"),
     medkit: mergeGeometries(medParts, false),
+    // Lựu đạn rơi dưới đất (to hơn thật một chút để dễ thấy).
+    frag: mergeGeometries([
+      coloredPart(new THREE.SphereGeometry(0.11, 12, 10), "#3d4a2e", (o) => o.scale.set(1, 1.2, 1)),
+      coloredPart(new THREE.CylinderGeometry(0.035, 0.04, 0.06, 8), "#2a2c28", (o) => (o.position.y = 0.14)),
+      coloredPart(new THREE.BoxGeometry(0.025, 0.16, 0.035), "#8a8d86", (o) => o.position.set(0.06, 0.07, 0)),
+    ], false),
+    flash: mergeGeometries([
+      coloredPart(new THREE.CylinderGeometry(0.07, 0.07, 0.22, 12), "#6e7472"),
+      coloredPart(new THREE.CylinderGeometry(0.035, 0.04, 0.05, 8), "#2a2c28", (o) => (o.position.y = 0.135)),
+      coloredPart(new THREE.BoxGeometry(0.025, 0.18, 0.035), "#b7b9b3", (o) => o.position.set(0.075, 0.03, 0)),
+    ], false),
     ammo: mergeGeometries(ammoParts, false),
   };
 
@@ -5052,7 +5180,9 @@ function addLootMesh(item) {
       : "ranger"
     : isMed
       ? "medkit"
-      : "ammo";
+      : item.type === "frag" || item.type === "flash"
+        ? item.type
+        : "ammo";
   const body = new THREE.Mesh(
     lootAssets.bodies[bodyKey],
     lootAssets.bodyMaterial,
@@ -5133,6 +5263,7 @@ function updateLootVisibility() {
 // Balo còn chỗ cho loại vật phẩm này không?
 function packHasRoom(type) {
   if (type === "weapon") return true;
+  if (type === "frag" || type === "flash") return throwCount(type) < (packLimits.throwables || 3);
   return type === "ammo"
     ? (local.reserveAmmo ?? 0) < packLimits.ammo
     : (local.medkits || 0) < packLimits.medkits;
@@ -5332,6 +5463,8 @@ function installLootUi() {
     <div class="bp-head"><span id="bpTitle">BALO</span><small>F / TAB / ESC · ĐÓNG</small></div>
     <div class="bp-row"><b>▮</b><div><strong>ĐẠN 5.56 MM</strong><small>ĐANG LẮP TRONG SÚNG: <span id="bpMag">30</span> / 30</small></div><span class="bp-count" id="bpAmmoCount">0</span><div class="bp-actions"><input id="bpDropAmmo" type="number" min="1" value="1" aria-label="Số viên đạn muốn thả"><button data-drop-item="ammo">THẢ</button></div></div>
     <div class="bp-row" id="bpMed"><b>✚</b><div><strong>BỊCH MÁU</strong><small>+20 MÁU · HỒI TRONG 5 GIÂY</small></div><span class="bp-count" id="bpMedCount">0</span><div class="bp-actions"><input id="bpDropMedkit" type="number" min="1" value="1" aria-label="Số bịch máu muốn thả"><button class="secondary-action" data-use-medkit>DÙNG</button><button data-drop-item="medkit">THẢ</button></div></div>
+    <div class="bp-row"><b>💣</b><div><strong>LỰU ĐẠN NỔ</strong><small>PHÍM 4 · R RÚT CHỐT · KÍP 6 GIÂY</small></div><span class="bp-count" id="bpFragCount">0</span><div class="bp-actions"><input id="bpDropFrag" type="number" min="1" value="1" aria-label="Số lựu đạn nổ muốn thả"><button data-drop-item="frag">THẢ</button></div></div>
+    <div class="bp-row"><b>⚡</b><div><strong>LỰU ĐẠN CHOÁNG</strong><small>PHÍM 5 · LOÁ MẮT · KÍP 2 GIÂY</small></div><span class="bp-count" id="bpFlashCount">0</span><div class="bp-actions"><input id="bpDropFlash" type="number" min="1" value="1" aria-label="Số lựu đạn choáng muốn thả"><button data-drop-item="flash">THẢ</button></div></div>
     <div id="crateSection" class="bp-section hidden"><h3>HÒM TIẾP TẾ</h3><div id="crateRows"></div></div>
     <div class="bp-foot">F · MỞ HÒM / NHẶT ĐỒ · NHẬP SỐ LƯỢNG ĐỂ THẢ HOẶC LẤY ĐỒ</div>`;
   $(".hud").append(panel);
@@ -5409,11 +5542,16 @@ function renderBackpack() {
   );
   $("#bpAmmoCount").classList.toggle("full", !packHasRoom("ammo"));
   $("#bpMedCount").classList.toggle("full", !packHasRoom("medkit"));
+  const throwMax = packLimits.throwables || 3;
+  setHtml($("#bpFragCount"), `${local.frags || 0}<small>/${throwMax}</small>`);
+  setHtml($("#bpFlashCount"), `${local.flashes || 0}<small>/${throwMax}</small>`);
   const ammoDrop = $("#bpDropAmmo");
   const medkitDrop = $("#bpDropMedkit");
   for (const [input, count] of [
     [ammoDrop, local.reserveAmmo || 0],
     [medkitDrop, local.medkits || 0],
+    [$("#bpDropFrag"), local.frags || 0],
+    [$("#bpDropFlash"), local.flashes || 0],
   ]) {
     input.max = count;
     input.disabled = count <= 0;
@@ -5443,6 +5581,8 @@ function renderBackpack() {
       name: "BỊCH MÁU",
       space: packLimits.medkits - (local.medkits || 0),
     },
+    { type: "frag", name: "LỰU ĐẠN NỔ", space: (packLimits.throwables || 3) - (local.frags || 0) },
+    { type: "flash", name: "LỰU ĐẠN CHOÁNG", space: (packLimits.throwables || 3) - (local.flashes || 0) },
   ];
   const renderKey = JSON.stringify({
     id: crate.id,
@@ -5725,6 +5865,9 @@ function updateLootHud(dt) {
 }
 function beginGame() {
   inMatch = true;
+  local.throwable = null;
+  local.cookAt = 0;
+  local.flashUntil = 0;
   local.crouchToggle = false;
   local.sprinting = false;
   sprintCancelled = false;
@@ -6208,6 +6351,19 @@ function onKeyDown(e) {
   }
 
   if (
+    (e.code === "Digit4" || e.code === "Digit5") &&
+    !e.repeat &&
+    !paused &&
+    local.state === "ground" &&
+    !local.vehicleId &&
+    $("#game").classList.contains("active")
+  ) {
+    e.preventDefault();
+    const kind = e.code === "Digit4" ? "frag" : "flash";
+    setThrowable(local.throwable === kind ? null : kind);
+    return;
+  }
+  if (
     e.code === "KeyR" &&
     !e.repeat &&
     !paused &&
@@ -6215,6 +6371,17 @@ function onKeyDown(e) {
     $("#game").classList.contains("active")
   ) {
     e.preventDefault();
+    if (local.throwable) {
+      // RÚT CHỐT (cook): kíp bắt đầu đếm ngay trên tay.
+      if (!local.cookAt && !local.healing && throwCount(local.throwable)) {
+        local.cookAt = performance.now();
+        local.cookKind = local.throwable;
+        send({ type: "cook", kind: local.throwable });
+        playPinPull();
+        updateAmmoHud();
+      }
+      return;
+    }
     if (!local.healing) {
       stopFiring();
       send({ type: "reload" });
@@ -6265,6 +6432,13 @@ function onKeyDown(e) {
     return;
   }
 
+  // Trong xe: Z = tắt / nổ máy (tài xế). Xe vẫn trôi và chậm dần; tắt máy thì
+  // chỉ có tiếng động cơ khi đang giữ W / S.
+  if (e.code === "KeyZ" && local.vehicleId) {
+    e.preventDefault();
+    if (!e.repeat && !paused && local.vehicleSeat === 0) send({ type: "vehicleEngine" });
+    return;
+  }
   if (
     e.code === "KeyZ" &&
     !e.repeat &&
@@ -6534,6 +6708,17 @@ function onFire(e) {
     document.pointerLockElement === renderer?.domElement &&
     cancelSprint();
   if (wasSprinting) sprintShotAt = performance.now() + SPRINT_RECOVER_MS;
+  if (local.throwable && !local.vehicleId) {
+    if (
+      e.button === 0 &&
+      !paused &&
+      !deathView &&
+      local.state === "ground" &&
+      document.pointerLockElement === renderer?.domElement
+    )
+      throwGrenade();
+    return;
+  }
   if (e.button === 2) {
     if (
       !deathView &&
@@ -6589,6 +6774,21 @@ function onFire(e) {
 }
 function onMouseUp(e) {
   if (e.button === 0) stopFiring();
+}
+// Ném lựu đạn theo hướng nhìn (server tính quỹ đạo). Chưa rút chốt thì kíp bắt
+// đầu đếm từ lúc ném.
+function throwGrenade() {
+  const kind = local.throwable;
+  if (!kind || !throwCount(kind) || local.healing) return;
+  camera.getWorldDirection(shotAim);
+  camera.getWorldPosition(shotEye);
+  send({ type: "throw", kind, aim: { x: shotAim.x, y: shotAim.y, z: shotAim.z }, eyeY: shotEye.y });
+  local.cookAt = 0;
+  local.throwAnimAt = performance.now();
+  playThrowWhoosh();
+  // Còn quả thì vẫn cầm loại đó (cần đợi server trừ số lượng), hết thì về súng.
+  if (throwCount(kind) <= 1) setTimeout(() => local.throwable === kind && !throwCount(kind) && setThrowable(null), 450);
+  updateAmmoHud();
 }
 function stopFiring() {
   triggerHeld = false;
@@ -6791,14 +6991,238 @@ function onScopeWheel(event) {
 // Tên + mô tả hiển thị trên HUD cho từng loại vũ khí.
 const WEAPON_INFO = {
   none: { name: "TAY KHÔNG", sub: "ĐẤM · ĐẦU −50 · THÂN −5" },
+  grenade: { name: "LỰU ĐẠN NỔ", sub: "R RÚT CHỐT · CLICK NÉM · KÍP 6 GIÂY" },
+  flashbang: { name: "LỰU ĐẠN CHOÁNG", sub: "R RÚT CHỐT · CLICK NÉM · KÍP 2 GIÂY" },
   ranger: { name: "AUG", sub: "SÚNG TRƯỜNG TẤN CÔNG · RED DOT" },
   beryl: { name: "BERYL M762", sub: "SÚNG TRƯỜNG TẤN CÔNG · RED DOT OVAL" },
   sniper: { name: "KAR98K", sub: "SÚNG BẮN TỈA · SCOPE 8X" },
 };
 const weaponKey = (w) => (WEAPON_INFO[w] ? w : "none");
+// Cầm / cất lựu đạn (null = cầm súng / tay không như cũ).
+function setThrowable(kind) {
+  if (kind && !throwCount(kind)) {
+    showLootToast(`KHÔNG CÒN ${GRENADE_NAME[kind]}`);
+    return;
+  }
+  if (local.cookAt) return; // đã rút chốt: phải ném
+  local.throwable = kind;
+  send({ type: "equip", kind });
+  stopFiring();
+  if (scoped) setScope(false);
+  updateLocalWeaponVisual();
+}
+// ---- Vòng đếm ngược kíp nổ (khi đã rút chốt) + tư thế tay cầm lựu đạn ----
+let cookHud = null;
+function updateCookHud() {
+  if (!cookHud) {
+    cookHud = document.createElement("div");
+    cookHud.id = "cookHud";
+    cookHud.innerHTML = '<div class="ck-ring"><b></b></div><small></small>';
+    $(".hud")?.append(cookHud);
+  }
+  const cooking = local.cookAt && local.throwable && !deathView;
+  cookHud.classList.toggle("hidden", !cooking);
+  if (!cooking) return;
+  const fuse = GRENADE_FUSE[local.cookKind || local.throwable];
+  const left = Math.max(0, fuse - (performance.now() - local.cookAt));
+  const frac = left / fuse;
+  // Xanh → vàng → đỏ khi kíp sắp nổ.
+  const color = frac > 0.5 ? "#6dff6a" : frac > 0.25 ? "#ffd84a" : "#ff4a3d";
+  const ring = cookHud.firstChild;
+  setStyle(ring, "background", `conic-gradient(${color} ${frac * 360}deg, rgba(255,255,255,0.12) 0)`);
+  setStyle(ring, "boxShadow", `0 0 18px ${color}88`);
+  setText(ring.firstChild, (left / 1000).toFixed(1));
+  setStyle(ring.firstChild, "color", color);
+  setText(cookHud.lastChild, frac > 0.25 ? "ĐÃ RÚT CHỐT · CLICK ĐỂ NÉM" : "NÉM NGAY!");
+  cookHud.classList.toggle("danger", frac <= 0.25);
+  if (left <= 0) {
+    // Nổ trên tay (server xử lý sát thương) — dọn trạng thái phía client.
+    local.cookAt = 0;
+    setThrowable(null);
+  }
+}
+function poseThrowable(dt) {
+  const model = gun?.userData.models?.[local.throwable === "flash" ? "flashbang" : "grenade"];
+  if (!model || !local.throwable) return;
+  const t = (performance.now() - (local.throwAnimAt || 0)) / 380;
+  const throwing = t >= 0 && t < 1;
+  // Ném: vung tay ra trước – lên rồi hạ xuống, quả lựu đạn ẩn khi rời tay.
+  const swing = throwing ? Math.sin(Math.min(1, t) * Math.PI) : 0;
+  model.position.set(0.22 - swing * 0.1, -0.2 + swing * 0.22, -0.42 - swing * 0.25);
+  model.rotation.set(-swing * 1.1, 0, 0);
+  model.children[0].visible = !throwing || t < 0.35;
+  if (model.userData.ring) model.userData.ring.visible = !local.cookAt; // chốt đã rút
+}
+// ---- Lựu đạn bay trong thế giới + hiệu ứng nổ ----
+const grenadeMeshes = new Map();
+const blastFx = [];
+let screenShake = 0;
+let grenadeMats = null;
+function updateGrenadeWorld(dt) {
+  updateCookHud();
+  poseThrowable(dt);
+  if (!scene) return;
+  grenadeMats ||= { frag: makeMat("#3d4a2e"), flash: makeMat("#7a807d") };
+  const live = new Set();
+  let warn = null;
+  const eye = camera?.position;
+  for (const g of gameState?.grenades || []) {
+    live.add(g.id);
+    let mesh = grenadeMeshes.get(g.id);
+    if (!mesh) {
+      mesh = new THREE.Mesh(sharedGrenadeGeo[g.kind] || sharedGrenadeGeo.frag, grenadeMats[g.kind] || grenadeMats.frag);
+      mesh.position.set(g.x, g.y, g.z);
+      mesh.userData.vel = new THREE.Vector3(g.vx || 0, g.vy || 0, g.vz || 0);
+      scene.add(mesh);
+      grenadeMeshes.set(g.id, mesh);
+    }
+    const vel = mesh.userData.vel;
+    if (mesh.userData.server !== g) {
+      // Gói mới từ server: kéo về vị trí thật (mượt), lấy vận tốc thật.
+      mesh.userData.server = g;
+      mesh.position.lerp(tmpGrenadePos.set(g.x, g.y, g.z), 0.5);
+      vel.set(g.vx || 0, g.vy || 0, g.vz || 0);
+    }
+    // Giữa hai gói: tự mô phỏng như server (trọng lực, nảy, lăn) → bay / lăn mượt.
+    vel.y -= 20 * dt;
+    mesh.position.addScaledVector(vel, dt);
+    const floor = landingHeightAt(mesh.position.x, mesh.position.z, mesh.position.y + 0.3) + 0.08;
+    if (mesh.position.y <= floor) {
+      mesh.position.y = floor;
+      if (vel.y < -1.5) {
+        vel.y = -vel.y * 0.32;
+        vel.x *= 0.7;
+        vel.z *= 0.7;
+      } else {
+        vel.y = 0;
+        const fr = Math.max(0, 1 - 1.0 * dt);
+        vel.x *= fr;
+        vel.z *= fr;
+      }
+    }
+    // Lăn: quay theo tốc độ ngang.
+    const speed = Math.hypot(vel.x, vel.z);
+    mesh.rotation.x += speed * dt * 14 + (vel.y ? dt * 6 : 0);
+    mesh.rotation.y = Math.atan2(vel.x, vel.z);
+    // Cảnh báo lựu đạn NỔ ở gần (≤ 12 m) để còn né.
+    if (g.kind === "frag" && eye && local.hp > 0 && !deathView) {
+      const d = Math.hypot(mesh.position.x - eye.x, mesh.position.z - eye.z);
+      if (d < 12 && (!warn || d < warn.d)) warn = { d, x: mesh.position.x, z: mesh.position.z };
+    }
+  }
+  for (const [id, mesh] of grenadeMeshes)
+    if (!live.has(id)) {
+      scene.remove(mesh);
+      grenadeMeshes.delete(id);
+    }
+  updateGrenadeWarning(warn);
+  for (let i = blastFx.length - 1; i >= 0; i--) {
+    const fx = blastFx[i];
+    fx.t += dt;
+    const p = fx.t / fx.life;
+    if (p >= 1) {
+      scene.remove(fx.mesh);
+      fx.mesh.geometry.dispose();
+      fx.mesh.material.dispose();
+      blastFx.splice(i, 1);
+      continue;
+    }
+    const sc = fx.from + (fx.to - fx.from) * Math.sqrt(p);
+    fx.mesh.scale.setScalar(sc);
+    fx.mesh.material.opacity = fx.opacity * (1 - p);
+    if (fx.rise) fx.mesh.position.y += fx.rise * dt;
+  }
+  const overlay = $("#flashOverlay");
+  if (overlay && local.flashUntil) {
+    const left = local.flashUntil - performance.now();
+    const o = left <= 0 ? 0 : Math.min(1, (left / local.flashDuration) * 1.6) * local.flashPower;
+    setStyle(overlay, "opacity", o.toFixed(3));
+    if (left <= 0) local.flashUntil = 0;
+  }
+  screenShake = Math.max(0, screenShake - dt * 1.8);
+}
+const tmpGrenadePos = new THREE.Vector3();
+// Hình học lựu đạn dùng chung (tay nhân vật + quả đang bay) — không tạo mới mỗi quả.
+const sharedGrenadeGeo = {
+  frag: new THREE.SphereGeometry(0.065, 10, 8),
+  flash: new THREE.CylinderGeometry(0.045, 0.045, 0.13, 10),
+};
+// Biểu tượng cảnh báo: 💣 + mũi tên chỉ hướng quả lựu đạn so với hướng nhìn.
+let grenadeWarnEl = null;
+function updateGrenadeWarning(warn) {
+  if (!grenadeWarnEl) {
+    grenadeWarnEl = document.createElement("div");
+    grenadeWarnEl.id = "grenadeWarn";
+    grenadeWarnEl.innerHTML = '<i>▲</i><b>💣</b><small></small>';
+    $(".hud")?.append(grenadeWarnEl);
+  }
+  grenadeWarnEl.classList.toggle("hidden", !warn);
+  if (!warn) return;
+  const eye = camera.position;
+  const yaw = camera.rotation.y;
+  // Góc tới quả lựu đạn so với hướng nhìn (0 = ngay phía trước).
+  const angle = Math.atan2(-(warn.x - eye.x), -(warn.z - eye.z)) - yaw;
+  setStyle(grenadeWarnEl.firstChild, "transform", `rotate(${(-angle * 180) / Math.PI}deg)`);
+  setText(grenadeWarnEl.lastChild, `${warn.d.toFixed(0)} M`);
+  grenadeWarnEl.classList.toggle("close", warn.d < 5);
+}
+function addBlastFx(color, x, y, z, from, to, life, opacity, rise = 0) {
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 14, 10),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, toneMapped: false }),
+  );
+  mesh.position.set(x, y, z);
+  mesh.scale.setScalar(from);
+  scene.add(mesh);
+  blastFx.push({ mesh, t: 0, life, from, to, opacity, rise });
+}
+function onExplosion(m) {
+  if (!scene) return;
+  const x = Number(m.x),
+    y = Number(m.y),
+    z = Number(m.z);
+  const eye = camera.getWorldPosition(new THREE.Vector3());
+  const d = Math.hypot(eye.x - x, eye.y - y, eye.z - z);
+  if (m.kind === "flash") {
+    addBlastFx("#ffffff", x, y + 0.3, z, 0.3, 4.5, 0.25, 0.95);
+    playFlashBang({ x, y, z });
+    // Loá mắt: mạnh khi gần và đang NHÌN về phía quả nổ; quay lưng thì nhẹ.
+    if (d < 20 && local.hp > 0 && !deathView) {
+      const dir = camera.getWorldDirection(new THREE.Vector3());
+      const to = new THREE.Vector3(x - eye.x, y - eye.y, z - eye.z).normalize();
+      const facing = dir.dot(to);
+      const covered = Array.isArray(m.seen) ? !m.seen.includes(playerId) : flashCovered(eye, { x, y: y + 0.3, z });
+      const power = covered ? 0 : (1 - d / 20) * (facing > 0.2 ? 1 : 0.3);
+      if (power > 0.05) {
+        local.flashPower = Math.min(1, power * 1.25);
+        local.flashDuration = 900 + power * 3400;
+        local.flashUntil = performance.now() + local.flashDuration;
+        playEarRinging(power);
+      }
+    }
+  } else {
+    addBlastFx("#ffcf6a", x, y + 0.4, z, 0.4, 3.2, 0.32, 0.95);
+    addBlastFx("#ff7a1f", x, y + 0.5, z, 0.6, 4.2, 0.55, 0.7);
+    addBlastFx("#5b554b", x, y + 0.8, z, 1.0, 5.5, 2.4, 0.55, 1.2);
+    playGrenadeBlast({ x, y, z });
+    if (d < 30) screenShake = Math.max(screenShake, (1 - d / 30) * 0.9);
+  }
+}
+// Có vật chắn giữa mắt và quả choáng (địa hình / tường)? — chỉ ước lượng thô.
+function flashCovered(a, b) {
+  const n = Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 0.12); // tường mỏng ~0.2 m
+  for (let i = 1; i < n; i++) {
+    const t = i / n;
+    const x = a.x + (b.x - a.x) * t,
+      y = a.y + (b.y - a.y) * t,
+      z = a.z + (b.z - a.z) * t;
+    if (groundHeightAt(x, z) > y + 0.1 || carPointBlocked(null, x, z)) return true;
+  }
+  return false;
+}
 function updateLocalWeaponVisual() {
   if (!gun) return;
-  const key = weaponKey(local.weapon);
+  const key = local.throwable ? (local.throwable === "flash" ? "flashbang" : "grenade") : weaponKey(local.weapon);
   for (const [kind, model] of Object.entries(gun.userData.models || {}))
     model.visible = kind === key;
   gun.userData.magazine = gun.userData.magazines?.[key] || null;
@@ -7264,6 +7688,12 @@ function animateAvatars(dt) {
     const armed =
       ud.weapon.visible || ud.sniperWeapon.visible || ud.berylWeapon.visible;
     const punchT = (now - ud.punchAt) / 320;
+    const throwT = ud.throwAt && now - ud.throwAt < 450 ? (now - ud.throwAt) / 450 : null;
+    const inHand = ud.throwPose && !(throwT !== null && throwT > 0.45); // rời tay khi quăng
+    if (ud.handGrenade) {
+      ud.handGrenade.visible = inHand && ud.throwPose === "frag";
+      ud.handFlash.visible = inHand && ud.throwPose === "flash";
+    }
     poseAvatar(
       ud.rig,
       ud.pose,
@@ -7279,7 +7709,10 @@ function animateAvatars(dt) {
           now < ud.kickUntil ? (ud.weaponKind === "sniper" ? 0.16 : 0.06) : 0,
         weaponGrip: armed ? WEAPON_GRIPS[ud.weaponKind] || WEAPON_GRIPS.ranger : null,
         // Tay không (đã tiếp đất): thế thủ + cú đấm luân phiên.
-        fists: !armed && ud.weaponKind === "none" && ud.state === "ground",
+        fists: !armed && !ud.throwPose && ud.weaponKind === "none" && ud.state === "ground",
+        throwable: ud.throwPose,
+        cooking: ud.cooking,
+        throwT,
         punch: punchT >= 0 && punchT < 1 ? punchT : 0,
         punchSide: ud.punchSide,
       },
@@ -8315,8 +8748,13 @@ function updateVehicleEngineAudio(vehicle, groundY) {
   const occupied = gameState?.players?.some(
     (player) => player.vehicleId === vehicle.id,
   );
+  // Tắt máy (Z): im lặng trừ khi đang nhấn ga (W / S). Xe mình lái lấy phím
+  // bấm ngay trên máy để tiếng máy phản hồi tức thì.
+  const driving = local.vehicleId === vehicle.id && local.vehicleSeat === 0;
+  const throttle = driving ? carInputs().throttle : vehicle.throttle;
+  const engineSilent = vehicle.engineOff && !throttle;
   const loudness =
-    !soundOn || vehicle.destroyed || vehicle.submerged || !occupied
+    !soundOn || vehicle.destroyed || vehicle.submerged || !occupied || engineSilent
       ? 0
       : (0.34 + Math.min(0.28, Math.abs(vehicle.speed) * 0.014)) *
         sfxLevel() *
@@ -8856,6 +9294,7 @@ function frame() {
   animateAvatars(dt);
   updateAutoFire();
   updateShotEffects();
+  updateGrenadeWorld(dt);
   // Trên máy bay / đang nhảy dù thì mô phỏng riêng; chỉ ở phòng chờ hoặc mặt đất mới đi bộ.
   if (local.state === "plane") updatePlane();
   else if (local.state === "freefall" || local.state === "parachute")
@@ -9136,7 +9575,15 @@ function frame() {
     camera.position.set(deathView.x, deathView.y + 45, deathView.z);
     camera.lookAt(deathView.x, deathView.y, deathView.z);
   }
-  renderer.render(scene, camera);
+  if (screenShake > 0 && camera) {
+    const sx = (Math.random() - 0.5) * screenShake * 0.12,
+      sy = (Math.random() - 0.5) * screenShake * 0.12;
+    camera.position.x += sx;
+    camera.position.y += sy;
+    renderer.render(scene, camera);
+    camera.position.x -= sx;
+    camera.position.y -= sy;
+  } else renderer.render(scene, camera);
   adaptResolution(dt);
   requestAnimationFrame(frame);
 }

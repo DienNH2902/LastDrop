@@ -214,6 +214,12 @@
     }
     return parts;
   }
+  // Điểm (cục bộ, ry = độ cao so với mặt đất) nằm trong khối nêm cầu thang?
+  function keepRampSolid(lx, ry, lz) {
+    for (const r of RAMPS)
+      if (inRect(lx, lz, r) && ry >= r.from - 0.1 && ry < rampHeight(r, lz) - 0.02) return true;
+    return false;
+  }
   // Ô đặt đồ (loot) trên từng tầng: tránh cầu thang, cột, lối cửa.
   function keepLootSlots() {
     const slots = [];
@@ -242,6 +248,7 @@
     keepSurfaces,
     keepBlocked,
     keepParts,
+    keepRampSolid,
     keepLootSlots,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
