@@ -10,7 +10,7 @@ import {
   buildBakedWeapon,
   buildBeryl,
 } from "./weapons.js";
-import { buildAvatar, poseAvatar } from "./avatar.js";
+import { buildAvatar, poseAvatar, HAND_OFFSET } from "./avatar.js";
 
 // querySelector được gọi hàng chục lần MỖI khung hình (HUD, vòng bo, loot...).
 // Nhớ lại phần tử đã tìm; nếu phần tử đó bị gỡ khỏi trang thì tìm lại.
@@ -155,7 +155,7 @@ let keys = {},
   mapHills = [],
   mapId = "forest",
   selectedMap =
-    localStorage.getItem("ld-selected-map") === "desert" ? "desert" : "forest",
+    normalizeMapId(localStorage.getItem("ld-selected-map")),
   triggerHeld = false,
   fireInterval = null,
   lastClientShotAt = 0,
@@ -290,6 +290,20 @@ const STAND_HEIGHT = 1.8;
 const CROUCH_HEIGHT = 1.34;
 const PRONE_HEIGHT = 0.48;
 
+// Ba map: rừng, sa mạc, THÀNH CỔ (rừng rậm nhiệt đới kiểu Sanhok).
+const MAP_INFO = {
+  forest: { label: "RỪNG", name: "VERDANT WILDS", count: "01 / 03", description: "CỎ XANH · HỒ · SÔNG · ĐỒI" },
+  desert: { label: "SA MẠC", name: "DUSTY BASIN", count: "02 / 03", description: "SA MẠC · ĐÁ · XƯƠNG RỒNG" },
+  jungle: { label: "THÀNH CỔ", name: "ANCIENT CITADEL", count: "03 / 03", description: "RỪNG RẬM · NHÀ SÀN · PHÁO ĐÀI · SÔNG LỚN · ĐỒI NÚI" },
+};
+function normalizeMapId(id) {
+  return id === "desert" || id === "jungle" ? id : "forest";
+}
+const isJungleMap = () => mapId === "jungle";
+// Lựu đạn: nổ (frag, kíp 6 s) và choáng (flash, kíp 2 s) — khớp GRENADE ở server.
+const GRENADE_FUSE = { frag: 6000, flash: 2000 };
+const GRENADE_NAME = { frag: "LỰU ĐẠN NỔ", flash: "LỰU ĐẠN CHOÁNG" };
+const throwCount = (kind) => (kind === "flash" ? local.flashes : local.frags) || 0;
 const NORMAL_SPEED = 7;
 const SPRINT_SPEED = 9.5; // Shift giữ + W: chạy nhanh (khớp SPRINT_SPEED ở server)
 // Chạy nhanh: sprintCancelled = đã bị hủy bởi bắn/ngắm → phải NHẢ Shift rồi
@@ -309,6 +323,7 @@ function cancelSprint() {
 }
 const SLOW_SPEED = 3.2;
 const CROUCH_SPEED = 3.8;
+const CROUCH_RUN_SPEED = 5.4; // ngồi + Shift (khớp server)
 const CROUCH_SLOW_SPEED = 2.0;
 const saved = JSON.parse(localStorage.getItem("ld-settings") || "{}");
 const savedPlayerName =
@@ -320,6 +335,8 @@ $("#sfx").value = saved.sfx ?? 30;
 $("#music").value = saved.music ?? 10;
 $("#masterVolume").value = saved.masterVolume ?? 30;
 $("#quality").value = saved.quality || "Performance";
+$("#crouchMode").value = saved.crouchMode === "hold" ? "hold" : "toggle";
+$("#proneMode").value = saved.proneMode === "hold" ? "hold" : "toggle";
 delete saved.name; // nickname is kept separately from graphics/audio settings
 localStorage.setItem(
   "ld-settings",
@@ -869,12 +886,57 @@ function playPunchWhoosh(position) {
 //  Beryl— thép nặng "cạch" trầm + kéo tay kéo khoá nòng
 //  Kar  — báng gỗ "cộc" + khoá nòng thép
 // position = null: của chính mình (không pan, không suy giảm).
+// Rút chốt: tiếng "tách" kim loại + lò xo cần gạt.
+function playPinPull() {
+  const a = spatialAudio(null, { volume: 0.5 });
+  if (!a) return;
+  noiseBurst(a, { duration: 0.03, filter: "highpass", freq: 3200, gain: 0.6 });
+  toneBurst(a, { at: 0.01, duration: 0.05, type: "triangle", from: 2600, to: 1800, gain: 0.08 });
+  noiseBurst(a, { at: 0.12, duration: 0.05, filter: "bandpass", freq: 1900, q: 3, gain: 0.35 });
+}
+function playThrowWhoosh(position = null) {
+  const a = spatialAudio(position, { volume: position ? 0.8 : 0.5, ref: 2, max: 24 });
+  if (!a) return;
+  noiseBurst(a, { duration: 0.22, filter: "bandpass", freq: 700, q: 0.8, gain: 0.7 });
+}
+// Tiếng nổ lựu đạn: trầm, dày, dội xa (nghe được ~250 m như tiếng súng lớn).
+function playGrenadeBlast(position) {
+  const a = spatialAudio(position, { volume: 1.6, ref: 14, max: 260 });
+  if (!a) return;
+  noiseBurst(a, { duration: 0.05, filter: "highpass", freq: 2500, gain: 1.4, drive: 30 });
+  noiseBurst(a, { at: 0.005, duration: 0.45, filter: "lowpass", freq: 520, gain: 1.8, drive: 14 });
+  toneBurst(a, { duration: 0.35, from: 90, to: 28, gain: 1.4 });
+  toneBurst(a, { at: 0.02, duration: 0.6, from: 55, to: 22, gain: 1.0 });
+  noiseBurst(a, { at: 0.25, duration: 0.5, filter: "bandpass", freq: 400, q: 0.7, gain: 0.45 });
+  gunshotReverbTail(a, { wet: 0.5, tone: 1100, predelay: 0.02 });
+}
+function playFlashBang(position) {
+  const a = spatialAudio(position, { volume: 1.4, ref: 10, max: 200 });
+  if (!a) return;
+  noiseBurst(a, { duration: 0.04, filter: "highpass", freq: 3800, gain: 1.6, drive: 34 });
+  noiseBurst(a, { at: 0.003, duration: 0.18, filter: "bandpass", freq: 1500, q: 0.7, gain: 1.0, drive: 10 });
+  toneBurst(a, { duration: 0.12, from: 140, to: 60, gain: 0.7 });
+  gunshotReverbTail(a, { wet: 0.4, tone: 2400, predelay: 0.01 });
+}
+// Ù tai sau khi bị choáng: tiếng "píííp" cao tắt dần.
+function playEarRinging(power) {
+  const a = spatialAudio(null, { volume: 0.18 + power * 0.25 });
+  if (!a) return;
+  toneBurst(a, { duration: 1.2 + power * 2.6, type: "sine", from: 3400, to: 3200, gain: 0.5 });
+}
 function playLootSound(sound, position) {
   const a = spatialAudio(position, { volume: position ? 0.9 : 0.6, ...AUDIO_RANGE.loot });
   if (!a) return;
   const r = () => 0.9 + Math.random() * 0.2;
   const [action, kind] = sound.split("-");
   if (action === "pickup") {
+    if (kind === "grenade") {
+      // Lựu đạn: vỏ thép chạm nhau "keng" + cài vào đai.
+      toneBurst(a, { duration: 0.18, type: "triangle", from: 1700 * r(), to: 1500, gain: 0.12 });
+      noiseBurst(a, { duration: 0.04, filter: "bandpass", freq: 2400, q: 3, gain: 0.5 });
+      noiseBurst(a, { at: 0.16, duration: 0.08, filter: "lowpass", freq: 600, gain: 0.4 });
+      return;
+    }
     if (kind === "ammo") {
       noiseBurst(a, { duration: 0.05, filter: "lowpass", freq: 700, gain: 0.5 }); // nhấc hộp
       for (let i = 0; i < 7; i++) {
@@ -938,7 +1000,7 @@ function playLootSound(sound, position) {
 // Bề mặt dưới chân quyết định tiếng bước.
 function footSurface(x, z) {
   if (waterAt(x, z)) return "water";
-  if (mapId === "forest" && inSwamp(x, z)) return "mud";
+  if (mapId !== "desert" && inSwamp(x, z)) return "mud";
   for (const o of obstaclesNear(x, z)) {
     if (o.type !== "house" && o.type !== "hut") continue;
     const dx = x - o.x,
@@ -952,7 +1014,7 @@ function footSurface(x, z) {
       return "wood";
   }
   if (isNearRoad(x, z, 0)) return "road";
-  return mapId === "forest" ? "grass" : "sand";
+  return mapId !== "desert" ? "grass" : "sand";
 }
 function playSpatialFootstep(x, y, z, intensity = 1, ownPlayer = false) {
   if (ownPlayer && local.vehicleId) return;
@@ -1218,7 +1280,11 @@ const settingsBindings = {
     suffix: "%",
   },
   quality: { main: "quality", pause: "pauseQuality" },
+  // Ngồi (C) / Nằm (Z): "toggle" = bấm để bật/tắt, "hold" = giữ phím (thả là đứng dậy).
+  crouchMode: { main: "crouchMode", pause: "pauseCrouchMode" },
+  proneMode: { main: "proneMode", pause: "pauseProneMode" },
 };
+const isHoldMode = (key) => document.getElementById(key)?.value === "hold";
 function syncSettingControl(key, value) {
   const binding = settingsBindings[key];
   if (!binding) return;
@@ -1319,6 +1385,8 @@ function saveSettings() {
       sfx: $("#sfx").value,
       music: $("#music").value,
       quality: $("#quality").value,
+      crouchMode: $("#crouchMode").value,
+      proneMode: $("#proneMode").value,
     }),
   );
 }
@@ -1368,7 +1436,7 @@ $("#nameInput").addEventListener("input", () => {
   localStorage.setItem("ld-player-name", $("#nameInput").value.slice(0, 18));
 });
 function renderMapChoice(id) {
-  selectedMap = id === "forest" ? "forest" : "desert";
+  selectedMap = normalizeMapId(id);
   localStorage.setItem("ld-selected-map", selectedMap);
   document.querySelectorAll("[data-map-choice]").forEach((button) => {
     button.classList.toggle(
@@ -1376,14 +1444,12 @@ function renderMapChoice(id) {
       button.dataset.mapChoice === selectedMap,
     );
   });
-  const forest = selectedMap === "forest";
-  $("#mapName").textContent = forest ? "VERDANT WILDS" : "DUSTY BASIN";
-  $("#mapCount").textContent = forest ? "01 / 02" : "02 / 02";
-  $("#mapDescription").textContent = forest
-    ? "CỎ XANH · HỒ · SÔNG · ĐỒI"
-    : "SA MẠC · ĐÁ · XƯƠNG RỒNG";
-  $("#mapArt").classList.toggle("forest-preview", forest);
-  $("#mapArt").classList.toggle("desert-preview", !forest);
+  const info = MAP_INFO[selectedMap];
+  $("#mapName").textContent = info.name;
+  $("#mapCount").textContent = info.count;
+  $("#mapDescription").textContent = info.description;
+  for (const id of Object.keys(MAP_INFO))
+    $("#mapArt").classList.toggle(`${id}-preview`, id === selectedMap);
 }
 document.querySelectorAll("[data-map-choice]").forEach((button) => {
   button.addEventListener("click", () =>
@@ -1467,7 +1533,7 @@ function connect(message) {
       roomCode = m.code;
       playerId = m.playerId;
       isHost = m.isHost;
-      mapId = m.mapId === "desert" ? "desert" : "forest";
+      mapId = normalizeMapId(m.mapId);
       setMapObstacles(m.obstacles || []);
       renderMapChoice(mapId);
       local.x = m.spawn.x;
@@ -1490,6 +1556,7 @@ function connect(message) {
     if (m.type === "lootRemoved") removeLootItem(m.id);
     if (m.type === "lootAdded" && m.item) addLootItem(m.item);
     if (m.type === "toast") showLootToast(m.text);
+    if (m.type === "explosion") onExplosion(m);
     if (m.type === "lootSfx" && typeof m.sound === "string")
       playLootSound(
         m.sound,
@@ -1531,7 +1598,7 @@ function connect(message) {
       // Weather state handling is disabled for performance profiling.
       // if (typeof m.weatherActive === "boolean" && m.weatherActive !== weatherActive) {
       //   weatherActive = m.weatherActive;
-      //   const forest = mapId === "forest";
+      //   const forest = mapId !== "desert"; // Thành Cổ dùng chung nền xanh với rừng
       //   if (weatherActive) beginWeather(forest); else endWeather(forest);
       // }
       renderLobby();
@@ -1667,7 +1734,7 @@ function renderLobby() {
     slots.append(el);
   }
   $("#lobbyHint").textContent =
-    `${gameState.players.length}/5 người chơi · MAP ${mapId === "forest" ? "RỪNG" : "SA MẠC"}`;
+    `${gameState.players.length}/5 người chơi · MAP ${MAP_INFO[mapId].label}`;
   $("#startBtn").classList.toggle("hidden", !isHost);
   $("#leaveLobbyBtn")?.classList.remove("hidden");
 }
@@ -1799,6 +1866,10 @@ function flushMergeBuckets() {
 function updateAmmoHud() {
   const reserve = local.reserveAmmo ?? 0;
   const hud = $("#ammo");
+  if (local.throwable) {
+    setHtml(hud, `${throwCount(local.throwable)} <i>/ 3 · ${local.cookAt ? "ĐÃ RÚT CHỐT" : "R RÚT CHỐT"}</i>`);
+    return;
+  }
   if (weaponKey(local.weapon) === "none") {
     setHtml(hud, `👊 <i>VÀO NHÀ TÌM SÚNG · DỰ TRỮ ${reserve}</i>`);
     return;
@@ -1819,7 +1890,7 @@ function obstacleBoundRadius(o) {
   const length = o.length || w;
   if (o.type === "lake") return Math.max(w, length);
   if (o.type === "road" || o.type === "river") return (length + w) / 2;
-  return Math.hypot(w, length) * 0.6;
+  return Math.hypot(w, length) * 0.6 + (o.lift ? 4 : 0); // nhà sàn: + cầu thang
 }
 // Loại obstacle chỉ dùng để dựng địa hình (không va chạm, không vẽ riêng).
 const TERRAIN_ONLY = new Set(["hill", "terrain", "plateau", "pad", "swamp"]);
@@ -1884,9 +1955,17 @@ function isOnBridgeAt(x, z, clearance = 0) {
   });
 }
 // Return the walkable top of a roof or large rock, if the point is on it.
-function raisedSurfaceAt(x, z) {
-  let best = null;
+// Nhà sàn + thành chính (Thành Cổ): hình học dùng chung với server.
+const Structures = window.LDStructures;
+const STILT_RAMP = Structures.STILT_RAMP;
+function raisedSurfacesAt(x, z) {
+  const out = [];
   for (const o of obstaclesNear(x, z)) {
+    if (o.type === "keep") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      Structures.keepSurfaces(o, groundHeightAt(o.x, o.z), lx, lz, out);
+      continue;
+    }
     if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
     if (o.type === "house" || o.type === "hut") {
       const dx = x - o.x,
@@ -1895,14 +1974,13 @@ function raisedSurfaceAt(x, z) {
         s = Math.sin(o.yaw || 0);
       const lx = c * dx - s * dz,
         lz = s * dx + c * dz;
+      if (o.lift) Structures.stiltSurfaces(o, groundHeightAt(o.x, o.z), lx, lz, out);
       // Vùng "trên mái" phải rộng bằng hoặc hơn vùng va chạm của tường nhà
-      // (blockedByBuilding dùng half + obstacleRadius) — nếu không sẽ có một
-      // dải hẹp nơi người chơi vừa rời mái (mất độ cao) nhưng vẫn còn nằm
-      // trong vùng chặn của tường -> bị kẹt cứng ở mép mái.
+      // (blockedByBuilding dùng half + obstacleRadius) để không kẹt ở mép mái.
       const halfX = Math.max(o.w * 0.53, o.w / 2 + 0.6);
       const halfZ = o.w / 2 + 0.6;
       if (Math.abs(lx) > halfX || Math.abs(lz) > halfZ) continue;
-      const base = groundHeightAt(o.x, o.z);
+      const base = groundHeightAt(o.x, o.z) + (o.lift || 0);
       const wallH = o.h * 0.72;
       const height =
         base +
@@ -1910,14 +1988,11 @@ function raisedSurfaceAt(x, z) {
         o.w * 0.16 +
         0.12 * Math.cos(0.48) +
         (o.w * 0.245 - Math.abs(lx)) * Math.sin(0.48);
-      if (!best || height > best.height)
-        best = { height, base, type: "roof", obstacle: o };
-    } else if (o.type === "rock") {
+      out.push({ height, base, type: "roof", obstacle: o });
+    } else {
       const dx = x - o.x,
         dz = z - o.z;
       const dist = Math.hypot(dx, dz);
-      // Tương tự: vùng "trên đá" phải rộng bằng hoặc hơn bán kính va chạm
-      // (o.w * 0.46) của chính khối đá đó, để tránh dải kẹt ở mép đá.
       const topRadius = o.w * 0.46 + 0.6;
       if (dist > topRadius) continue;
       const base = groundHeightAt(o.x, o.z);
@@ -1925,27 +2000,29 @@ function raisedSurfaceAt(x, z) {
         nz = dz / (o.w * 0.4);
       const r2 = Math.min(1, nx * nx + nz * nz);
       const height = base + o.h * (0.42 + 0.5 * Math.sqrt(1 - r2));
-      if (!best || height > best.height)
-        best = { height, base, type: "rock", obstacle: o };
+      out.push({ height, base, type: "rock", obstacle: o });
     }
   }
+  return out;
+}
+function raisedSurfaceAt(x, z) {
+  let best = null;
+  for (const c of raisedSurfacesAt(x, z)) if (!best || c.height > best.height) best = c;
   return best;
 }
 // During descent, only land on raised geometry if the player came down onto it.
 function landingHeightAt(x, z, previousY) {
-  const terrain = groundHeightAt(x, z);
-  const raised = raisedSurfaceAt(x, z);
-  return raised && previousY >= raised.height - 0.25
-    ? Math.max(terrain, raised.height)
-    : terrain;
+  let h = groundHeightAt(x, z);
+  for (const c of raisedSurfacesAt(x, z))
+    if (previousY >= c.height - 0.25 && c.height > h) h = c.height;
+  return h;
 }
-// Preserve an elevated support while the player walks across its top surface.
+// Giữ mặt đỡ trên cao khi đi trên nó; xét MỌI mặt (sàn nhà sàn nằm dưới mái).
 function standingHeightAt(x, z, previousGroundY) {
-  const terrain = groundHeightAt(x, z);
-  const raised = raisedSurfaceAt(x, z);
-  return raised && previousGroundY > raised.base + 0.55
-    ? Math.max(terrain, raised.height)
-    : terrain;
+  let h = groundHeightAt(x, z);
+  for (const c of raisedSurfacesAt(x, z))
+    if (previousGroundY > c.base + 0.55 && c.height > h) h = c.height;
+  return h;
 }
 function waterAt(x, z) {
   for (const water of obstaclesNear(x, z)) {
@@ -1996,7 +2073,20 @@ function terrainColor(forest, x, z, h, slope, bed, swamp, seed, out) {
   const n = window.LDTerrain.fbm(x / 18, z / 18, seed + 5, 3);
   const n2 = window.LDTerrain.fbm(x / 5, z / 5, seed + 9, 2);
   const mix = (hex, t) => out.lerp(tmpTerrainColor.set(hex), t);
-  if (forest) {
+  if (forest && isJungleMap()) {
+    // THÀNH CỔ: xanh rừng rậm đậm, mảng đất đỏ, vách đá phủ rêu, không tuyết.
+    out.set(n > 0.55 ? "#3e7a33" : n > 0.42 ? "#346e2e" : "#2b6229");
+    mix("#7a5a33", Math.max(0, n2 - 0.66) * 1.8); // mảng đất đỏ lộ ra
+    if (slope > 0.5) mix(n2 > 0.5 ? "#556046" : "#4b573f", Math.min(1, (slope - 0.5) * 2)); // đá rêu
+    if (h > 30) mix("#2f5a2c", Math.min(1, (h - 30) / 14)); // tán rừng trên đỉnh
+    if (swamp) out.set(n2 > 0.5 ? "#394a26" : "#3f4f29");
+    if (bed > 0) out.set("#3b4a36");
+    else if (
+      h < 0.7 &&
+      waterBedDepth(x + 6, z) + waterBedDepth(x - 6, z) + waterBedDepth(x, z + 6) + waterBedDepth(x, z - 6) > 0
+    )
+      out.set("#86623f"); // bờ sông đất đỏ
+  } else if (forest) {
     out.set(n > 0.55 ? "#5c8a43" : n > 0.42 ? "#4f7d3c" : "#44703a");
     mix("#7d8a4a", Math.max(0, n2 - 0.62) * 1.6); // mảng cỏ úa
     if (h > 18) mix("#56654a", Math.min(1, (h - 18) / 22)); // cỏ núi sẫm
@@ -2196,6 +2286,12 @@ function addRoadRibbons(forest) {
   for (const pts of segmentLines("road", "roadId", 0.6)) {
     const y = (lift) => (x, z) => groundHeightAt(x, z) + lift;
     const halfW = pts[0]?.seg.w / 2 || 4.5;
+    if (pts[0]?.seg.dirt) {
+      // THÀNH CỔ: đường đất đỏ (không nhựa, không vạch kẻ), lề đất sẫm.
+      bucketAdd("road-shoulder-dirt", "#6f4a2c", ribbonGeometry(pts, halfW + 1.3, y(0.05)), noop);
+      bucketAdd("road-dirt", "#9b5533", ribbonGeometry(pts, halfW, y(0.08)), noop);
+      continue;
+    }
     bucketAdd(
       "road-shoulder",
       forest ? "#7c7563" : "#9a8a6c",
@@ -2229,9 +2325,10 @@ function addRoadRibbons(forest) {
   // Mặt cầu dày + trụ cầu xuống lòng sông.
   for (const s of mapObstacles) {
     if (s.type !== "road" || !s.bridge) continue;
+    const deck = s.dirt ? "#6e4d31" : "#6b6358"; // Thành Cổ: cầu gỗ
     bucketAdd(
-      "bridge-deck",
-      "#6b6358",
+      "bridge-deck-" + deck,
+      deck,
       new THREE.BoxGeometry(s.w + 0.6, 0.4, s.length),
       (t) => {
         t.position.set(s.x, groundHeightAt(s.x, s.z) - 0.18, s.z);
@@ -2240,8 +2337,8 @@ function addRoadRibbons(forest) {
     );
     for (const side of [-1, 1])
       bucketAdd(
-        "bridge-deck",
-        "#6b6358",
+        "bridge-deck-" + deck,
+        deck,
         new THREE.BoxGeometry(0.7, 5.2, 0.7),
         (t) => {
           t.position.set(
@@ -2287,6 +2384,14 @@ function addWaterSurfaces(forest) {
     scene.add(m);
   }
 }
+// Cả khối gầm nhà sàn (xe và người đứng dưới đất không chui qua được).
+function stiltFootprint(o, x, z, radius) {
+  const dx = x - o.x,
+    dz = z - o.z;
+  const c = Math.cos(o.yaw || 0),
+    s = Math.sin(o.yaw || 0);
+  return Math.abs(c * dx - s * dz) < o.w / 2 + radius && Math.abs(s * dx + c * dz) < o.w / 2 + radius;
+}
 function blockedByBuilding(o, x, z, radius) {
   const dx = x - o.x;
   const dz = z - o.z;
@@ -2319,7 +2424,7 @@ function waterMaterial(kind, options) {
 }
 function drawMapObject(o, forest) {
   const baseY =
-    o.type === "hill" || o.solid === false ? 0 : groundHeightAt(o.x, o.z);
+    o.type === "hill" || o.solid === false ? 0 : groundHeightAt(o.x, o.z) + (o.lift || 0);
   const add = (geometry, color, x = o.x, y = 0, z = o.z, material = null) => {
     const mesh = new THREE.Mesh(geometry, material || makeMat(color));
     mesh.position.set(x, y + baseY, z);
@@ -2537,6 +2642,31 @@ function drawMapObject(o, forest) {
           at(t, 0, wallH, endZ);
           t.rotation.y = yaw;
         });
+      if (o.lift) {
+        // NHÀ SÀN: gầm để trống, chỉ có 9 cột gỗ (ngồi / nằm chui qua được —
+        // khớp va chạm), dầm đỡ sàn và cầu thang dốc lên cửa.
+        const lift = o.lift;
+        const post = "#4a3521",
+          slat = "#6b5034";
+        for (const [px, pz] of Structures.stiltPosts(o))
+          wall(px, -lift / 2 - 0.25, pz, 0.24, lift + 0.5, 0.24, post);
+        wall(0, -0.06, 0, w + 0.3, 0.12, w + 0.3, post); // dầm đỡ sàn
+        // Cầu thang: tấm ván nghiêng từ đất lên ngưỡng cửa + 2 tay vịn.
+        const run = STILT_RAMP,
+          slopeLen = Math.hypot(run, lift),
+          tilt = Math.atan2(lift, run);
+        bucketAdd(slat, slat, new THREE.BoxGeometry(1.9, 0.12, slopeLen), (t) => {
+          at(t, 0, -lift / 2 - 0.02, -half - run / 2);
+          t.rotation.order = "YXZ";
+          t.rotation.set(-tilt, yaw, 0); // đầu phía nhà (+Z) cao lên tới ngưỡng cửa
+        });
+        for (const side of [-1, 1])
+          bucketAdd(post, post, new THREE.BoxGeometry(0.08, 0.08, slopeLen), (t) => {
+            at(t, side * 0.95, -lift / 2 + 0.85, -half - run / 2);
+            t.rotation.order = "YXZ";
+            t.rotation.set(-tilt, yaw, 0); // đầu phía nhà (+Z) cao lên tới ngưỡng cửa
+          });
+      }
       // Door posts and lintel make the entrance visible without blocking it.
       wall(-doorHalf, doorH / 2, -half - 0.03, 0.12, doorH, 0.12, "#493826");
       wall(doorHalf, doorH / 2, -half - 0.03, 0.12, doorH, 0.12, "#493826");
@@ -2603,6 +2733,155 @@ function drawMapObject(o, forest) {
             },
           );
       }
+      break;
+    }
+    case "keep": {
+      // THÀNH CHÍNH: khối đá 2 tầng + sân thượng (hình học: structures.js).
+      const colors = {
+        wall: "#8d8878",
+        parapet: "#7f7a6b",
+        merlon: "#6f6c5e",
+        slab: "#5f5a4f",
+        floor: "#6b665a",
+        pillar: "#9c9684",
+      };
+      const kyaw = o.yaw || 0;
+      const place = (t, lx, y, lz) => {
+        const [wx, wz] = Structures.toWorld(o, lx, lz);
+        t.position.set(wx, baseY + y, wz);
+        t.rotation.y = kyaw;
+      };
+      for (const b of Structures.keepParts(o))
+        bucketAdd(colors[b.kind], colors[b.kind], new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2), (t) => place(t, b.x, b.y, b.z));
+      // Cầu thang đá: khối nêm đặc (mặt cắt tam giác kéo dài theo bề rộng thang).
+      for (const r of Structures.KEEP_RAMPS) {
+        const pts =
+          r.dir > 0
+            ? [[r.z0, r.from - 0.02], [r.z1, r.from - 0.02], [r.z1, r.to]]
+            : [[r.z0, r.to], [r.z0, r.from - 0.02], [r.z1, r.from - 0.02]];
+        const geo = prismGeometry(pts, r.x1 - r.x0).rotateY(-Math.PI / 2);
+        bucketAdd("#7a7466", "#7a7466", geo, (t) => place(t, (r.x0 + r.x1) / 2, 0, 0));
+        // Bậc thang (gờ sẫm) để nhìn ra là cầu thang.
+        const steps = 12;
+        for (let i = 1; i < steps; i++) {
+          const zz = r.z0 + ((r.z1 - r.z0) * i) / steps;
+          const t2 = r.dir > 0 ? i / steps : 1 - i / steps;
+          bucketAdd("#5f5a4f", "#5f5a4f", new THREE.BoxGeometry(r.x1 - r.x0, 0.06, 0.12), (t) =>
+            place(t, (r.x0 + r.x1) / 2, r.from + (r.to - r.from) * t2 + 0.03, zz),
+          );
+        }
+      }
+      // Lan can gỗ quanh cầu thang và lỗ sàn: cột mỗi ~0.9 m + tay vịn.
+      for (const rail of Structures.KEEP_RAILS) {
+        const len = rail.to - rail.from;
+        const n = Math.max(2, Math.round(len / 0.9) + 1);
+        const at = (u, y) => (rail.axis === "x" ? [rail.at, y, u] : [u, y, rail.at]);
+        for (let i = 0; i < n; i++) {
+          const u = rail.from + (len * i) / (n - 1);
+          const b = Structures.keepRailBase(rail, u);
+          bucketAdd("#6b4a2e", "#6b4a2e", new THREE.BoxGeometry(0.08, 1.0, 0.08), (t) => place(t, ...at(u, b + 0.5)));
+          if (i < n - 1) {
+            const u2 = u + len / (n - 1);
+            const b2 = Structures.keepRailBase(rail, u2);
+            const seg = len / (n - 1);
+            const geo =
+              rail.axis === "x" ? new THREE.BoxGeometry(0.07, 0.07, Math.hypot(seg, b2 - b)) : new THREE.BoxGeometry(Math.hypot(seg, b2 - b), 0.07, 0.07);
+            // Tay vịn nghiêng theo dốc cầu thang.
+            if (rail.axis === "x") geo.rotateX(-Math.atan2(b2 - b, seg));
+            bucketAdd("#8a6238", "#8a6238", geo, (t) => place(t, ...at((u + u2) / 2, (b + b2) / 2 + 1.0)));
+          }
+        }
+      }
+      // Cờ đỏ trên nóc + hai băng rôn trước cửa: uy nghiêm, dễ nhận ra từ xa.
+      const K = Structures.KEEP;
+      bucketAdd("#3b3a33", "#3b3a33", new THREE.CylinderGeometry(0.08, 0.1, 4.2, 6), (t) => place(t, 0, K.roof + 2.1, 3));
+      bucketAdd("#9b2020", "#9b2020", new THREE.BoxGeometry(1.8, 1.1, 0.06), (t) => place(t, 0.95, K.roof + 3.6, 3));
+      for (const side of [-1, 1])
+        bucketAdd("#8e1f1f", "#8e1f1f", new THREE.BoxGeometry(1.3, 3.4, 0.06), (t) => place(t, side * 2.9, 6.3, -K.half - 0.06));
+      break;
+    }
+    case "stonewall": {
+      // Tường thành đá dày + lỗ châu mai trên đỉnh.
+      const stone = "#8a8676",
+        dark = "#6f6c5e";
+      const len = o.length || w;
+      bucketAdd(stone, stone, new THREE.BoxGeometry(w, o.h, len), (t) => {
+        t.position.set(o.x, baseY + o.h / 2 - 0.4, o.z);
+        t.rotation.y = o.yaw || 0;
+      });
+      const merlons = Math.max(1, Math.floor(len / 1.6));
+      for (let i = 0; i < merlons; i++) {
+        const along = -len / 2 + (i + 0.5) * (len / merlons);
+        if (i % 2) continue;
+        bucketAdd(dark, dark, new THREE.BoxGeometry(w + 0.1, 0.7, len / merlons), (t) => {
+          t.position.set(o.x + Math.sin(o.yaw || 0) * along, baseY + o.h - 0.4 + 0.35, o.z + Math.cos(o.yaw || 0) * along);
+          t.rotation.y = o.yaw || 0;
+        });
+      }
+      break;
+    }
+    case "tower": {
+      // Tháp canh vuông ở góc thành: thân đá, gờ nhô, lan can răng cưa.
+      const stone = "#8a8676",
+        dark = "#6f6c5e";
+      bucketAdd(stone, stone, new THREE.BoxGeometry(w, o.h, w), (t) => t.position.set(o.x, baseY + o.h / 2 - 0.5, o.z));
+      bucketAdd(dark, dark, new THREE.BoxGeometry(w + 0.6, 0.5, w + 0.6), (t) => t.position.set(o.x, baseY + o.h - 0.5, o.z));
+      for (const [mx, mz] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]])
+        bucketAdd(dark, dark, new THREE.BoxGeometry(0.9, 0.8, 0.9), (t) =>
+          t.position.set(o.x + mx * (w / 2 - 0.15), baseY + o.h + 0.15, o.z + mz * (w / 2 - 0.15)),
+        );
+      break;
+    }
+    case "banana": {
+      // Cây chuối: thân mảnh + tàu lá dài rủ xuống tứ phía.
+      const trunkH = o.h * 0.55;
+      bucketAdd("banana-trunk", "#6f7a3a", new THREE.CylinderGeometry(w * 0.09, w * 0.13, trunkH + 0.3, 6), (t) =>
+        t.position.set(o.x, baseY - 0.3 + (trunkH + 0.3) / 2, o.z),
+      );
+      for (let i = 0; i < 6; i++) {
+        const a = (o.yaw || 0) + (i / 6) * Math.PI * 2;
+        const leafLen = o.h * 0.55;
+        bucketAdd(i % 2 ? "banana-leaf-a" : "banana-leaf-b", i % 2 ? "#4f8f35" : "#5ea23d", new THREE.BoxGeometry(w * 0.42, 0.04, leafLen), (t) => {
+          t.position.set(o.x + Math.sin(a) * leafLen * 0.42, baseY + trunkH + leafLen * 0.12, o.z + Math.cos(a) * leafLen * 0.42);
+          t.rotation.order = "YXZ";
+          t.rotation.set(0.5, a, 0); // chúc đầu lá xuống
+        });
+      }
+      break;
+    }
+    case "palm": {
+      // Cây dừa: thân cong 3 đốt nghiêng dần + tàu lá xoè + chùm quả.
+      const seg = o.h / 3;
+      const lean = 0.12;
+      let px = o.x,
+        pz = o.z,
+        py = baseY - 0.3;
+      const dirX = Math.sin(o.yaw || 0),
+        dirZ = Math.cos(o.yaw || 0);
+      for (let i = 0; i < 3; i++) {
+        const tilt = lean * (i + 1);
+        const cx = px + dirX * Math.sin(tilt) * seg * 0.5,
+          cz = pz + dirZ * Math.sin(tilt) * seg * 0.5,
+          cy = py + Math.cos(tilt) * seg * 0.5;
+        bucketAdd("palm-trunk", "#7d6443", new THREE.CylinderGeometry(w * (0.15 - i * 0.02), w * (0.19 - i * 0.02), seg + 0.1, 7), (t) => {
+          t.position.set(cx, cy, cz);
+          t.rotation.order = "YXZ";
+          t.rotation.set(tilt, o.yaw || 0, 0);
+        });
+        px += dirX * Math.sin(tilt) * seg;
+        pz += dirZ * Math.sin(tilt) * seg;
+        py += Math.cos(tilt) * seg;
+      }
+      for (let i = 0; i < 7; i++) {
+        const a = (o.yaw || 0) + (i / 7) * Math.PI * 2;
+        const frond = o.h * 0.42;
+        bucketAdd("palm-frond", "#4a8a3a", new THREE.BoxGeometry(w * 0.5, 0.04, frond), (t) => {
+          t.position.set(px + Math.sin(a) * frond * 0.45, py + 0.1, pz + Math.cos(a) * frond * 0.45);
+          t.rotation.order = "YXZ";
+          t.rotation.set(0.42, a, 0);
+        });
+      }
+      bucketAdd("palm-nut", "#6b5a2a", new THREE.IcosahedronGeometry(0.28, 0), (t) => t.position.set(px, py - 0.3, pz));
       break;
     }
     case "deadTree": {
@@ -2760,7 +3039,18 @@ function grassTuftGeometry(blades, height, seed) {
   g.computeVertexNormals();
   return g;
 }
+// Đang ở gầm một nhà sàn (thấp hơn sàn): phải ngồi / nằm.
+function underStiltFloorAt(x, z) {
+  for (const o of obstaclesNear(x, z)) {
+    if (!o.lift) continue;
+    const [lx, lz] = Structures.toLocal(o, x, z);
+    if (Structures.underStiltFloor(o, lx, lz, local.groundY - groundHeightAt(o.x, o.z))) return true;
+  }
+  return false;
+}
 function nearHouse(x, z, margin) {
+  for (const o of obstaclesNear(x, z))
+    if (o.type === "keep" && Math.max(...Structures.toLocal(o, x, z).map(Math.abs)) < o.w / 2 + margin + 0.5) return true; // không mọc cỏ xuyên sàn thành
   for (const o of obstaclesNear(x, z))
     if (
       (o.type === "house" || o.type === "hut") &&
@@ -2798,7 +3088,9 @@ function addGrass(forest) {
     chunks.get(key).matrices.push(dummy.matrix.clone());
     chunks.get(key).colors.push(color.clone());
   };
-  const spacing = (forest ? 1.2 : 3.6) * (lowQuality ? 1.45 : 1);
+  const jungleGrass = isJungleMap();
+  // Thành Cổ: cỏ dày hơn (~1.5×) và cao hơn, mọc cả lên sườn núi.
+  const spacing = (jungleGrass ? 0.98 : forest ? 1.2 : 3.6) * (lowQuality ? 1.45 : 1);
   for (let gz = -MAP_HALF + 1; gz < MAP_HALF - 1; gz += spacing)
     for (let gx = -MAP_HALF + 1; gx < MAP_HALF - 1; gx += spacing) {
       const x = gx + (rand() - 0.5) * spacing,
@@ -2822,13 +3114,14 @@ function addGrass(forest) {
       const slope = mapTerrain.slopeAt(x, z);
       if (forest) {
         // Thưa dần lên cao, không mọc trên vách đá / đỉnh núi.
-        if (slope > 0.55 || h > 40 || r > 1 - Math.min(0.85, h / 48)) {
+        const maxH = jungleGrass ? 52 : 40;
+        if (slope > (jungleGrass ? 0.7 : 0.55) || h > maxH || r > 1 - Math.min(jungleGrass ? 0.35 : 0.85, h / (jungleGrass ? 120 : 48))) {
         } else
           push(
             "grass",
             x,
             z,
-            0.75 + rand() * 0.7,
+            jungleGrass ? 1.05 + rand() * 0.85 : 0.75 + rand() * 0.7,
             tint.setHSL(
               0.22 + rand() * 0.07,
               0.45 + rand() * 0.2,
@@ -2914,12 +3207,14 @@ const PLAYER_RADIUS = 0.38;
 // Ground collision follows the visible footprint, not the full square map cell.
 function obstacleFootprintRadius(o) {
   if (o.type === "tree") return o.w * 0.25; // visible trunk
+  if (o.type === "banana") return o.w * 0.14; // thân chuối mảnh
+  if (o.type === "palm") return o.w * 0.2;
   if (o.type === "deadTree") return o.w * 0.28; // trunk
   if (o.type === "cactus") return o.w * 0.48; // body and short arms
   if (o.type === "rock") return o.w * 0.46; // faceted rock, narrower than its cell
   return null;
 }
-function isBlockedAt(x, z) {
+function isBlockedAt(x, z, radiusOverride = null) {
   if (
     x < -MAP_HALF + 1 ||
     x > MAP_HALF - 1 ||
@@ -2927,8 +3222,9 @@ function isBlockedAt(x, z) {
     z > MAP_HALF - 1
   )
     return true;
-  const selfRadius = local.prone ? 1.15 : PLAYER_RADIUS;
-  const obstacleRadius = local.prone ? 0.55 : PLAYER_RADIUS;
+  // radiusOverride: đang kẹt trong vùng đệm → chỉ chặn khi TÂM lọt vào vật rắn (khớp server).
+  const selfRadius = radiusOverride ?? (local.prone ? 1.15 : PLAYER_RADIUS);
+  const obstacleRadius = radiusOverride ?? (local.prone ? 0.55 : PLAYER_RADIUS);
   // Dùng vị trí HIỆN TẠI (không phải điểm sắp tới) để biết người chơi đang
   // đứng trên mái nhà/đá nào — nhờ vậy khi bước qua mép để đi xuống, họ
   // không bị chặn lại như thể đang đi xuyên tường/đá từ bên ngoài.
@@ -2938,14 +3234,28 @@ function isBlockedAt(x, z) {
     if (o.solid === false) continue;
     if (o.type === "house" || o.type === "hut") {
       const isAboveThisRoof =
-        local.groundY > groundHeightAt(o.x, o.z) + o.h * 0.72 + 0.1 &&
+        local.groundY > groundHeightAt(o.x, o.z) + (o.lift || 0) + o.h * 0.72 + 0.1 &&
         support?.type === "roof" &&
         support.obstacle === o;
       if (isAboveThisRoof) continue;
+      if (o.lift) {
+        // Gầm nhà sàn: ngồi / nằm chỉ vướng cột gỗ; đứng thẳng vướng sàn (khớp server).
+        const [lx, lz] = Structures.toLocal(o, x, z);
+        const hit = Structures.stiltBlocked(o, lx, lz, obstacleRadius, local.groundY - groundHeightAt(o.x, o.z), Boolean(local.crouching || local.prone));
+        if (hit !== null) {
+          if (hit) return true;
+          continue;
+        }
+      }
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
       continue;
     }
-    if (o.type === "fence") {
+    if (o.type === "keep") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Structures.keepBlocked(o, lx, lz, obstacleRadius, local.groundY - groundHeightAt(o.x, o.z))) return true;
+      continue;
+    }
+    if (o.type === "fence" || o.type === "stonewall") {
       const dx = x - o.x,
         dz = z - o.z;
       const c = Math.cos(o.yaw || 0),
@@ -3389,11 +3699,16 @@ function carPointBlocked(ownId, x, z) {
   for (const o of obstaclesNear(x, z)) {
     if (o.solid === false) continue;
     if (o.type === "house" || o.type === "hut") {
-      if (blockedByBuilding(o, x, z, r)) return true;
+      if (o.lift ? stiltFootprint(o, x, z, r) : blockedByBuilding(o, x, z, r)) return true;
       continue;
     }
-    if (o.type === "fence") {
+    if (o.type === "fence" || o.type === "stonewall") {
       if (fenceBlocks(o, x, z, r)) return true;
+      continue;
+    }
+    if (o.type === "keep") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Structures.keepBlocked(o, lx, lz, r, null)) return true;
       continue;
     }
     const footprint = obstacleFootprintRadius(o);
@@ -3419,7 +3734,7 @@ function carPointBlocked(ownId, x, z) {
 // Lan can đang chặn điểm này (khớp fenceAt của server).
 function fenceAtPoint(x, z) {
   for (const o of obstaclesNear(x, z))
-    if (o.type === "fence" && o.solid !== false && fenceBlocks(o, x, z, PLAYER_RADIUS)) return o;
+    if ((o.type === "fence" || o.type === "stonewall") && o.solid !== false && fenceBlocks(o, x, z, PLAYER_RADIUS)) return o;
   return null;
 }
 function carBlockInfo(ownId, x, z, yaw) {
@@ -3615,7 +3930,7 @@ function updateVehicleMeshes(dt) {
     liveIds.add(vehicle.id);
     let mesh = vehicleMeshes.get(vehicle.id);
     if (!mesh) {
-      mesh = buildCarMesh(vehicle, mapId === "forest");
+      mesh = buildCarMesh(vehicle, mapId !== "desert");
       mesh.rotation.order = "YXZ";
       scene.add(mesh);
       vehicleMeshes.set(vehicle.id, mesh);
@@ -3797,7 +4112,7 @@ function initWorld() {
   const host = $("#world");
   host.innerHTML = "";
   vehicleMeshes.clear();
-  const forest = mapId === "forest";
+  const forest = mapId !== "desert"; // Thành Cổ dùng chung nền xanh với rừng
   scene = new THREE.Scene();
   scene.background = new THREE.Color(forest ? "#879c88" : "#ad9367");
   scene.fog = new THREE.Fog(forest ? "#879c88" : "#ad9367", 1, 1);
@@ -3917,7 +4232,39 @@ function initWorld() {
     beryl: beryl.userData.magazine,
   };
   // Mô hình theo từng loại vũ khí; "none" = hai nắm đấm.
-  gun.userData.models = { ranger: aug, sniper: kar, beryl, none: fists };
+  // Lựu đạn trên tay phải (nổ: quả tròn xanh rêu có cần gạt; choáng: ống trụ xám).
+  const makeThrowable = (flash) => {
+    const g = new THREE.Group();
+    const body = flash
+      ? new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.11, 12), makeMat("#6e7472"))
+      : new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 10), makeMat("#3d4a2e"));
+    if (!flash) body.scale.set(1, 1.18, 1);
+    g.add(body);
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.02, 0.03, 8), makeMat("#2a2c28"));
+    cap.position.y = flash ? 0.07 : 0.06;
+    g.add(cap);
+    const lever = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.09, 0.02), makeMat("#8a8d86"));
+    lever.position.set(0.03, 0.03, 0);
+    lever.rotation.z = -0.25;
+    g.add(lever);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.016, 0.003, 5, 12), makeMat("#b7b9b3"));
+    ring.position.set(-0.024, 0.075, 0);
+    g.add(ring);
+    g.userData.ring = ring;
+    const hand = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.08, 0.1), makeMat("#26261f"));
+    hand.position.set(0.01, -0.05, 0.02);
+    g.add(hand);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.3, 4, 8).rotateX(Math.PI / 2), makeMat("#5a5f48"));
+    arm.position.set(0.02, -0.08, 0.22);
+    g.add(arm);
+    g.position.set(0.22, -0.2, -0.42);
+    g.visible = false;
+    return g;
+  };
+  const grenadeModel = makeThrowable(false),
+    flashModel = makeThrowable(true);
+  gun.add(grenadeModel, flashModel);
+  gun.userData.models = { ranger: aug, sniper: kar, beryl, none: fists, grenade: grenadeModel, flashbang: flashModel };
   gun.userData.fists = fists;
   gun.userData.punchAt = 0;
   gun.userData.punchSide = 1;
@@ -4328,6 +4675,10 @@ function renderPlayers(state) {
       ammo = Math.max(0, Number(p.ammo) || 0);
       local.reserveAmmo = p.reserveAmmo;
       local.medkits = p.medkits || 0;
+      local.frags = p.frags || 0;
+      local.flashes = p.flashes || 0;
+      // Hết lựu đạn đang cầm (đã ném quả cuối / bị lấy mất) → quay về súng.
+      if (local.throwable && !throwCount(local.throwable) && !local.cookAt) setThrowable(null);
       local.healing = Boolean(p.healing);
       local.healEndsAt = local.healing
         ? performance.now() + (p.healLeftMs || 0)
@@ -4365,6 +4716,14 @@ function renderPlayers(state) {
       sniperWeapon.add(sniperFlash);
       const berylWeapon = buildBakedWeapon("beryl", mergeGeometries);
       rig.weaponMount.add(berylWeapon);
+      // Lựu đạn trên tay phải (nổ: tròn xanh rêu; choáng: trụ xám) — ẩn / hiện theo snapshot.
+      const handGrenade = new THREE.Mesh(sharedGrenadeGeo.frag, makeMat("#3d4a2e"));
+      const handFlash = new THREE.Mesh(sharedGrenadeGeo.flash, makeMat("#7a807d"));
+      for (const m of [handGrenade, handFlash]) {
+        m.position.y = HAND_OFFSET;
+        m.visible = false;
+        rig.handR.add(m);
+      }
       const berylFlash = makeMuzzleFlash(1.15);
       berylFlash.position.copy(berylWeapon.userData.muzzle);
       berylWeapon.add(berylFlash);
@@ -4398,6 +4757,8 @@ function renderPlayers(state) {
         weapon,
         sniperWeapon,
         berylWeapon,
+        handGrenade,
+        handFlash,
         muzzleFlash,
         sniperFlash,
         berylFlash,
@@ -4439,6 +4800,23 @@ function renderPlayers(state) {
     mesh.userData.weapon.visible = holding && p.weapon === "ranger";
     mesh.userData.sniperWeapon.visible = holding && p.weapon === "sniper";
     mesh.userData.berylWeapon.visible = holding && p.weapon === "beryl";
+    // Lựu đạn: cầm (throwable), rút chốt (cooking), vừa ném (throwId tăng).
+    const ud0 = mesh.userData;
+    const thrown = (Number(p.throwId) || 0) - (ud0.throwId ?? (Number(p.throwId) || 0));
+    ud0.throwId = Number(p.throwId) || 0;
+    if (thrown > 0) {
+      ud0.throwAt = nowMs;
+      playThrowWhoosh({ x: p.x, y: (p.groundY || 0) + 1.5, z: p.z });
+    }
+    if (holding && p.throwable) ud0.lastThrowable = p.throwable;
+    ud0.throwable = holding ? p.throwable || null : null;
+    ud0.cooking = Boolean(p.cooking);
+    ud0.aiming = Boolean(p.aiming);
+    // Đang vung tay ném quả cuối (server đã xoá throwable) vẫn giữ tư thế ném.
+    ud0.throwPose = ud0.throwable || (holding && nowMs - (ud0.throwAt || -1e9) < 450 ? ud0.lastThrowable : null);
+    if (ud0.throwPose) {
+      ud0.weapon.visible = ud0.sniperWeapon.visible = ud0.berylWeapon.visible = false;
+    }
     // Cú đấm mới (punchId tăng): hoạt ảnh tay luân phiên + tiếng vút.
     const punchCount = (Number(p.punchId) || 0) - (mesh.userData.punchId || 0);
     if (punchCount > 0) {
@@ -4577,6 +4955,7 @@ function renderPlayers(state) {
 // Client chỉ vẽ vật phẩm, hiện gợi ý "F" và gửi yêu cầu lên server.
 function lootLabel(item) {
   if (item.type === "ammo") return `ĐẠN 5.56 (+${item.amount})`;
+  if (item.type === "frag" || item.type === "flash") return GRENADE_NAME[item.type];
   if (item.type === "weapon")
     return `${{ sniper: "KAR98K · SCOPE 8X", beryl: "BERYL M762", ranger: "AUG · RED DOT" }[item.weapon] || "SÚNG"} · NHẤN F ${weaponKey(local.weapon) === "none" ? "NHẶT" : "ĐỔI"} SÚNG`;
   return "BỊCH MÁU";
@@ -4766,6 +5145,17 @@ function buildLootAssets() {
     sniper: weapon("sniper"),
     beryl: weapon("beryl"),
     medkit: mergeGeometries(medParts, false),
+    // Lựu đạn rơi dưới đất (to hơn thật một chút để dễ thấy).
+    frag: mergeGeometries([
+      coloredPart(new THREE.SphereGeometry(0.11, 12, 10), "#3d4a2e", (o) => o.scale.set(1, 1.2, 1)),
+      coloredPart(new THREE.CylinderGeometry(0.035, 0.04, 0.06, 8), "#2a2c28", (o) => (o.position.y = 0.14)),
+      coloredPart(new THREE.BoxGeometry(0.025, 0.16, 0.035), "#8a8d86", (o) => o.position.set(0.06, 0.07, 0)),
+    ], false),
+    flash: mergeGeometries([
+      coloredPart(new THREE.CylinderGeometry(0.07, 0.07, 0.22, 12), "#6e7472"),
+      coloredPart(new THREE.CylinderGeometry(0.035, 0.04, 0.05, 8), "#2a2c28", (o) => (o.position.y = 0.135)),
+      coloredPart(new THREE.BoxGeometry(0.025, 0.18, 0.035), "#b7b9b3", (o) => o.position.set(0.075, 0.03, 0)),
+    ], false),
     ammo: mergeGeometries(ammoParts, false),
   };
 
@@ -4796,7 +5186,7 @@ function lootRestHeight(x, z, footprint) {
     const lz = Math.sin(yaw) * dx + Math.cos(yaw) * dz;
     const half = (o.w || 1) / 2;
     if (Math.abs(lx) <= half && Math.abs(lz) <= half)
-      y = Math.max(y, groundHeightAt(o.x, o.z) + HOUSE_FLOOR_TOP);
+      y = Math.max(y, groundHeightAt(o.x, o.z) + (o.lift || 0) + HOUSE_FLOOR_TOP); // nhà sàn: trên sàn cao
   }
   return y;
 }
@@ -4813,7 +5203,9 @@ function addLootMesh(item) {
       : "ranger"
     : isMed
       ? "medkit"
-      : "ammo";
+      : item.type === "frag" || item.type === "flash"
+        ? item.type
+        : "ammo";
   const body = new THREE.Mesh(
     lootAssets.bodies[bodyKey],
     lootAssets.bodyMaterial,
@@ -4855,6 +5247,7 @@ function addLootMesh(item) {
     ]);
   }
 
+  if (Number.isFinite(item.y)) restY = item.y; // tầng trên thành chính
   root.position.set(item.x, restY, item.z);
 
   root.visible = false;
@@ -4893,6 +5286,7 @@ function updateLootVisibility() {
 // Balo còn chỗ cho loại vật phẩm này không?
 function packHasRoom(type) {
   if (type === "weapon") return true;
+  if (type === "frag" || type === "flash") return throwCount(type) < (packLimits.throwables || 3);
   return type === "ammo"
     ? (local.reserveAmmo ?? 0) < packLimits.ammo
     : (local.medkits || 0) < packLimits.medkits;
@@ -5092,6 +5486,8 @@ function installLootUi() {
     <div class="bp-head"><span id="bpTitle">BALO</span><small>F / TAB / ESC · ĐÓNG</small></div>
     <div class="bp-row"><b>▮</b><div><strong>ĐẠN 5.56 MM</strong><small>ĐANG LẮP TRONG SÚNG: <span id="bpMag">30</span> / 30</small></div><span class="bp-count" id="bpAmmoCount">0</span><div class="bp-actions"><input id="bpDropAmmo" type="number" min="1" value="1" aria-label="Số viên đạn muốn thả"><button data-drop-item="ammo">THẢ</button></div></div>
     <div class="bp-row" id="bpMed"><b>✚</b><div><strong>BỊCH MÁU</strong><small>+20 MÁU · HỒI TRONG 5 GIÂY</small></div><span class="bp-count" id="bpMedCount">0</span><div class="bp-actions"><input id="bpDropMedkit" type="number" min="1" value="1" aria-label="Số bịch máu muốn thả"><button class="secondary-action" data-use-medkit>DÙNG</button><button data-drop-item="medkit">THẢ</button></div></div>
+    <div class="bp-row"><b>💣</b><div><strong>LỰU ĐẠN NỔ</strong><small>PHÍM 4 · R RÚT CHỐT · KÍP 6 GIÂY</small></div><span class="bp-count" id="bpFragCount">0</span><div class="bp-actions"><input id="bpDropFrag" type="number" min="1" value="1" aria-label="Số lựu đạn nổ muốn thả"><button data-drop-item="frag">THẢ</button></div></div>
+    <div class="bp-row"><b>⚡</b><div><strong>LỰU ĐẠN CHOÁNG</strong><small>PHÍM 5 · LOÁ MẮT · KÍP 2 GIÂY</small></div><span class="bp-count" id="bpFlashCount">0</span><div class="bp-actions"><input id="bpDropFlash" type="number" min="1" value="1" aria-label="Số lựu đạn choáng muốn thả"><button data-drop-item="flash">THẢ</button></div></div>
     <div id="crateSection" class="bp-section hidden"><h3>HÒM TIẾP TẾ</h3><div id="crateRows"></div></div>
     <div class="bp-foot">F · MỞ HÒM / NHẶT ĐỒ · NHẬP SỐ LƯỢNG ĐỂ THẢ HOẶC LẤY ĐỒ</div>`;
   $(".hud").append(panel);
@@ -5169,11 +5565,16 @@ function renderBackpack() {
   );
   $("#bpAmmoCount").classList.toggle("full", !packHasRoom("ammo"));
   $("#bpMedCount").classList.toggle("full", !packHasRoom("medkit"));
+  const throwMax = packLimits.throwables || 3;
+  setHtml($("#bpFragCount"), `${local.frags || 0}<small>/${throwMax}</small>`);
+  setHtml($("#bpFlashCount"), `${local.flashes || 0}<small>/${throwMax}</small>`);
   const ammoDrop = $("#bpDropAmmo");
   const medkitDrop = $("#bpDropMedkit");
   for (const [input, count] of [
     [ammoDrop, local.reserveAmmo || 0],
     [medkitDrop, local.medkits || 0],
+    [$("#bpDropFrag"), local.frags || 0],
+    [$("#bpDropFlash"), local.flashes || 0],
   ]) {
     input.max = count;
     input.disabled = count <= 0;
@@ -5203,6 +5604,8 @@ function renderBackpack() {
       name: "BỊCH MÁU",
       space: packLimits.medkits - (local.medkits || 0),
     },
+    { type: "frag", name: "LỰU ĐẠN NỔ", space: (packLimits.throwables || 3) - (local.frags || 0) },
+    { type: "flash", name: "LỰU ĐẠN CHOÁNG", space: (packLimits.throwables || 3) - (local.flashes || 0) },
   ];
   const renderKey = JSON.stringify({
     id: crate.id,
@@ -5485,6 +5888,9 @@ function updateLootHud(dt) {
 }
 function beginGame() {
   inMatch = true;
+  local.throwable = null;
+  local.cookAt = 0;
+  local.flashUntil = 0;
   local.crouchToggle = false;
   local.sprinting = false;
   sprintCancelled = false;
@@ -5532,6 +5938,7 @@ function beginGame() {
   local.healing = false;
   local.healEndsAt = 0;
   backpackOpen = false;
+  closeBigMap(false);
   paused = false;
   scoped = false;
   ammo = 30;
@@ -5548,7 +5955,7 @@ function beginGame() {
     $("#chuteOverlay").innerHTML = buildChuteOverlay();
   setMode("lobby"); // vào map chờ: tay không, không vật phẩm
   $("#world").onclick = () => {
-    if (paused || backpackOpen) return;
+    if (paused || backpackOpen || bigMap.open) return;
     // Bật fullscreen/keyboard lock từ cú click của người chơi. Đây là cách
     // trình duyệt hỗ trợ để gửi các tổ hợp như Ctrl+W về game khi có thể.
     enterGameInputMode();
@@ -5851,9 +6258,12 @@ function blockContextMenu(e) {
   if ($("#game").classList.contains("active")) e.preventDefault();
 }
 function onPointerLockChange() {
-  if (document.pointerLockElement !== renderer?.domElement) stopFiring();
+  if (document.pointerLockElement !== renderer?.domElement) {
+    stopFiring();
+    cancelThrowAim();
+  }
   if (deathView || $("#result")?.classList.contains("active")) return;
-  if (backpackOpen) return; // đang mở balo: thả chuột là chủ ý, không tạm dừng
+  if (backpackOpen || bigMap.open) return; // đang mở balo / bản đồ: thả chuột là chủ ý, không tạm dừng
   if (
     document.pointerLockElement !== renderer?.domElement &&
     $("#game").classList.contains("active") &&
@@ -5892,6 +6302,10 @@ function onKeyDown(e) {
 
     if (backpackOpen) {
       closeBackpack();
+      return;
+    }
+    if (bigMap.open) {
+      closeBigMap();
       return;
     }
     if (paused && !$("#pauseSettings").classList.contains("hidden"))
@@ -5950,6 +6364,11 @@ function onKeyDown(e) {
     }
   }
 
+  if (e.code === "KeyM" && !paused && $("#game").classList.contains("active")) {
+    e.preventDefault();
+    if (!e.repeat) toggleBigMap();
+    return;
+  }
   if (e.code === "Tab" && !paused && $("#game").classList.contains("active")) {
     e.preventDefault(); // không cho Tab đổi focus của trình duyệt
     if (!e.repeat) toggleBackpack();
@@ -5968,6 +6387,19 @@ function onKeyDown(e) {
   }
 
   if (
+    (e.code === "Digit4" || e.code === "Digit5") &&
+    !e.repeat &&
+    !paused &&
+    local.state === "ground" &&
+    !local.vehicleId &&
+    $("#game").classList.contains("active")
+  ) {
+    e.preventDefault();
+    const kind = e.code === "Digit4" ? "frag" : "flash";
+    setThrowable(local.throwable === kind ? null : kind);
+    return;
+  }
+  if (
     e.code === "KeyR" &&
     !e.repeat &&
     !paused &&
@@ -5975,6 +6407,17 @@ function onKeyDown(e) {
     $("#game").classList.contains("active")
   ) {
     e.preventDefault();
+    if (local.throwable) {
+      // RÚT CHỐT (cook): kíp bắt đầu đếm ngay trên tay.
+      if (!local.cookAt && !local.healing && throwCount(local.throwable)) {
+        local.cookAt = performance.now();
+        local.cookKind = local.throwable;
+        send({ type: "cook", kind: local.throwable });
+        playPinPull();
+        updateAmmoHud();
+      }
+      return;
+    }
     if (!local.healing) {
       stopFiring();
       send({ type: "reload" });
@@ -6017,13 +6460,21 @@ function onKeyDown(e) {
     if (local.prone) {
       local.prone = false;
       local.crouchToggle = true;
-    } else local.crouchToggle = !local.crouchToggle;
+    } else if (isHoldMode("crouchMode")) local.crouchToggle = true; // giữ C: ngồi tới khi thả
+    else local.crouchToggle = !local.crouchToggle;
     if (local.crouchToggle) local.sprinting = false;
     lastMove = 0;
     e.preventDefault();
     return;
   }
 
+  // Trong xe: Z = tắt / nổ máy (tài xế). Xe vẫn trôi và chậm dần; tắt máy thì
+  // chỉ có tiếng động cơ khi đang giữ W / S.
+  if (e.code === "KeyZ" && local.vehicleId) {
+    e.preventDefault();
+    if (!e.repeat && !paused && local.vehicleSeat === 0) send({ type: "vehicleEngine" });
+    return;
+  }
   if (
     e.code === "KeyZ" &&
     !e.repeat &&
@@ -6033,7 +6484,7 @@ function onKeyDown(e) {
     !waterAt(local.x, local.z) &&
     $("#game").classList.contains("active")
   ) {
-    local.prone = !local.prone;
+    local.prone = isHoldMode("proneMode") ? true : !local.prone; // giữ Z: nằm tới khi thả
     if (local.prone) {
       local.crouching = false;
       local.crouchToggle = false;
@@ -6071,10 +6522,24 @@ function onKeyDown(e) {
 
 function onKeyUp(e) {
   keys[e.code] = false;
+  releaseHeldStance(e.code);
   if (e.code === "ShiftLeft" || e.code === "ShiftRight") sprintCancelled = false;
   if (e.code === "KeyQ" || e.code === "KeyE") lastMove = 0;
 }
+// Chế độ "giữ phím": thả C thì đứng dậy khỏi tư thế ngồi, thả Z thì đứng dậy
+// khỏi tư thế nằm. Rời cửa sổ game (mất sự kiện thả phím) cũng tính là thả.
+function releaseHeldStance(code) {
+  if ((code === "KeyC" || code === "*") && isHoldMode("crouchMode")) {
+    if (local.crouchToggle) lastMove = 0;
+    local.crouchToggle = false;
+  }
+  if ((code === "KeyZ" || code === "*") && isHoldMode("proneMode") && local.prone) {
+    local.prone = false;
+    lastMove = 0;
+  }
+}
 function onGameWindowBlur() {
+  releaseHeldStance("*");
   stopFiring();
   keys.KeyQ = false;
   keys.KeyE = false;
@@ -6088,6 +6553,7 @@ function pauseGame() {
   )
     return;
   closeBackpack(false);
+  closeBigMap(false);
   paused = true;
   document.exitPointerLock?.(); // ESC bị khóa nên trình duyệt không tự thả chuột
   stopFiring();
@@ -6279,6 +6745,18 @@ function onFire(e) {
     document.pointerLockElement === renderer?.domElement &&
     cancelSprint();
   if (wasSprinting) sprintShotAt = performance.now() + SPRINT_RECOVER_MS;
+  if (local.throwable && !local.vehicleId) {
+    if (
+      e.button === 0 &&
+      !paused &&
+      !deathView &&
+      local.state === "ground" &&
+      document.pointerLockElement === renderer?.domElement
+    )
+      startThrowAim();
+    else if (e.button === 2 && local.throwAimAt) cancelThrowAim(); // chuột phải: thôi không ném
+    return;
+  }
   if (e.button === 2) {
     if (
       !deathView &&
@@ -6334,6 +6812,98 @@ function onFire(e) {
 }
 function onMouseUp(e) {
   if (e.button === 0) stopFiring();
+  if (e.button === 0 && local.throwAimAt) {
+    // Click nhanh = ném ngay; giữ rồi nhả = ném theo đường bay đang hiện.
+    local.throwAimAt = 0;
+    if (!paused && !deathView && local.state === "ground" && local.throwable && !local.vehicleId) throwGrenade();
+    else cancelThrowAim();
+  }
+}
+// ---- Giữ chuột trái khi cầm lựu đạn: lấy đà + vẽ đường bay dự kiến ----
+const THROW_SPEED = 25; // khớp server
+const THROW_AIM_SHOW_MS = 140; // giữ quá ngần này mới hiện đường bay (click nhanh thì không)
+function startThrowAim() {
+  if (!local.throwable || !throwCount(local.throwable) || local.healing || local.throwAimAt) return;
+  local.throwAimAt = performance.now();
+  send({ type: "aimThrow", on: true });
+}
+function cancelThrowAim() {
+  if (!local.throwAimAt) return;
+  local.throwAimAt = 0;
+  send({ type: "aimThrow", on: false });
+  updateThrowArc();
+}
+let throwArc = null;
+const arcPos = new THREE.Vector3(),
+  arcVel = new THREE.Vector3();
+function updateThrowArc() {
+  const show =
+    local.throwAimAt && performance.now() - local.throwAimAt > THROW_AIM_SHOW_MS && local.throwable && !deathView && scene;
+  if (!show) {
+    if (throwArc) throwArc.line.visible = throwArc.mark.visible = false;
+    return;
+  }
+  if (!throwArc) {
+    const N = 90;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffe14a, transparent: true, opacity: 0.9, depthTest: false }));
+    line.renderOrder = 10;
+    line.frustumCulled = false;
+    const mark = new THREE.Mesh(
+      new THREE.RingGeometry(0.28, 0.4, 24).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xffe14a, transparent: true, opacity: 0.85, depthTest: false, side: THREE.DoubleSide }),
+    );
+    mark.renderOrder = 10;
+    scene.add(line, mark);
+    throwArc = { line, mark, N };
+  }
+  // Mô phỏng y hệt server: xuất phát trước mắt 0.45 m, v = hướng nhìn × 25 + 2.5 lên, g = 20.
+  camera.getWorldDirection(arcVel);
+  camera.getWorldPosition(arcPos);
+  arcPos.addScaledVector(arcVel, 0.45);
+  arcVel.multiplyScalar(THROW_SPEED);
+  arcVel.y += 2.5;
+  const arr = throwArc.line.geometry.attributes.position.array;
+  const h = 0.03;
+  let n = 0,
+    landed = false;
+  for (; n < throwArc.N; n++) {
+    arr[n * 3] = arcPos.x;
+    arr[n * 3 + 1] = arcPos.y;
+    arr[n * 3 + 2] = arcPos.z;
+    if (landed) continue;
+    for (let s = 0; s < 2; s++) {
+      arcVel.y -= 20 * h;
+      arcPos.addScaledVector(arcVel, h);
+      const floor = landingHeightAt(arcPos.x, arcPos.z, arcPos.y + 0.3) + 0.08;
+      if (arcPos.y <= floor) {
+        arcPos.y = floor;
+        landed = true;
+        break;
+      }
+    }
+  }
+  throwArc.line.geometry.attributes.position.needsUpdate = true;
+  throwArc.line.geometry.setDrawRange(0, n);
+  throwArc.line.visible = true;
+  throwArc.mark.visible = landed;
+  if (landed) throwArc.mark.position.set(arcPos.x, arcPos.y + 0.03, arcPos.z);
+}
+// Ném lựu đạn theo hướng nhìn (server tính quỹ đạo). Chưa rút chốt thì kíp bắt
+// đầu đếm từ lúc ném.
+function throwGrenade() {
+  const kind = local.throwable;
+  if (!kind || !throwCount(kind) || local.healing) return;
+  camera.getWorldDirection(shotAim);
+  camera.getWorldPosition(shotEye);
+  send({ type: "throw", kind, aim: { x: shotAim.x, y: shotAim.y, z: shotAim.z }, eyeY: shotEye.y });
+  local.cookAt = 0;
+  local.throwAnimAt = performance.now();
+  playThrowWhoosh();
+  // Còn quả thì vẫn cầm loại đó (cần đợi server trừ số lượng), hết thì về súng.
+  if (throwCount(kind) <= 1) setTimeout(() => local.throwable === kind && !throwCount(kind) && setThrowable(null), 450);
+  updateAmmoHud();
 }
 function stopFiring() {
   triggerHeld = false;
@@ -6536,14 +7106,244 @@ function onScopeWheel(event) {
 // Tên + mô tả hiển thị trên HUD cho từng loại vũ khí.
 const WEAPON_INFO = {
   none: { name: "TAY KHÔNG", sub: "ĐẤM · ĐẦU −50 · THÂN −5" },
+  grenade: { name: "LỰU ĐẠN NỔ", sub: "R RÚT CHỐT · CLICK NÉM · KÍP 6 GIÂY" },
+  flashbang: { name: "LỰU ĐẠN CHOÁNG", sub: "R RÚT CHỐT · CLICK NÉM · KÍP 2 GIÂY" },
   ranger: { name: "AUG", sub: "SÚNG TRƯỜNG TẤN CÔNG · RED DOT" },
   beryl: { name: "BERYL M762", sub: "SÚNG TRƯỜNG TẤN CÔNG · RED DOT OVAL" },
   sniper: { name: "KAR98K", sub: "SÚNG BẮN TỈA · SCOPE 8X" },
 };
 const weaponKey = (w) => (WEAPON_INFO[w] ? w : "none");
+// Cầm / cất lựu đạn (null = cầm súng / tay không như cũ).
+function setThrowable(kind) {
+  if (kind && !throwCount(kind)) {
+    showLootToast(`KHÔNG CÒN ${GRENADE_NAME[kind]}`);
+    return;
+  }
+  if (local.cookAt) return; // đã rút chốt: phải ném
+  cancelThrowAim();
+  local.throwable = kind;
+  send({ type: "equip", kind });
+  stopFiring();
+  if (scoped) setScope(false);
+  updateLocalWeaponVisual();
+}
+// ---- Vòng đếm ngược kíp nổ (khi đã rút chốt) + tư thế tay cầm lựu đạn ----
+let cookHud = null;
+function updateCookHud() {
+  if (!cookHud) {
+    cookHud = document.createElement("div");
+    cookHud.id = "cookHud";
+    cookHud.innerHTML = '<div class="ck-ring"><b></b></div><small></small>';
+    $(".hud")?.append(cookHud);
+  }
+  const cooking = local.cookAt && local.throwable && !deathView;
+  cookHud.classList.toggle("hidden", !cooking);
+  if (!cooking) return;
+  const fuse = GRENADE_FUSE[local.cookKind || local.throwable];
+  const left = Math.max(0, fuse - (performance.now() - local.cookAt));
+  const frac = left / fuse;
+  // Xanh → vàng → đỏ khi kíp sắp nổ.
+  const color = frac > 0.5 ? "#6dff6a" : frac > 0.25 ? "#ffd84a" : "#ff4a3d";
+  const ring = cookHud.firstChild;
+  setStyle(ring, "background", `conic-gradient(${color} ${frac * 360}deg, rgba(255,255,255,0.12) 0)`);
+  setStyle(ring, "boxShadow", `0 0 18px ${color}88`);
+  setText(ring.firstChild, (left / 1000).toFixed(1));
+  setStyle(ring.firstChild, "color", color);
+  setText(cookHud.lastChild, frac > 0.25 ? "ĐÃ RÚT CHỐT · CLICK ĐỂ NÉM" : "NÉM NGAY!");
+  cookHud.classList.toggle("danger", frac <= 0.25);
+  if (left <= 0) {
+    // Nổ trên tay (server xử lý sát thương) — dọn trạng thái phía client.
+    local.cookAt = 0;
+    setThrowable(null);
+  }
+}
+function poseThrowable(dt) {
+  const model = gun?.userData.models?.[local.throwable === "flash" ? "flashbang" : "grenade"];
+  if (!model || !local.throwable) return;
+  const t = (performance.now() - (local.throwAnimAt || 0)) / 380;
+  const throwing = t >= 0 && t < 1;
+  // Ném: vung tay ra trước – lên rồi hạ xuống, quả lựu đạn ẩn khi rời tay.
+  const swing = throwing ? Math.sin(Math.min(1, t) * Math.PI) : 0;
+  // Giữ chuột: đưa quả lựu đạn lên cao ra sau (lấy đà), nhả thì vung ra trước.
+  const aimGoal = local.throwAimAt && !throwing ? 1 : 0;
+  const aim = (model.userData.aimK = (model.userData.aimK || 0) + (aimGoal - (model.userData.aimK || 0)) * Math.min(1, 12 * dt));
+  model.position.set(0.22 + aim * 0.08 - swing * 0.1, -0.2 + aim * 0.14 + swing * 0.22, -0.42 + aim * 0.14 - swing * 0.25);
+  model.rotation.set(aim * 0.5 - swing * 1.1, 0, -aim * 0.2);
+  model.children[0].visible = !throwing || t < 0.35;
+  if (model.userData.ring) model.userData.ring.visible = !local.cookAt; // chốt đã rút
+}
+// ---- Lựu đạn bay trong thế giới + hiệu ứng nổ ----
+const grenadeMeshes = new Map();
+const blastFx = [];
+let screenShake = 0;
+let grenadeMats = null;
+function updateGrenadeWorld(dt) {
+  updateCookHud();
+  poseThrowable(dt);
+  updateThrowArc();
+  if (!scene) return;
+  grenadeMats ||= { frag: makeMat("#3d4a2e"), flash: makeMat("#7a807d") };
+  const live = new Set();
+  let warn = null;
+  const eye = camera?.position;
+  for (const g of gameState?.grenades || []) {
+    live.add(g.id);
+    let mesh = grenadeMeshes.get(g.id);
+    if (!mesh) {
+      mesh = new THREE.Mesh(sharedGrenadeGeo[g.kind] || sharedGrenadeGeo.frag, grenadeMats[g.kind] || grenadeMats.frag);
+      mesh.position.set(g.x, g.y, g.z);
+      mesh.userData.vel = new THREE.Vector3(g.vx || 0, g.vy || 0, g.vz || 0);
+      scene.add(mesh);
+      grenadeMeshes.set(g.id, mesh);
+    }
+    const vel = mesh.userData.vel;
+    if (mesh.userData.server !== g) {
+      // Gói mới từ server: kéo về vị trí thật (mượt), lấy vận tốc thật.
+      mesh.userData.server = g;
+      mesh.position.lerp(tmpGrenadePos.set(g.x, g.y, g.z), 0.5);
+      vel.set(g.vx || 0, g.vy || 0, g.vz || 0);
+    }
+    // Giữa hai gói: tự mô phỏng như server (trọng lực, nảy, lăn) → bay / lăn mượt.
+    vel.y -= 20 * dt;
+    mesh.position.addScaledVector(vel, dt);
+    const floor = landingHeightAt(mesh.position.x, mesh.position.z, mesh.position.y + 0.3) + 0.08;
+    if (mesh.position.y <= floor) {
+      mesh.position.y = floor;
+      if (vel.y < -1.5) {
+        vel.y = -vel.y * 0.32;
+        vel.x *= 0.7;
+        vel.z *= 0.7;
+      } else {
+        vel.y = 0;
+        const fr = Math.max(0, 1 - 1.0 * dt);
+        vel.x *= fr;
+        vel.z *= fr;
+      }
+    }
+    // Lăn: quay theo tốc độ ngang.
+    const speed = Math.hypot(vel.x, vel.z);
+    mesh.rotation.x += speed * dt * 14 + (vel.y ? dt * 6 : 0);
+    mesh.rotation.y = Math.atan2(vel.x, vel.z);
+    // Cảnh báo lựu đạn NỔ ở gần (≤ 12 m) để còn né.
+    if (g.kind === "frag" && eye && local.hp > 0 && !deathView) {
+      const d = Math.hypot(mesh.position.x - eye.x, mesh.position.z - eye.z);
+      if (d < 12 && (!warn || d < warn.d)) warn = { d, x: mesh.position.x, z: mesh.position.z };
+    }
+  }
+  for (const [id, mesh] of grenadeMeshes)
+    if (!live.has(id)) {
+      scene.remove(mesh);
+      grenadeMeshes.delete(id);
+    }
+  updateGrenadeWarning(warn);
+  for (let i = blastFx.length - 1; i >= 0; i--) {
+    const fx = blastFx[i];
+    fx.t += dt;
+    const p = fx.t / fx.life;
+    if (p >= 1) {
+      scene.remove(fx.mesh);
+      fx.mesh.geometry.dispose();
+      fx.mesh.material.dispose();
+      blastFx.splice(i, 1);
+      continue;
+    }
+    const sc = fx.from + (fx.to - fx.from) * Math.sqrt(p);
+    fx.mesh.scale.setScalar(sc);
+    fx.mesh.material.opacity = fx.opacity * (1 - p);
+    if (fx.rise) fx.mesh.position.y += fx.rise * dt;
+  }
+  const overlay = $("#flashOverlay");
+  if (overlay && local.flashUntil) {
+    const left = local.flashUntil - performance.now();
+    const f = left / local.flashDuration; // 1 → 0
+    const o = left <= 0 ? 0 : (f > 0.45 ? 1 : Math.pow(f / 0.45, 0.7)) * local.flashPower;
+    setStyle(overlay, "opacity", o.toFixed(3));
+    if (left <= 0) local.flashUntil = 0;
+  }
+  screenShake = Math.max(0, screenShake - dt * 1.8);
+}
+const tmpGrenadePos = new THREE.Vector3();
+// Hình học lựu đạn dùng chung (tay nhân vật + quả đang bay) — không tạo mới mỗi quả.
+const sharedGrenadeGeo = {
+  frag: new THREE.SphereGeometry(0.065, 10, 8),
+  flash: new THREE.CylinderGeometry(0.045, 0.045, 0.13, 10),
+};
+// Biểu tượng cảnh báo: 💣 + mũi tên chỉ hướng quả lựu đạn so với hướng nhìn.
+let grenadeWarnEl = null;
+function updateGrenadeWarning(warn) {
+  if (!grenadeWarnEl) {
+    grenadeWarnEl = document.createElement("div");
+    grenadeWarnEl.id = "grenadeWarn";
+    grenadeWarnEl.innerHTML = '<i>▲</i><b>💣</b><small></small>';
+    $(".hud")?.append(grenadeWarnEl);
+  }
+  grenadeWarnEl.classList.toggle("hidden", !warn);
+  if (!warn) return;
+  const eye = camera.position;
+  const yaw = camera.rotation.y;
+  // Góc tới quả lựu đạn so với hướng nhìn (0 = ngay phía trước).
+  const angle = Math.atan2(-(warn.x - eye.x), -(warn.z - eye.z)) - yaw;
+  setStyle(grenadeWarnEl.firstChild, "transform", `rotate(${(-angle * 180) / Math.PI}deg)`);
+  setText(grenadeWarnEl.lastChild, `${warn.d.toFixed(0)} M`);
+  grenadeWarnEl.classList.toggle("close", warn.d < 5);
+}
+function addBlastFx(color, x, y, z, from, to, life, opacity, rise = 0) {
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 14, 10),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, toneMapped: false }),
+  );
+  mesh.position.set(x, y, z);
+  mesh.scale.setScalar(from);
+  scene.add(mesh);
+  blastFx.push({ mesh, t: 0, life, from, to, opacity, rise });
+}
+function onExplosion(m) {
+  if (!scene) return;
+  const x = Number(m.x),
+    y = Number(m.y),
+    z = Number(m.z);
+  const eye = camera.getWorldPosition(new THREE.Vector3());
+  const d = Math.hypot(eye.x - x, eye.y - y, eye.z - z);
+  if (m.kind === "flash") {
+    addBlastFx("#ffffff", x, y + 0.3, z, 0.3, 4.5, 0.25, 0.95);
+    playFlashBang({ x, y, z });
+    // Loá mắt: mạnh khi gần và đang NHÌN về phía quả nổ; quay lưng thì nhẹ.
+    if (d < 20 && local.hp > 0 && !deathView) {
+      const dir = camera.getWorldDirection(new THREE.Vector3());
+      const to = new THREE.Vector3(x - eye.x, y - eye.y, z - eye.z).normalize();
+      const facing = dir.dot(to);
+      const covered = Array.isArray(m.seen) ? !m.seen.includes(playerId) : flashCovered(eye, { x, y: y + 0.3, z });
+      const power = covered ? 0 : (1 - d / 20) * (facing > 0.2 ? 1 : 0.3);
+      if (power > 0.05) {
+        local.flashPower = Math.min(1, power * 1.25);
+        local.flashDuration = 2500 + power * 5500; // tối đa ~8 giây
+        local.flashUntil = performance.now() + local.flashDuration;
+        playEarRinging(power);
+      }
+    }
+  } else {
+    addBlastFx("#ffcf6a", x, y + 0.4, z, 0.4, 3.2, 0.32, 0.95);
+    addBlastFx("#ff7a1f", x, y + 0.5, z, 0.6, 4.2, 0.55, 0.7);
+    addBlastFx("#5b554b", x, y + 0.8, z, 1.0, 5.5, 2.4, 0.55, 1.2);
+    playGrenadeBlast({ x, y, z });
+    if (d < 30) screenShake = Math.max(screenShake, (1 - d / 30) * 0.9);
+  }
+}
+// Có vật chắn giữa mắt và quả choáng (địa hình / tường)? — chỉ ước lượng thô.
+function flashCovered(a, b) {
+  const n = Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 0.12); // tường mỏng ~0.2 m
+  for (let i = 1; i < n; i++) {
+    const t = i / n;
+    const x = a.x + (b.x - a.x) * t,
+      y = a.y + (b.y - a.y) * t,
+      z = a.z + (b.z - a.z) * t;
+    if (groundHeightAt(x, z) > y + 0.1 || carPointBlocked(null, x, z)) return true;
+  }
+  return false;
+}
 function updateLocalWeaponVisual() {
   if (!gun) return;
-  const key = weaponKey(local.weapon);
+  const key = local.throwable ? (local.throwable === "flash" ? "flashbang" : "grenade") : weaponKey(local.weapon);
   for (const [kind, model] of Object.entries(gun.userData.models || {}))
     model.visible = kind === key;
   gun.userData.magazine = gun.userData.magazines?.[key] || null;
@@ -7009,6 +7809,12 @@ function animateAvatars(dt) {
     const armed =
       ud.weapon.visible || ud.sniperWeapon.visible || ud.berylWeapon.visible;
     const punchT = (now - ud.punchAt) / 320;
+    const throwT = ud.throwAt && now - ud.throwAt < 450 ? (now - ud.throwAt) / 450 : null;
+    const inHand = ud.throwPose && !(throwT !== null && throwT > 0.5); // rời tay khi quăng
+    if (ud.handGrenade) {
+      ud.handGrenade.visible = inHand && ud.throwPose === "frag";
+      ud.handFlash.visible = inHand && ud.throwPose === "flash";
+    }
     poseAvatar(
       ud.rig,
       ud.pose,
@@ -7024,7 +7830,11 @@ function animateAvatars(dt) {
           now < ud.kickUntil ? (ud.weaponKind === "sniper" ? 0.16 : 0.06) : 0,
         weaponGrip: armed ? WEAPON_GRIPS[ud.weaponKind] || WEAPON_GRIPS.ranger : null,
         // Tay không (đã tiếp đất): thế thủ + cú đấm luân phiên.
-        fists: !armed && ud.weaponKind === "none" && ud.state === "ground",
+        fists: !armed && !ud.throwPose && ud.weaponKind === "none" && ud.state === "ground",
+        throwable: ud.throwPose,
+        cooking: ud.cooking,
+        throwAim: ud.aiming,
+        throwT,
         punch: punchT >= 0 && punchT < 1 ? punchT : 0,
         punchSide: ud.punchSide,
       },
@@ -7221,7 +8031,7 @@ function updateEnvironment(dt) {
       1,
     );
   envBlend += (target - envBlend) * Math.min(1, 4 * dt);
-  const forest = mapId === "forest";
+  const forest = mapId !== "desert"; // Thành Cổ dùng chung nền xanh với rừng
   tmpColorA.set(forest ? "#879c88" : "#ad9367");
   tmpColorB.set("#9cc9ea");
   scene.background.lerpColors(tmpColorA, tmpColorB, envBlend);
@@ -7340,13 +8150,15 @@ function updateFlightHud() {
   hint.classList.toggle("ok", ok);
   drawFlightMap();
 }
-let minimapBaseCanvas = null,
-  minimapBaseKey = "";
+const minimapBaseCache = new Map(); // S -> { key, canvas }
 function minimapBase(S, forest, k, X, Y) {
   const key = `${mapId}|${gameState?.mapSeed}|${mapObstacles.length}|${S}`;
-  if (minimapBaseCanvas && minimapBaseKey === key) return minimapBaseCanvas;
-  minimapBaseKey = key;
-  minimapBaseCanvas ||= document.createElement("canvas");
+  let entry = minimapBaseCache.get(S);
+  if (entry?.key === key) return entry.canvas;
+  entry ||= { canvas: document.createElement("canvas") };
+  entry.key = key;
+  minimapBaseCache.set(S, entry);
+  const minimapBaseCanvas = entry.canvas;
   minimapBaseCanvas.width = minimapBaseCanvas.height = S;
   const ctx = minimapBaseCanvas.getContext("2d");
   // Nền: tô theo độ cao + đổ bóng sườn núi từ chính lưới địa hình (vẽ 1 lần).
@@ -7403,7 +8215,7 @@ function minimapBase(S, forest, k, X, Y) {
   const roadLines = segmentLines("road", "roadId", 0.6);
   for (const [color, width] of [
     ["#3c3a33", 1.7],
-    [forest ? "#d8cfae" : "#efe0bb", 0.9],
+    [isJungleMap() ? "#b8683e" : forest ? "#d8cfae" : "#efe0bb", 0.9],
   ]) {
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.max(1, 9 * k * width);
@@ -7413,6 +8225,33 @@ function minimapBase(S, forest, k, X, Y) {
         i ? ctx.lineTo(X(p.x), Y(p.z)) : ctx.moveTo(X(p.x), Y(p.z)),
       );
     ctx.stroke();
+  }
+  // Tường thành & tháp (Thành Cổ).
+  for (const o of mapObstacles) {
+    if (o.type === "stonewall") {
+      const hx = (Math.sin(o.yaw || 0) * o.length) / 2,
+        hz = (Math.cos(o.yaw || 0) * o.length) / 2;
+      ctx.strokeStyle = "#cfc6a8";
+      ctx.lineWidth = Math.max(1.5, o.w * k * 1.4);
+      ctx.beginPath();
+      ctx.moveTo(X(o.x - hx), Y(o.z - hz));
+      ctx.lineTo(X(o.x + hx), Y(o.z + hz));
+      ctx.stroke();
+    } else if (o.type === "tower") {
+      const sz = Math.max(3, o.w * k);
+      ctx.fillStyle = "#e2d8b8";
+      ctx.fillRect(X(o.x) - sz / 2, Y(o.z) - sz / 2, sz, sz);
+    } else if (o.type === "keep") {
+      const sz = o.w * k;
+      ctx.save();
+      ctx.translate(X(o.x), Y(o.z));
+      ctx.rotate(-(o.yaw || 0));
+      ctx.fillStyle = "#cfc6a8";
+      ctx.fillRect(-sz / 2, -sz / 2, sz, sz);
+      ctx.fillStyle = "#7a7466";
+      ctx.fillRect(-sz * 0.32, -sz * 0.32, sz * 0.64, sz * 0.64);
+      ctx.restore();
+    }
   }
   for (const o of mapObstacles) {
     if (
@@ -7450,6 +8289,250 @@ function minimapBase(S, forest, k, X, Y) {
   ctx.strokeRect(1, 1, S - 2, S - 2);
   return minimapBaseCanvas;
 }
+// ================= BẢN ĐỒ LỚN (phím M): lăn chuột zoom, kéo để di chuyển =================
+const BIGMAP_BASE = 1024; // độ phân giải nền (vẽ một lần mỗi map)
+const bigMap = { open: false, zoom: 1, cx: 0, cz: 0, drag: null, lastDraw: 0, el: null };
+function ensureBigMap() {
+  if (bigMap.el) return bigMap.el;
+  const el = document.createElement("div");
+  el.id = "bigMap";
+  el.className = "hidden";
+  el.innerHTML = `<div class="bm-frame"><canvas id="bigMapCanvas"></canvas>
+    <div class="bm-bar"><button type="button" data-bm-zoom="-1" aria-label="Thu nhỏ">−</button><span id="bigMapZoom">1×</span><button type="button" data-bm-zoom="1" aria-label="Phóng to">+</button><button type="button" data-bm-center>VỀ VỊ TRÍ</button><small>LĂN CHUỘT · ZOOM &nbsp;·&nbsp; KÉO · DI CHUYỂN &nbsp;·&nbsp; M / ESC · ĐÓNG</small></div></div>`;
+  $(".hud").append(el);
+  const canvas = el.querySelector("canvas");
+  const view = () => {
+    const r = canvas.getBoundingClientRect();
+    return { r, K: (r.width / (MAP_HALF * 2)) * bigMap.zoom };
+  };
+  // Zoom quanh con trỏ: điểm dưới chuột đứng yên.
+  canvas.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      const { r, K } = view();
+      const mx = e.clientX - r.left - r.width / 2,
+        my = e.clientY - r.top - r.height / 2;
+      const wx = bigMap.cx + mx / K,
+        wz = bigMap.cz + my / K;
+      setBigMapZoom(bigMap.zoom * (e.deltaY < 0 ? 1.25 : 0.8));
+      const K2 = (r.width / (MAP_HALF * 2)) * bigMap.zoom;
+      bigMap.cx = wx - mx / K2;
+      bigMap.cz = wz - my / K2;
+      clampBigMap();
+      drawBigMap(true);
+    },
+    { passive: false },
+  );
+  canvas.addEventListener("pointerdown", (e) => {
+    bigMap.drag = { x: e.clientX, y: e.clientY, cx: bigMap.cx, cz: bigMap.cz };
+    canvas.setPointerCapture(e.pointerId);
+    canvas.classList.add("dragging");
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!bigMap.drag) return;
+    const { K } = view();
+    bigMap.cx = bigMap.drag.cx - (e.clientX - bigMap.drag.x) / K;
+    bigMap.cz = bigMap.drag.cz - (e.clientY - bigMap.drag.y) / K;
+    clampBigMap();
+    drawBigMap(true);
+  });
+  const endDrag = () => {
+    bigMap.drag = null;
+    canvas.classList.remove("dragging");
+  };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  el.addEventListener("click", (e) => {
+    const z = e.target.closest("[data-bm-zoom]");
+    if (z) {
+      setBigMapZoom(bigMap.zoom * (Number(z.dataset.bmZoom) > 0 ? 1.5 : 1 / 1.5));
+      clampBigMap();
+      drawBigMap(true);
+    } else if (e.target.closest("[data-bm-center]")) {
+      centerBigMapOnMe();
+      drawBigMap(true);
+    }
+  });
+  bigMap.el = el;
+  return el;
+}
+function setBigMapZoom(z) {
+  bigMap.zoom = Math.max(1, Math.min(10, z));
+  setText($("#bigMapZoom"), `${bigMap.zoom < 10 ? bigMap.zoom.toFixed(1) : 10}×`);
+}
+function clampBigMap() {
+  const hv = MAP_HALF / bigMap.zoom;
+  bigMap.cx = Math.max(-MAP_HALF + hv, Math.min(MAP_HALF - hv, bigMap.cx));
+  bigMap.cz = Math.max(-MAP_HALF + hv, Math.min(MAP_HALF - hv, bigMap.cz));
+}
+function bigMapMe() {
+  return local.state === "plane" && plane ? planePosAt(planeTime()) : { x: local.x, z: local.z };
+}
+function centerBigMapOnMe() {
+  const me = bigMapMe();
+  bigMap.cx = me.x;
+  bigMap.cz = me.z;
+  clampBigMap();
+}
+function openBigMap() {
+  if (bigMap.open || paused || !$("#game").classList.contains("active") || $("#result")?.classList.contains("active")) return;
+  closeBackpack(false);
+  stopFiring();
+  if (scoped) setScope(false);
+  const el = ensureBigMap();
+  bigMap.open = true;
+  if (bigMap.zoom === 1 && bigMapMe()) setBigMapZoom(2.5); // lần đầu: zoom vừa, quanh mình
+  centerBigMapOnMe();
+  el.classList.remove("hidden");
+  // Thả chuột để kéo / zoom bản đồ; trận vẫn chạy, WASD vẫn đi được.
+  if (document.pointerLockElement) document.exitPointerLock();
+  drawBigMap(true);
+}
+function closeBigMap(relock = true) {
+  if (!bigMap.open) return;
+  bigMap.open = false;
+  bigMap.drag = null;
+  bigMap.el?.classList.add("hidden");
+  if (relock && !paused && !deathView && $("#game").classList.contains("active")) lockPointer(renderer?.domElement);
+}
+function toggleBigMap() {
+  if (bigMap.open) closeBigMap();
+  else openBigMap();
+}
+function drawBigMap(force = false) {
+  if (!bigMap.open) return;
+  if (!force && performance.now() - bigMap.lastDraw < 50) return;
+  bigMap.lastDraw = performance.now();
+  const canvas = $("#bigMapCanvas");
+  const ctx = canvas?.getContext("2d");
+  if (!ctx) return;
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const W = Math.max(64, Math.round(rect.width * dpr));
+  if (canvas.width !== W) canvas.width = canvas.height = W;
+  const K = (W / (MAP_HALF * 2)) * bigMap.zoom; // pixel / mét
+  const X = (x) => W / 2 + (x - bigMap.cx) * K;
+  const Y = (z) => W / 2 + (z - bigMap.cz) * K;
+  const forest = mapId !== "desert";
+  const B = BIGMAP_BASE,
+    kB = B / (MAP_HALF * 2);
+  const base = minimapBase(B, forest, kB, (x) => B / 2 + x * kB, (z) => B / 2 + z * kB);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#0d110c";
+  ctx.fillRect(0, 0, W, W);
+  ctx.imageSmoothingEnabled = true;
+  const s = K / kB;
+  ctx.drawImage(base, X(-MAP_HALF), Y(-MAP_HALF), B * s, B * s);
+  // Lưới ô vuông (100 m) + ký hiệu A, B, C… / 1, 2, 3… như bản đồ quân sự.
+  const cell = 100;
+  ctx.strokeStyle = "rgba(255,255,255,.16)";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "rgba(255,255,255,.75)";
+  ctx.font = `${Math.round(11 * dpr)}px 'DM Mono', monospace`;
+  const cells = Math.round((MAP_HALF * 2) / cell);
+  for (let i = 0; i <= cells; i++) {
+    const v = -MAP_HALF + i * cell;
+    ctx.beginPath();
+    ctx.moveTo(X(v), Y(-MAP_HALF));
+    ctx.lineTo(X(v), Y(MAP_HALF));
+    ctx.moveTo(X(-MAP_HALF), Y(v));
+    ctx.lineTo(X(MAP_HALF), Y(v));
+    ctx.stroke();
+    if (i < cells) {
+      const mid = v + cell / 2;
+      ctx.fillText(String.fromCharCode(65 + i), X(mid) - 4 * dpr, Math.max(14 * dpr, Y(-MAP_HALF) + 14 * dpr));
+      ctx.fillText(String(i + 1), Math.max(5 * dpr, X(-MAP_HALF) + 5 * dpr), Y(mid) + 4 * dpr);
+    }
+  }
+  // Bo: ngoài vòng tô đỏ, vòng sắp tới nét đứt.
+  const zone = zoneCircleNow();
+  if (zone) {
+    const zx = X(zone.x),
+      zy = Y(zone.z),
+      zr = Math.max(0, zone.radius * K);
+    ctx.beginPath();
+    ctx.rect(0, 0, W, W);
+    ctx.moveTo(zx + zr, zy);
+    ctx.arc(zx, zy, zr, 0, Math.PI * 2, true);
+    ctx.fillStyle = "rgba(150,20,20,.32)";
+    ctx.fill("evenodd");
+    ctx.beginPath();
+    ctx.arc(zx, zy, zr, 0, Math.PI * 2);
+    ctx.strokeStyle = "#6fd8ff";
+    ctx.lineWidth = 2 * dpr;
+    ctx.stroke();
+    const next = gameState.zone?.nextCenter
+      ? { c: gameState.zone.nextCenter, r: gameState.zone.nextRadius }
+      : gameState.zone?.phase === "shrink"
+        ? { c: gameState.zone.toCenter, r: gameState.zone.toRadius }
+        : null;
+    if (next) {
+      ctx.setLineDash([6 * dpr, 5 * dpr]);
+      ctx.strokeStyle = gameState.zone.phase === "wait" ? "#d6ff45" : "#ffffff";
+      ctx.lineWidth = 1.8 * dpr;
+      ctx.beginPath();
+      ctx.arc(X(next.c.x), Y(next.c.z), Math.max(0, next.r * K), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+  // Đường bay máy bay.
+  if (plane) {
+    const a = planePosAt(0),
+      b = planePosAt(plane.tExit + 8);
+    ctx.setLineDash([5 * dpr, 5 * dpr]);
+    ctx.strokeStyle = "rgba(255,255,255,.45)";
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(X(a.x), Y(a.z));
+    ctx.lineTo(X(b.x), Y(b.z));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // Vị trí + hướng nhìn của mình.
+  const me = bigMapMe();
+  const px = X(me.x),
+    py = Y(me.z);
+  const fx = -Math.sin(local.yaw),
+    fz = -Math.cos(local.yaw);
+  const ang = Math.atan2(fz, fx);
+  ctx.beginPath();
+  ctx.moveTo(px, py);
+  ctx.arc(px, py, Math.max(26 * dpr, 18 * K), ang - Math.PI / 6, ang + Math.PI / 6);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(255,255,255,.3)";
+  ctx.fill();
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.rotate(ang + Math.PI / 2);
+  ctx.beginPath();
+  ctx.moveTo(0, -9 * dpr);
+  ctx.lineTo(6 * dpr, 7 * dpr);
+  ctx.lineTo(0, 3.5 * dpr);
+  ctx.lineTo(-6 * dpr, 7 * dpr);
+  ctx.closePath();
+  ctx.fillStyle = "#ffe14a";
+  ctx.strokeStyle = "#1a1a12";
+  ctx.lineWidth = 2 * dpr;
+  ctx.stroke();
+  ctx.fill();
+  ctx.restore();
+  // Thước tỉ lệ.
+  const meters = [10, 25, 50, 100, 200, 500].find((m) => m * K >= 70 * dpr) || 500;
+  const len = meters * K;
+  ctx.fillStyle = "rgba(0,0,0,.55)";
+  ctx.fillRect(W - len - 28 * dpr, W - 30 * dpr, len + 18 * dpr, 22 * dpr);
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 2 * dpr;
+  ctx.beginPath();
+  ctx.moveTo(W - len - 19 * dpr, W - 14 * dpr);
+  ctx.lineTo(W - 19 * dpr, W - 14 * dpr);
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.fillText(`${meters} m`, W - len - 19 * dpr, W - 18 * dpr);
+}
 function drawFlightMap() {
   // The map is detailed and only needs refreshing a few times per second.
   if (performance.now() - lastFlightMapDraw < 150) return;
@@ -7461,7 +8544,7 @@ function drawFlightMap() {
   const k = S / (MAP_HALF * 2);
   const X = (x) => S / 2 + x * k;
   const Y = (z) => S / 2 + z * k;
-  const forest = mapId === "forest";
+  const forest = mapId !== "desert"; // Thành Cổ dùng chung nền xanh với rừng
   // Lớp địa hình tĩnh (đất, sông, đường, đồi, nhà, cây...) chỉ vẽ MỘT lần mỗi
   // map rồi dán lại; trước đây ~500 vật thể được vẽ lại mỗi 150 ms.
   ctx.clearRect(0, 0, S, S);
@@ -8033,8 +9116,13 @@ function updateVehicleEngineAudio(vehicle, groundY) {
   const occupied = gameState?.players?.some(
     (player) => player.vehicleId === vehicle.id,
   );
+  // Tắt máy (Z): im lặng trừ khi đang nhấn ga (W / S). Xe mình lái lấy phím
+  // bấm ngay trên máy để tiếng máy phản hồi tức thì.
+  const driving = local.vehicleId === vehicle.id && local.vehicleSeat === 0;
+  const throttle = driving ? carInputs().throttle : vehicle.throttle;
+  const engineSilent = vehicle.engineOff && !throttle;
   const loudness =
-    !soundOn || vehicle.destroyed || vehicle.submerged || !occupied
+    !soundOn || vehicle.destroyed || vehicle.submerged || !occupied || engineSilent
       ? 0
       : (0.34 + Math.min(0.28, Math.abs(vehicle.speed) * 0.014)) *
         sfxLevel() *
@@ -8574,6 +9662,7 @@ function frame() {
   animateAvatars(dt);
   updateAutoFire();
   updateShotEffects();
+  updateGrenadeWorld(dt);
   // Trên máy bay / đang nhảy dù thì mô phỏng riêng; chỉ ở phòng chờ hoặc mặt đất mới đi bộ.
   if (local.state === "plane") updatePlane();
   else if (local.state === "freefall" || local.state === "parachute")
@@ -8582,6 +9671,7 @@ function frame() {
   updateGrassVisibility();
   // updateWeather(dt); // weather particle update disabled for performance testing
   updateFlightHud();
+  drawBigMap();
   updateMatchClock();
   updateZoneHud();
   updateZoneWorld();
@@ -8618,12 +9708,14 @@ function frame() {
       !local.healing &&
       !backpackOpen;
     if (wantSprint && !local.sprinting) {
-      local.crouchToggle = false; // chạy thì đứng dậy
+      // Đang ngồi thì VẪN ngồi (Shift = đi khom nhanh), đứng thì chạy nhanh.
       if (scoped) setScope(false); // chạy thì không ngắm được
     }
     local.sprinting = wantSprint;
     const isSprinting = wantSprint;
-    const isCrouching = !currentlyInWater && !isProne && Boolean(local.crouchToggle);
+    const underFloor = !isProne && underStiltFloorAt(local.x, local.z);
+    if (underFloor) local.sprinting = false;
+    const isCrouching = !currentlyInWater && !isProne && (Boolean(local.crouchToggle) || underFloor);
 
     local.crouching = isCrouching;
 
@@ -8638,7 +9730,7 @@ function frame() {
     if (!isProne && isCrouching && isSlowWalking) {
       moveSpeed = CROUCH_SLOW_SPEED;
     } else if (!isProne && isCrouching) {
-      moveSpeed = CROUCH_SPEED;
+      moveSpeed = isSprinting ? CROUCH_RUN_SPEED : CROUCH_SPEED;
     } else if (!isProne && isSlowWalking) {
       moveSpeed = SLOW_SPEED;
     }
@@ -8664,8 +9756,12 @@ function frame() {
     // Resolve axes separately so the player slides along walls instead of sticking.
     const stayInWaterWhileSubmerged =
       currentlyInWater && (local.swimDepth || 0) > 0.12;
+    // Rơi khỏi mép cầu thang xuống sát chân tường → đã nằm trong vùng đệm va
+    // chạm, mọi bước đều bị chặn (kẹt, giật). Khi đó chỉ chặn nếu tâm lọt vào
+    // vật rắn để bước ra được (cùng luật với server).
+    const stuck = isBlockedAt(local.x, local.z);
     const canMoveTo = (x, z) =>
-      !isBlockedAt(x, z) &&
+      !isBlockedAt(x, z, stuck ? 0.05 : null) &&
       (!stayInWaterWhileSubmerged || waterAt(x, z) || isOnBridgeAt(x, z, 0.8));
     if (canMoveTo(local.x + moveX, local.z)) local.x += moveX;
     if (canMoveTo(local.x, local.z + moveZ)) local.z += moveZ;
@@ -8848,7 +9944,15 @@ function frame() {
     camera.position.set(deathView.x, deathView.y + 45, deathView.z);
     camera.lookAt(deathView.x, deathView.y, deathView.z);
   }
-  renderer.render(scene, camera);
+  if (screenShake > 0 && camera) {
+    const sx = (Math.random() - 0.5) * screenShake * 0.12,
+      sy = (Math.random() - 0.5) * screenShake * 0.12;
+    camera.position.x += sx;
+    camera.position.y += sy;
+    renderer.render(scene, camera);
+    camera.position.x -= sx;
+    camera.position.y -= sy;
+  } else renderer.render(scene, camera);
   adaptResolution(dt);
   requestAnimationFrame(frame);
 }

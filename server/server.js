@@ -7,6 +7,8 @@ const zlib = require("node:zlib");
 const crypto = require("node:crypto");
 const { WebSocketServer } = require("ws");
 const Terrain = require("../public/terrain.js");
+// Nhà sàn + thành chính: hình học dùng chung với client (public/structures.js).
+const Structures = require("../public/structures.js");
 const { createObstacles } = require("./mapgen.js");
 
 const ROOT = path.join(__dirname, "..", "public");
@@ -297,6 +299,8 @@ const snapshot = (room) => ({
   mapSeed: room.mapSeed,
   mapId: room.mapId,
   // weatherActive: Boolean(room.weather?.active), // weather sync disabled
+  // Lựu đạn đang bay / lăn trên đất (server mô phỏng, client chỉ vẽ).
+  grenades: (room.grenades || []).map((g) => ({ id: g.id, kind: g.kind, x: r2(g.x), y: r2(g.y), z: r2(g.z), vx: r2(g.vx), vy: r2(g.vy), vz: r2(g.vz) })),
   vehicles: (room.vehicles || []).map((v) => ({
     id: v.id,
     color: v.color,
@@ -308,6 +312,7 @@ const snapshot = (room) => ({
     steer: v.controls?.steer || 0,
     throttle: v.controls?.throttle || 0,
     brake: Boolean(v.controls?.brake),
+    engineOff: Boolean(v.engineOff), // tài xế bấm Z: tắt tiếng máy khi không ga
     hp: v.hp,
     destroyed: v.destroyed,
     smoke: v.smoke,
@@ -349,6 +354,13 @@ const snapshot = (room) => ({
     punchId: p.punchId || 0,
     reserveAmmo: p.reserveAmmo,
     medkits: p.medkits || 0,
+    frags: p.frags || 0,
+    flashes: p.flashes || 0,
+    // Người khác nhìn thấy: đang cầm lựu đạn loại nào, đã rút chốt chưa, số lần ném.
+    throwable: p.alive && !p.vehicleId ? p.throwable || null : null,
+    cooking: Boolean(p.cook),
+    aiming: Boolean(p.aimThrow) && p.alive && !p.vehicleId, // đang giữ chuột lấy đà ném
+    throwId: p.throwId || 0,
     healing: p.alive && p.healingUntil > Date.now(),
     healLeftMs: p.alive ? Math.max(0, (p.healingUntil || 0) - Date.now()) : 0,
     reloading: p.reloadingUntil > Date.now(),
@@ -564,6 +576,16 @@ const MAX_HP = 100;
 // Sức chứa balo (đạn dự trữ và bịch máu). Không tính đạn đang lắp trong súng.
 const MAX_RESERVE_AMMO = 210;
 const MAX_MEDKITS = 5;
+// Lựu đạn: nổ (frag) và choáng (flash). Mỗi loại mang tối đa MAX_THROWABLES quả.
+const MAX_THROWABLES = 3;
+const FRAG_COUNT = 60,
+  FLASH_COUNT = 40;
+const GRENADE = {
+  frag: { fuse: 6000, kill: 3.5, reach: 11, name: "LỰU ĐẠN NỔ" },
+  flash: { fuse: 2000, name: "LỰU ĐẠN CHOÁNG" }, // choáng nổ nhanh hơn
+};
+const THROW_SPEED = 25; // m/s — ném xa ~30 m (góc 45°), khớp client
+const throwKey = (kind) => (kind === "flash" ? "flashes" : "frags");
 // ---------------------------------------------------------------------------
 // LƯỚI KHÔNG GIAN (spatial grid) cho vật cản tĩnh
 // ---------------------------------------------------------------------------
@@ -580,7 +602,7 @@ function obstacleBoundRadius(o) {
   if (o.type === "lake") return Math.max(w, length);
   // Đường được đo như hình con nhộng (đoạn thẳng + nửa bề rộng ở hai đầu).
   if (o.type === "road" || o.type === "river") return (length + w) / 2;
-  return Math.hypot(w, length) * 0.6;
+  return Math.hypot(w, length) * 0.6 + (o.lift ? 4 : 0); // nhà sàn: + cầu thang
 }
 // Gắn hàm tra ô trực tiếp lên mảng obstacles (JSON.stringify bỏ qua thuộc tính
 // không phải chỉ số nên dữ liệu gửi cho client không đổi).
@@ -664,6 +686,18 @@ function createLoot(room) {
   const houses = room.obstacles.filter(
     (o) => o.type === "house" || o.type === "hut",
   );
+  // Thành chính: mỗi tầng là một "nhà" riêng trong vòng chia đồ (đồ nằm đúng tầng).
+  const keepFloors = [];
+  for (const keep of room.obstacles.filter((o) => o.type === "keep")) {
+    const ground = obstacleBaseY(room, keep);
+    const byLevel = new Map();
+    for (const slot of Structures.keepLootSlots()) {
+      const [x, z] = Structures.toWorld(keep, slot.lx, slot.lz);
+      if (!byLevel.has(slot.level)) byLevel.set(slot.level, []);
+      byLevel.get(slot.level).push({ x, z, y: Math.round((ground + slot.y) * 100) / 100 });
+    }
+    for (const cells of byLevel.values()) keepFloors.push(cells);
+  }
   const slots = houses.map((house) => {
     const inner = house.w / 2 - 0.8;
     const cells = [];
@@ -685,7 +719,15 @@ function createLoot(room) {
     }
     return cells;
   });
-  const order = houses.map((_, i) => i);
+  for (const cells of keepFloors) {
+    for (let i = cells.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [cells[i], cells[j]] = [cells[j], cells[i]];
+    }
+    // Mỗi tầng thành chính được chia đồ nhiều lượt (công trình lớn, nhiều đồ hơn nhà).
+    for (let k = 0; k < 3; k++) slots.push(cells);
+  }
+  const order = slots.map((_, i) => i);
   for (let i = order.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [order[i], order[j]] = [order[j], order[i]];
@@ -708,6 +750,7 @@ function createLoot(room) {
         type,
         x: Math.round(cell.x * 100) / 100,
         z: Math.round(cell.z * 100) / 100,
+        ...(cell.y !== undefined ? { y: cell.y } : {}), // đồ ở tầng trên thành chính
         amount,
       });
       made++;
@@ -724,6 +767,8 @@ function createLoot(room) {
       item.yaw = Math.round(Math.random() * 628) / 100;
     }
   }
+  place("frag", FRAG_COUNT, 1);
+  place("flash", FLASH_COUNT, 1);
   place("ammo", AMMO_BOX_COUNT, AMMO_PER_BOX);
   place("medkit", MEDKIT_COUNT, 1);
   return items;
@@ -761,10 +806,15 @@ function groundHeightAt(room, x, z) {
   return height;
 }
 // Walkable upper surfaces: the pitched roof and the safe crown of large rocks.
-function raisedSurfaceAt(room, x, z) {
-  let best = null;
+// Mọi mặt cao hơn đất tại (x, z): mái nhà, đỉnh đá, sàn / cầu thang nhà sàn.
+function raisedSurfacesAt(room, x, z) {
+  const out = [];
   for (const o of nearObstacles(room.obstacles, x, z)) {
-    // Chỉ nhà, chòi và đá mới có mặt "đứng được".
+    if (o.type === "keep") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      Structures.keepSurfaces(o, obstacleBaseY(room, o), lx, lz, out);
+      continue;
+    }
     if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
     if (o.type === "house" || o.type === "hut") {
       const dx = x - o.x,
@@ -773,10 +823,11 @@ function raisedSurfaceAt(room, x, z) {
         s = Math.sin(o.yaw || 0);
       const lx = c * dx - s * dz,
         lz = s * dx + c * dz;
+      if (o.lift) Structures.stiltSurfaces(o, obstacleBaseY(room, o), lx, lz, out);
       const halfX = Math.max(o.w * 0.53, o.w / 2 + 0.6);
       const halfZ = o.w / 2 + 0.6;
       if (Math.abs(lx) > halfX || Math.abs(lz) > halfZ) continue;
-      const base = obstacleBaseY(room, o);
+      const base = obstacleBaseY(room, o) + (o.lift || 0); // nhà sàn: mái trên sàn cao
       const wallH = o.h * 0.72;
       const height =
         base +
@@ -784,9 +835,8 @@ function raisedSurfaceAt(room, x, z) {
         o.w * 0.16 +
         0.12 * Math.cos(0.48) +
         (o.w * 0.245 - Math.abs(lx)) * Math.sin(0.48);
-      if (!best || height > best.height)
-        best = { height, base, type: "roof", obstacle: o };
-    } else if (o.type === "rock") {
+      out.push({ height, base, type: "roof", obstacle: o });
+    } else {
       const dx = x - o.x,
         dz = z - o.z;
       const dist = Math.hypot(dx, dz);
@@ -797,25 +847,29 @@ function raisedSurfaceAt(room, x, z) {
         nz = dz / (o.w * 0.4);
       const r2 = Math.min(1, nx * nx + nz * nz);
       const height = base + o.h * (0.42 + 0.5 * Math.sqrt(1 - r2));
-      if (!best || height > best.height)
-        best = { height, base, type: "rock", obstacle: o };
+      out.push({ height, base, type: "rock", obstacle: o });
     }
   }
+  return out;
+}
+// Mặt cao nhất (giữ nguyên nghĩa cũ cho các chỗ chỉ cần "đang đứng trên gì").
+function raisedSurfaceAt(room, x, z) {
+  let best = null;
+  for (const c of raisedSurfacesAt(room, x, z)) if (!best || c.height > best.height) best = c;
   return best;
 }
+// Xét MỌI mặt: đứng trên sàn nhà sàn thì mái ở trên không được chọn nhầm.
 function landingHeightAt(room, x, z, previousY) {
-  const terrain = groundHeightAt(room, x, z);
-  const raised = raisedSurfaceAt(room, x, z);
-  return raised && previousY >= raised.height - 0.25
-    ? Math.max(terrain, raised.height)
-    : terrain;
+  let h = groundHeightAt(room, x, z);
+  for (const c of raisedSurfacesAt(room, x, z))
+    if (previousY >= c.height - 0.25 && c.height > h) h = c.height;
+  return h;
 }
 function standingHeightAt(room, x, z, previousGroundY) {
-  const terrain = groundHeightAt(room, x, z);
-  const raised = raisedSurfaceAt(room, x, z);
-  return raised && previousGroundY > raised.base + 0.55
-    ? Math.max(terrain, raised.height)
-    : terrain;
+  let h = groundHeightAt(room, x, z);
+  for (const c of raisedSurfacesAt(room, x, z))
+    if (previousGroundY > c.base + 0.55 && c.height > h) h = c.height;
+  return h;
 }
 function waterAt(room, x, z) {
   for (const water of nearObstacles(room.obstacles, x, z)) {
@@ -876,6 +930,8 @@ const SPRINT_SPEED = 9.5;
 // Keep server movement blockers aligned with the visible prop footprints.
 function obstacleFootprintRadius(o) {
   if (o.type === "tree") return o.w * 0.25;
+  if (o.type === "banana") return o.w * 0.14; // thân chuối mảnh, lách qua được
+  if (o.type === "palm") return o.w * 0.2;
   if (o.type === "deadTree") return o.w * 0.28;
   if (o.type === "cactus") return o.w * 0.48;
   if (o.type === "rock") return o.w * 0.46;
@@ -888,6 +944,7 @@ function blockedPosition(
   ignoreId,
   ignoreVehicleId = null,
   ignorePlayers = false,
+  radiusOverride = null, // đang kẹt trong vùng đệm: chỉ chặn khi TÂM lọt vào vật rắn
 ) {
   if (
     x < -MAP_HALF + 1 ||
@@ -897,8 +954,8 @@ function blockedPosition(
   )
     return true;
   const mover = room.players.get(ignoreId);
-  const moverRadius = mover?.prone ? 1.15 : PLAYER_RADIUS;
-  const obstacleRadius = mover?.prone ? 0.55 : PLAYER_RADIUS;
+  const moverRadius = radiusOverride ?? (mover?.prone ? 1.15 : PLAYER_RADIUS);
+  const obstacleRadius = radiusOverride ?? (mover?.prone ? 0.55 : PLAYER_RADIUS);
   // Tương tự client: dùng vị trí hiện tại của người chơi để biết họ đang đứng
   // trên mái/đá nào, không dùng điểm đến — tránh chặn nhầm khi đi xuống.
   const support =
@@ -912,11 +969,27 @@ function blockedPosition(
         support.obstacle === o &&
         mover.groundY > support.base + o.h * 0.72 + 0.1;
       if (moverIsOnRoof) continue;
+      if (o.lift) {
+        // Gầm nhà sàn: chỉ vướng cột gỗ khi NGỒI / NẰM; đứng thẳng / xe thì vướng sàn.
+        const [lx, lz] = Structures.toLocal(o, x, z);
+        const rel = mover ? mover.groundY - obstacleBaseY(room, o) : null;
+        const hit = Structures.stiltBlocked(o, lx, lz, obstacleRadius, rel, Boolean(mover?.crouching || mover?.prone));
+        if (hit !== null) {
+          if (hit) return true;
+          continue;
+        }
+      }
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
       continue;
     }
-    if (o.type === "fence") {
+    if (o.type === "fence" || o.type === "stonewall") {
       if (blockedByFence(o, x, z, obstacleRadius)) return true;
+      continue;
+    }
+    if (o.type === "keep") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      const rel = mover ? mover.groundY - obstacleBaseY(room, o) : null;
+      if (Structures.keepBlocked(o, lx, lz, obstacleRadius, rel)) return true;
       continue;
     }
     const footprint = obstacleFootprintRadius(o);
@@ -1169,7 +1242,7 @@ function lootSfx(room, p, sound, x = p.x, z = p.z) {
 // Nay map được sinh SẴN lúc server rảnh (không có trận nào đang diễn ra);
 // tạo phòng chỉ lấy ra dùng. Hết bể (hiếm) mới sinh tại chỗ như cũ.
 const MAP_POOL_SIZE = 2; // mỗi loại map giữ sẵn 2 bản (~vài MB RAM)
-const mapPool = { forest: [], desert: [] };
+const mapPool = { forest: [], desert: [], jungle: [] };
 function buildMap(mapId) {
   const mapSeed = Math.floor(Math.random() * 0xffffffff);
   const obstacles = attachObstacleGrid(createObstacles(mapSeed, mapId));
@@ -1219,7 +1292,7 @@ function startPlane(room) {
   broadcastRaw(room, {
     type: "loot",
     items: room.loot,
-    limits: { ammo: MAX_RESERVE_AMMO, medkits: MAX_MEDKITS },
+    limits: { ammo: MAX_RESERVE_AMMO, medkits: MAX_MEDKITS, throwables: MAX_THROWABLES },
   });
   broadcast(room);
 }
@@ -1292,13 +1365,21 @@ function dropDeathLoot(room, victim) {
   // không có băng nào → dồn hết vào hòm như cũ).
   const crateAmmo = (victim.reserveAmmo || 0) + (weapon ? 0 : victim.ammo || 0);
   const medkit = victim.medkits || 0;
+  const frag = victim.frags || 0,
+    flash = victim.flashes || 0;
+  if (victim.cook) {
+    // Đang rút chốt mà bị hạ: quả lựu đạn rơi tại chỗ, vẫn nổ đúng giờ.
+    spawnGrenade(room, victim, victim.cook.kind, { x: victim.x, y: (victim.groundY || 0) + 0.6, z: victim.z }, { x: 0, y: 0, z: 0 }, victim.cook.at);
+    victim[throwKey(victim.cook.kind)] = Math.max(0, (victim[throwKey(victim.cook.kind)] || 0) - 1);
+    victim.cook = null;
+  }
   room.crates ||= [];
-  if (crateAmmo > 0 || medkit > 0)
+  if (crateAmmo > 0 || medkit > 0 || frag > 0 || flash > 0)
     room.crates.push({
       id: `crate-${room.nextCrateId++}`,
       x: Math.round(spot.x * 100) / 100,
       z: Math.round(spot.z * 100) / 100,
-      contents: { ammo: crateAmmo, medkit },
+      contents: { ammo: crateAmmo, medkit, frag: victim.frags || 0, flash: victim.flashes || 0 },
     });
   if (weapon) {
     // Ngay cạnh hòm (bên phải theo hướng nhìn của người chết), không chồng lên hòm.
@@ -1321,6 +1402,10 @@ function dropDeathLoot(room, victim) {
   // Người chết không còn giữ gì (tránh rơi đồ 2 lần nếu có đường chết khác).
   victim.reserveAmmo = 0;
   victim.medkits = 0;
+  victim.frags = 0;
+  victim.flashes = 0;
+  victim.throwable = null;
+  victim.aimThrow = false;
   victim.ammo = 0;
   victim.weapon = "none";
 }
@@ -1415,7 +1500,7 @@ function vehicleFootprintBlocked(room, vehicle, x, z, yaw) {
 // Lan can / hàng rào đang chặn điểm này (để xe trượt dọc theo nó).
 function fenceAt(room, x, z) {
   for (const o of nearObstacles(room.obstacles, x, z))
-    if (o.type === "fence" && blockedByFence(o, x, z, PLAYER_RADIUS)) return o;
+    if ((o.type === "fence" || o.type === "stonewall") && blockedByFence(o, x, z, PLAYER_RADIUS)) return o;
   return null;
 }
 // Di chuyển xe một bước có xử lý va chạm:
@@ -1651,10 +1736,273 @@ function tickVehicles(room, now) {
   }
   if (changed) broadcast(room);
 }
+// ---------------------------------------------------------------------------
+// LỰU ĐẠN: server mô phỏng quỹ đạo (trọng lực, nảy trên đất / mái / sàn, dội
+// tường) và nổ đúng giờ. Kíp nổ tính từ lúc rút chốt (R, cook) nếu có, không
+// thì từ lúc ném. Giữ quá giờ trên tay thì nổ ngay tại người ném.
+// ---------------------------------------------------------------------------
+let nextGrenadeId = 1;
+function spawnGrenade(room, owner, kind, pos, vel, fuseStart) {
+  room.grenades ||= [];
+  room.grenades.push({
+    id: nextGrenadeId++,
+    kind,
+    ownerId: owner.id,
+    ownerName: owner.name,
+    x: pos.x,
+    y: pos.y,
+    z: pos.z,
+    vx: vel.x,
+    vy: vel.y,
+    vz: vel.z,
+    explodeAt: fuseStart + GRENADE[kind].fuse,
+    lastAt: Date.now(),
+  });
+}
+// Điểm (x, y, z) có nằm TRONG vật rắn không — tính cả độ cao: cửa sổ, cửa ra
+// vào, khoảng trống giữa cột nhà sàn đều để lọt; tường, đá, cây, sàn thì chặn.
+function solidPoint(room, x, y, z, skipGround = false) {
+  if (!skipGround && groundHeightAt(room, x, z) > y + 0.05) return true;
+  for (const o of nearObstacles(room.obstacles, x, z)) {
+    if (o.solid === false) continue;
+    const base = obstacleBaseY(room, o);
+    if (y < base - 0.5) continue;
+    if (o.type === "house" || o.type === "hut") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      const half = o.w / 2;
+      if (Math.abs(lx) > half + 0.05 || Math.abs(lz) > half + 0.05) continue;
+      if (o.lift) {
+        const ry = y - base;
+        if (ry < o.lift + 0.1) {
+          for (const b of Structures.stiltBulletBoxes(o))
+            if (Math.abs(lx - b.x) < b.hx && Math.abs(ry - b.y) < b.hy && Math.abs(lz - b.z) < b.hz) return true;
+          continue;
+        }
+      }
+      const floor = base + (o.lift || 0);
+      const wallH = o.h * 0.72;
+      const ry = y - floor;
+      if (ry < 0 || ry > wallH) continue;
+      const side = Math.abs(lx) >= half - 0.2,
+        end = Math.abs(lz) >= half - 0.2;
+      if (!side && !end) continue; // trong phòng: không khí
+      if (side && Math.abs(lz) < 0.72 && ry > wallH * 0.34 && ry < wallH * 0.73) continue; // cửa sổ
+      if (end && lz < 0 && Math.abs(lx) < 1.05 && ry < Math.min(2.25, wallH * 0.78)) continue; // cửa ra vào
+      return true;
+    }
+    if (o.type === "keep") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      const ry = y - base;
+      for (const b of Structures.keepParts(o))
+        if (b.kind !== "floor" && Math.abs(lx - b.x) < b.hx && Math.abs(ry - b.y) < b.hy && Math.abs(lz - b.z) < b.hz) return true;
+      if (Structures.keepRampSolid(lx, ry, lz)) return true; // khối cầu thang đặc
+      continue;
+    }
+    if (o.type === "fence" || o.type === "stonewall") {
+      if (y < base + o.h && blockedByFence(o, x, z, 0)) return true;
+      continue;
+    }
+    if (o.type === "tower") {
+      if (y < base + o.h && Math.abs(x - o.x) < o.w / 2 && Math.abs(z - o.z) < o.w / 2) return true;
+      continue;
+    }
+    const d = Math.hypot(x - o.x, z - o.z);
+    if (o.type === "tree") {
+      if (d < o.w * 0.25 && y < base + o.h * 0.62) return true;
+    } else if (o.type === "deadTree") {
+      if (d < o.w * 0.28 && y < base + o.h) return true;
+    } else if (o.type === "cactus") {
+      if (d < o.w * 0.48 && y < base + o.h) return true;
+    } else if (o.type === "banana" || o.type === "palm") {
+      if (d < o.w * (o.type === "palm" ? 0.2 : 0.14) && y < base + o.h * 0.6) return true;
+    } else if (o.type === "rock") {
+      const r = o.w * 0.46;
+      if (d < r && y < base + o.h * (0.42 + 0.5 * Math.sqrt(Math.max(0, 1 - (d / r) ** 2)))) return true;
+    }
+  }
+  return false;
+}
+// Đoạn thẳng a → b có bị vật rắn chắn không (bước 0.1 m: tường chỉ dày ~0.2 m).
+function blastBlocked(room, a, b) {
+  const len = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+  const n = Math.ceil(len / 0.1);
+  for (let i = 1; i < n; i++) {
+    const t = i / n;
+    if (solidPoint(room, a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)) return true;
+  }
+  return false;
+}
+// Tỉ lệ thân người LỘ ra trước tâm nổ (đầu, ngực, chân): che kín hết = 0.
+function exposure(room, blast, q) {
+  const base = q.swimming ? q.swimY || 0 : q.groundY || 0;
+  const heights = q.prone ? [0.35, 0.3, 0.25] : q.crouching ? [1.25, 0.8, 0.35] : [1.6, 1.1, 0.4];
+  let open = 0;
+  for (const h of heights) if (!blastBlocked(room, blast, { x: q.x, y: base + h, z: q.z })) open++;
+  return open / heights.length;
+}
+function damageVehicleBy(vehicle, hits) {
+  if (vehicle.destroyed || hits <= 0) return;
+  vehicle.hits = (vehicle.hits || 0) + hits;
+  vehicle.hp = Math.max(0, 60 - vehicle.hits);
+  vehicle.smoke = vehicle.hits >= 50 ? 2 : vehicle.hits >= 30 ? 1 : 0;
+  if (vehicle.hits >= 60) {
+    vehicle.destroyed = true;
+    vehicle.speed = 0;
+    vehicle.blastPending = true;
+    vehicle.controls = { throttle: 0, steer: 0, brake: false };
+  }
+}
+function killByBlast(room, victim, g, distance) {
+  if (!victim.alive) return;
+  victim.hp = 0;
+  victim.alive = false;
+  detachFromVehicle(room, victim);
+  victim.placement = [...room.players.values()].filter((pl) => pl.alive).length + 1;
+  const killer = g.ownerId !== victim.id ? room.players.get(g.ownerId) : null;
+  if (killer) killer.kills++;
+  room.eliminationSequence = (room.eliminationSequence || 0) + 1;
+  room.lastElimination = {
+    id: room.eliminationSequence,
+    victimId: victim.id,
+    victimName: victim.name,
+    killerId: killer?.id || null,
+    killerName: killer?.name || (g.ownerId === victim.id ? "Lựu đạn của chính mình" : g.ownerName || "Lựu đạn"),
+    weapon: GRENADE[g.kind].name,
+    headshot: false,
+    distance: Math.round(distance),
+  };
+  dropDeathLoot(room, victim);
+  const alive = [...room.players.values()].filter((pl) => pl.alive);
+  if (alive.length <= 1 && !room.finishAt) {
+    room.finishAt = Date.now() + MATCH_END_DELAY_MS;
+    if (alive[0]) send(alive[0].ws, { type: "toast", text: "CHIẾN THẮNG! TIẾNG NỔ CUỐI CÙNG ĐÃ DỨT" });
+  }
+}
+function explodeGrenade(room, g) {
+  const blast = { x: g.x, y: g.y + 0.25, z: g.z };
+  if (g.kind === "flash") {
+    // Chỉ ai có đường nhìn tới quả choáng (không bị tường / đá / cây che mắt)
+    // mới bị loá; client tự tính thêm độ mạnh theo khoảng cách + hướng nhìn.
+    const seen = [];
+    for (const q of room.players.values()) {
+      if (!q.alive || Math.hypot(q.x - g.x, q.z - g.z) > 22) continue;
+      const eye = { x: q.x, y: (q.swimming ? q.swimY || 0 : q.groundY || 0) + (q.prone ? 0.45 : q.crouching ? 1.34 : 1.8), z: q.z };
+      if (!blastBlocked(room, blast, eye)) seen.push(q.id);
+    }
+    broadcastRaw(room, { type: "explosion", kind: g.kind, x: r2(g.x), y: r2(g.y), z: r2(g.z), ownerId: g.ownerId, seen });
+    return;
+  }
+  broadcastRaw(room, { type: "explosion", kind: g.kind, x: r2(g.x), y: r2(g.y), z: r2(g.z), ownerId: g.ownerId });
+  const spec = GRENADE.frag;
+  for (const q of room.players.values()) {
+    if (!q.alive || !["ground", "parachute", "freefall"].includes(q.state)) continue;
+    const chest = { x: q.x, y: (q.swimming ? q.swimY || 0 : q.groundY || 0) + (q.prone ? 0.35 : q.crouching ? 0.8 : 1.1), z: q.z };
+    const d = Math.hypot(chest.x - blast.x, chest.y - blast.y, chest.z - blast.z);
+    if (d >= spec.reach) continue;
+    // Núp KÍN người sau tường / đá / sườn đồi: không mất máu. Lộ một phần
+    // (đầu / ngực / chân) thì chịu đúng phần đó.
+    const open = exposure(room, blast, q);
+    if (open <= 0) continue;
+    let dmg = d <= spec.kill ? 100 : 95 * Math.pow(1 - (d - spec.kill) / (spec.reach - spec.kill), 1.4) + 5;
+    if (open < 1) dmg *= open;
+    dmg = Math.round(dmg);
+    if (dmg <= 0) continue;
+    q.hp = Math.max(0, q.hp - dmg);
+    room.hitSequence = (room.hitSequence || 0) + 1;
+    room.lastHit = { id: room.hitSequence, targetId: q.id, shooterId: g.ownerId, point: blast };
+    if (q.hp <= 0) killByBlast(room, q, g, d);
+    else if (q.ws) send(q.ws, { type: "toast", text: `TRÚNG MẢNH LỰU ĐẠN · -${dmg} HP` });
+  }
+  for (const v of room.vehicles || []) {
+    const d = Math.hypot(v.x - blast.x, v.z - blast.z);
+    if (d < 6) damageVehicleBy(v, Math.round(45 * (1 - d / 6)));
+  }
+}
+function grenadeHits(room, g, nx, nz) {
+  if (nx < -MAP_HALF + 1 || nx > MAP_HALF - 1 || nz < -MAP_HALF + 1 || nz > MAP_HALF - 1) return true;
+  // Kiểm cả điểm giữa bước để không xuyên tường mỏng khi bay nhanh.
+  for (const t of [0.5, 1]) {
+    const x = g.x + (nx - g.x) * t,
+      z = g.z + (nz - g.z) * t;
+    if (solidPoint(room, x, g.y, z, true)) return true;
+  }
+  for (const v of room.vehicles || []) {
+    const dx = nx - v.x,
+      dz = nz - v.z;
+    const c = Math.cos(v.yaw),
+      s = Math.sin(v.yaw);
+    if (Math.abs(c * dx - s * dz) < 1.05 && Math.abs(s * dx + c * dz) < 1.86 && g.y < (v.y ?? groundHeightAt(room, v.x, v.z)) + 1.5) return true;
+  }
+  return false;
+}
+function tickGrenades(room, now) {
+  let changed = false;
+  // Rút chốt quá giờ mà chưa ném: nổ trên tay.
+  for (const p of room.players.values()) {
+    if (!p.cook || now < p.cook.at + GRENADE[p.cook.kind].fuse) continue;
+    const key = throwKey(p.cook.kind);
+    p[key] = Math.max(0, (p[key] || 0) - 1);
+    const g = { id: nextGrenadeId++, kind: p.cook.kind, ownerId: p.id, ownerName: p.name, x: p.x, y: (p.groundY || 0) + 1.1, z: p.z };
+    p.cook = null;
+    explodeGrenade(room, g);
+    changed = true;
+  }
+  if (!room.grenades?.length) return changed;
+  const remaining = [];
+  for (const g of room.grenades) {
+    const dt = Math.min(0.2, Math.max(0, (now - g.lastAt) / 1000));
+    g.lastAt = now;
+    const sub = Math.max(1, Math.ceil(dt / 0.01));
+    const h = dt / sub;
+    for (let i = 0; i < sub; i++) {
+      g.vy -= 20 * h;
+      const nx = g.x + g.vx * h,
+        nz = g.z + g.vz * h;
+      // Dội tường / đá / cây / xe theo 3D: bay QUA được cửa sổ, cửa ra vào,
+      // trên đầu lan can pháo đài, trên nóc nhà; chỉ chạm vật rắn thật mới nảy lại.
+      if (grenadeHits(room, g, nx, nz)) {
+        g.vx *= -0.35;
+        g.vz *= -0.35;
+      } else {
+        g.x = nx;
+        g.z = nz;
+      }
+      g.y += g.vy * h;
+      const floor = landingHeightAt(room, g.x, g.z, g.y + 0.3) + 0.08;
+      if (g.y <= floor) {
+        g.y = floor;
+        if (g.vy < -1.5) {
+          // Va đập: nảy lên, mất bớt tốc độ ngang.
+          g.vy = -g.vy * 0.32;
+          g.vx *= 0.7;
+          g.vz *= 0.7;
+        } else {
+          // Đang LĂN: ma sát lăn + lăn xuống theo độ dốc mặt đất.
+          g.vy = 0;
+          const e = 0.35;
+          const gx = (landingHeightAt(room, g.x + e, g.z, g.y + 0.3) - landingHeightAt(room, g.x - e, g.z, g.y + 0.3)) / (2 * e);
+          const gz = (landingHeightAt(room, g.x, g.z + e, g.y + 0.3) - landingHeightAt(room, g.x, g.z - e, g.y + 0.3)) / (2 * e);
+          g.vx -= 11 * gx * h;
+          g.vz -= 11 * gz * h;
+          const fr = Math.max(0, 1 - 1.0 * h);
+          g.vx *= fr;
+          g.vz *= fr;
+          if (Math.hypot(g.vx, g.vz) < 0.08 && Math.hypot(gx, gz) < 0.12) g.vx = g.vz = 0;
+        }
+      }
+    }
+    changed = true;
+    if (now >= g.explodeAt) explodeGrenade(room, g);
+    else remaining.push(g);
+  }
+  room.grenades = remaining;
+  return changed;
+}
 function tickRoom(room) {
   const now = Date.now();
   if (room.phase === "playing" || room.phase === "plane")
     tickVehicles(room, now);
+  if (room.phase === "playing" && tickGrenades(room, now)) broadcast(room);
   const players = [...room.players.values()];
   /* Weather start/end polling disabled for performance testing.
   const w = room.weather;
@@ -1744,7 +2092,7 @@ wss.on("connection", (ws) => {
       if (m.type === "join" && !room)
         return send(ws, { type: "error", message: "Không tìm thấy phòng." });
       if (!room) {
-        const mapId = m.mapId === "desert" ? "desert" : "forest";
+        const mapId = ["desert", "jungle"].includes(m.mapId) ? m.mapId : "forest";
         const { mapSeed, obstacles, terrain } = takeMap(mapId);
         room = {
           code,
@@ -2109,7 +2457,7 @@ wss.on("connection", (ws) => {
       if (p.prone) p.crouching = false;
       p.slowWalking = Boolean(m.slowWalking);
       // Chạy nhanh (Shift): chỉ khi đứng, không đi chậm; hết chạy khi ngồi/nằm.
-      p.sprinting = Boolean(m.sprinting) && !p.crouching && !p.prone && !p.slowWalking;
+      p.sprinting = Boolean(m.sprinting) && !p.prone && !p.slowWalking; // ngồi + Shift = đi khom nhanh
       p.jumpY = Math.max(0, Math.min(1.7, Number(m.jumpY) || 0));
       p.jumping = p.jumpY > 0.02;
       p.yaw = Number(m.yaw) || 0;
@@ -2136,7 +2484,9 @@ wss.on("connection", (ws) => {
           : p.crouching && p.slowWalking
             ? 2
             : p.crouching
-              ? 3.8
+              ? p.sprinting
+                ? 5.4 // ngồi + Shift: đi khom nhanh
+                : 3.8
               : p.slowWalking
                 ? 3.2
                 : p.sprinting
@@ -2162,10 +2512,15 @@ wss.on("connection", (ws) => {
       const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.1));
       const stepX = dx / steps,
         stepZ = dz / steps;
+      // Đã lọt vào vùng đệm va chạm (vd. rơi khỏi mép cầu thang xuống sát chân
+      // tường): mọi bước đều "chạm" → kẹt cứng. Khi đó chỉ chặn nếu TÂM người
+      // chơi lọt vào vật rắn → bước ra được, vẫn không đi xuyên tường.
+      const stuck = blockedPosition(room, p.x, p.z, p.id);
+      const blockedStep = (x, z) => blockedPosition(room, x, z, p.id, null, false, stuck ? 0.05 : null);
       for (let i = 0; i < steps; i++) {
         const nextX = p.x + stepX;
         if (
-          !blockedPosition(room, nextX, p.z, p.id) &&
+          !blockedStep(nextX, p.z) &&
           (!stayInWaterWhileSubmerged ||
             waterAt(room, nextX, p.z) ||
             isOnBridge(room.obstacles, nextX, p.z, 0.8))
@@ -2173,7 +2528,7 @@ wss.on("connection", (ws) => {
           p.x = nextX;
         const nextZ = p.z + stepZ;
         if (
-          !blockedPosition(room, p.x, nextZ, p.id) &&
+          !blockedStep(p.x, nextZ) &&
           (!stayInWaterWhileSubmerged ||
             waterAt(room, p.x, nextZ) ||
             isOnBridge(room.obstacles, p.x, nextZ, 0.8))
@@ -2209,6 +2564,7 @@ wss.on("connection", (ws) => {
       const best = (room.loot || []).find((item) => item.id === m.itemId);
       if (!best || Math.hypot(best.x - p.x, best.z - p.z) > PICKUP_RADIUS)
         return;
+      if (Number.isFinite(best.y) && Math.abs((p.groundY || 0) - best.y) > 1.6) return; // khác tầng
       // Keep the active magazine size stable for the duration of a reload.
       if (best.type === "weapon" && p.reloadingUntil > Date.now())
         return send(ws, {
@@ -2283,6 +2639,16 @@ wss.on("connection", (ws) => {
           type: "toast",
           text: `${dropped ? "ĐÃ ĐỔI SANG" : "ĐÃ NHẶT"} ${weaponStats(p).name}`,
         });
+      } else if (best.type === "frag" || best.type === "flash") {
+        const key = throwKey(best.type);
+        const name = GRENADE[best.type].name;
+        if ((p[key] || 0) >= MAX_THROWABLES)
+          return send(ws, { type: "toast", text: `BALO ĐẦY ${name} (${p[key]}/${MAX_THROWABLES})` });
+        p[key] = (p[key] || 0) + 1;
+        room.loot = room.loot.filter((item) => item !== best);
+        broadcastRaw(room, { type: "lootRemoved", id: best.id });
+        lootSfx(room, p, "pickup-grenade", best.x, best.z);
+        send(ws, { type: "toast", text: `+1 ${name} (${p[key]}/${MAX_THROWABLES})` });
       } else {
         if ((p.medkits || 0) >= MAX_MEDKITS) {
           return send(ws, {
@@ -2316,7 +2682,7 @@ wss.on("connection", (ws) => {
           text: "KHÔNG THỂ LẤY ĐỒ KHI ĐANG BƠI",
         });
       const crate = (room.crates || []).find((item) => item.id === m.crateId);
-      const type = m.itemType === "medkit" ? "medkit" : "ammo";
+      const type = ["medkit", "frag", "flash"].includes(m.itemType) ? m.itemType : "ammo";
       const requested = Math.floor(Number(m.amount));
       if (!crate)
         return send(ws, { type: "toast", text: "HÒM ĐỒ KHÔNG CÒN TỒN TẠI" });
@@ -2327,20 +2693,81 @@ wss.on("connection", (ws) => {
       const space =
         type === "ammo"
           ? MAX_RESERVE_AMMO - p.reserveAmmo
-          : MAX_MEDKITS - (p.medkits || 0);
+          : type === "medkit"
+            ? MAX_MEDKITS - (p.medkits || 0)
+            : MAX_THROWABLES - (p[throwKey(type)] || 0);
       const amount = Math.min(requested, crate.contents[type] || 0, space);
       if (amount <= 0)
         return send(ws, { type: "toast", text: "KHÔNG ĐỦ CHỖ TRONG BALO" });
       if (type === "ammo") p.reserveAmmo += amount;
-      else p.medkits = (p.medkits || 0) + amount;
+      else if (type === "medkit") p.medkits = (p.medkits || 0) + amount;
+      else p[throwKey(type)] = (p[throwKey(type)] || 0) + amount;
       crate.contents[type] -= amount;
       lootSfx(room, p, "pickup-" + type, crate.x, crate.z);
       send(ws, {
         type: "toast",
-        text: `ĐÃ LẤY ${amount} ${type === "ammo" ? "VIÊN ĐẠN" : "BỊCH MÁU"}`,
+        text: `ĐÃ LẤY ${amount} ${type === "ammo" ? "VIÊN ĐẠN" : type === "medkit" ? "BỊCH MÁU" : GRENADE[type].name}`,
       });
-      if (!crate.contents.ammo && !crate.contents.medkit)
+      if (!crate.contents.ammo && !crate.contents.medkit && !crate.contents.frag && !crate.contents.flash)
         room.crates = room.crates.filter((item) => item !== crate);
+      broadcast(room);
+      return;
+    }
+    if (m.type === "vehicleEngine" && p.vehicleId && p.vehicleSeat === 0) {
+      const vehicle = room.vehicles.find((v) => v.id === p.vehicleId);
+      if (!vehicle || vehicle.destroyed) return;
+      vehicle.engineOff = !vehicle.engineOff;
+      send(ws, { type: "toast", text: vehicle.engineOff ? "ĐÃ TẮT MÁY · GA (W/S) ĐỂ NỔ MÁY LẠI" : "ĐÃ NỔ MÁY" });
+      broadcast(room);
+      return;
+    }
+    if (m.type === "aimThrow") {
+      const on = Boolean(m.on) && Boolean(p.throwable) && canFight(room, p) && !p.vehicleId;
+      if (Boolean(p.aimThrow) !== on) {
+        p.aimThrow = on;
+        broadcast(room);
+      }
+      return;
+    }
+    if (m.type === "equip") {
+      p.aimThrow = false;
+      const kind = m.kind === "frag" || m.kind === "flash" ? m.kind : null;
+      if (p.cook) return; // đã rút chốt thì phải ném
+      p.throwable = kind && (p[throwKey(kind)] || 0) > 0 ? kind : null;
+      broadcast(room);
+      return;
+    }
+    if (m.type === "cook" && canFight(room, p) && !p.vehicleId) {
+      const kind = m.kind === "flash" ? "flash" : "frag";
+      if (p.cook || (p[throwKey(kind)] || 0) <= 0 || p.healingUntil > Date.now()) return;
+      p.cook = { kind, at: Date.now() };
+      p.throwable = kind;
+      broadcast(room);
+      return;
+    }
+    if (m.type === "throw" && canFight(room, p) && !p.vehicleId) {
+      const kind = m.kind === "flash" ? "flash" : "frag";
+      const key = throwKey(kind);
+      if ((p[key] || 0) <= 0) return;
+      const aim = m.aim;
+      if (!aim || ![aim.x, aim.y, aim.z].every(Number.isFinite)) return;
+      const len = Math.hypot(aim.x, aim.y, aim.z);
+      if (len < 0.5) return;
+      const now = Date.now();
+      const fuseStart = p.cook?.kind === kind ? p.cook.at : now;
+      p.cook = null;
+      p[key] -= 1;
+      p.throwId = (p.throwId || 0) + 1; // client phát hoạt ảnh vung tay ném
+      p.aimThrow = false;
+      if (p[key] <= 0) p.throwable = null;
+      const eyeY = Number(m.eyeY);
+      const base = {
+        x: p.x,
+        y: Number.isFinite(eyeY) && Math.abs(eyeY - (p.groundY || 0)) < 2.5 ? eyeY : (p.groundY || 0) + 1.6,
+        z: p.z,
+      };
+      const d = { x: aim.x / len, y: aim.y / len, z: aim.z / len };
+      spawnGrenade(room, p, kind, { x: base.x + d.x * 0.45, y: base.y + d.y * 0.45, z: base.z + d.z * 0.45 }, { x: d.x * THROW_SPEED, y: d.y * THROW_SPEED + 2.5, z: d.z * THROW_SPEED }, fuseStart);
       broadcast(room);
       return;
     }
@@ -2384,13 +2811,13 @@ wss.on("connection", (ws) => {
           type: "toast",
           text: "KHÔNG THỂ THẢ ĐỒ KHI ĐANG BƠI",
         });
-      const type = m.itemType === "medkit" ? "medkit" : "ammo";
+      const type = ["medkit", "frag", "flash"].includes(m.itemType) ? m.itemType : "ammo";
       const requested = Math.floor(Number(m.amount));
-      const owned = type === "ammo" ? p.reserveAmmo : p.medkits || 0;
+      const stat = type === "ammo" ? "reserveAmmo" : type === "medkit" ? "medkits" : throwKey(type);
+      const owned = p[stat] || 0;
       if (!Number.isFinite(requested) || requested <= 0 || requested > owned)
         return send(ws, { type: "toast", text: "SỐ LƯỢNG KHÔNG HỢP LỆ" });
-      if (type === "ammo") p.reserveAmmo -= requested;
-      else p.medkits -= requested;
+      p[stat] = owned - requested;
       const dropped = {
         id: room.nextLootId++,
         type,
@@ -2404,7 +2831,7 @@ wss.on("connection", (ws) => {
       lootSfx(room, p, "drop-" + type);
       send(ws, {
         type: "toast",
-        text: `ĐÃ THẢ ${requested} ${type === "ammo" ? "VIÊN ĐẠN" : "BỊCH MÁU"}`,
+        text: `ĐÃ THẢ ${requested} ${type === "ammo" ? "VIÊN ĐẠN" : type === "medkit" ? "BỊCH MÁU" : GRENADE[type].name}`,
       });
       broadcast(room);
       return;
@@ -2570,7 +2997,7 @@ wss.on("connection", (ws) => {
         return t >= 0 && t <= nearest ? t : null;
       };
       const rayBuilding = (o) => {
-        const baseY = obstacleBaseY(room, o);
+        const baseY = obstacleBaseY(room, o) + (o.lift || 0); // nhà sàn: tường đứng trên sàn cao
         const half = o.w / 2;
         const wallHeight = o.h * 0.72;
         const thickness = 0.16;
@@ -2625,6 +3052,10 @@ wss.on("connection", (ws) => {
               ),
             );
           }
+        if (o.lift)
+          // Gầm nhà sàn: tấm sàn + 9 cột gỗ chặn đạn, khoảng giữa các cột bắn xuyên được.
+          for (const b of Structures.stiltBulletBoxes(o))
+            sideWalls.push(rayBox(centerAt(b.x, b.z, b.y - o.lift), o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz }));
         const distances = [
           ...sideWalls,
           rayBox(
@@ -2715,7 +3146,16 @@ wss.on("connection", (ws) => {
         if (farOnRay(o)) continue;
         const baseY = obstacleBaseY(room, o);
         let wallDistance;
-        if (o.type === "house" || o.type === "hut") {
+        if (o.type === "keep") {
+          // Thành chính: từng khối tường / sàn / lan can / cột (cửa sổ, cửa bắn xuyên).
+          const c = Math.cos(o.yaw || 0),
+            sn = Math.sin(o.yaw || 0);
+          for (const b of Structures.keepParts(o)) {
+            if (b.kind === "floor") continue;
+            const d = rayBox({ x: o.x + c * b.x + sn * b.z, y: baseY + b.y, z: o.z - sn * b.x + c * b.z }, o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz });
+            if (d !== null && (wallDistance === undefined || wallDistance === null || d < wallDistance)) wallDistance = d;
+          }
+        } else if (o.type === "house" || o.type === "hut") {
           wallDistance = rayBuilding(o);
         } else if (o.type === "tree") {
           // Only the visible trunk blocks shots; foliage is not a solid wall.
@@ -2736,7 +3176,10 @@ wss.on("connection", (ws) => {
             y: o.h / 2,
             z: o.w * 0.27,
           });
-        } else if (o.type === "fence") {
+        } else if (o.type === "banana" || o.type === "palm") {
+          const r = o.w * (o.type === "palm" ? 0.2 : 0.14);
+          wallDistance = rayBox({ x: o.x, y: baseY + o.h * 0.35, z: o.z }, 0, { x: r, y: o.h * 0.35, z: r });
+        } else if (o.type === "fence" || o.type === "stonewall") {
           wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, o.yaw || 0, {
             x: o.w / 2,
             y: o.h / 2,
@@ -2946,3 +3389,4 @@ server.listen(PORT, () => {
   console.log(`Last Drop Arena listening on http://localhost:${PORT}`);
   scheduleMapRefill(300); // sinh sẵn map rừng + sa mạc ngay khi server rảnh
 });
+

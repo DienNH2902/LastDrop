@@ -701,7 +701,8 @@ h2 {
 }
 .scope-overlay small {
   position: absolute;
-  bottom: 19%;
+  /* Nằm giữa thanh HUD dưới (~25–80px) và ô "F NHẶT ĐỒ" (từ 118px) — không bị đè. */
+  bottom: 90px;
   color: #d6ff45;
   font: 9px "DM Mono";
   letter-spacing: 1px;
@@ -992,10 +993,20 @@ h2 {
   color: #caff75;
 }
 .map-art.forest-preview {
-  background: #335c3b url("/forest-map.svg") center/cover no-repeat;
+  background: #335c3b url("/forest-map.png") center/cover no-repeat;
 }
 .map-art.desert-preview {
-  background: #ad905e url("/desert-map.svg") center/cover no-repeat;
+  background: #ad905e url("/desert-map.png") center/cover no-repeat;
+}
+.map-art.jungle-preview {
+  background: #2b5e2c url("/jungle-map.png") center/cover no-repeat;
+}
+.map-art.jungle-preview .ring {
+  border-color: #e0a15f;
+  box-shadow: 0 0 30px #c2703d66;
+}
+.map-art.jungle-preview .pin {
+  color: #ffcf7a;
 }
 .map-art .grid,
 .map-art .ring,
@@ -1571,7 +1582,7 @@ body:has(#game.active) #game {
   display: none;
 }
 .scope-overlay.reflex small {
-  bottom: 12%;
+  bottom: 90px;
   color: #e3e6dc;
   text-shadow: 0 1px 3px #000;
 }
@@ -2403,7 +2414,7 @@ body:has(#game.active) #game {
   display: none;
 }
 .scope-overlay.iron small {
-  bottom: 12%;
+  bottom: 90px;
   color: #e3e6dc;
   text-shadow: 0 1px 3px #000;
 }
@@ -2521,4 +2532,162 @@ body:has(#game.active) #game {
     opacity: 1;
     transform: scale(1);
   }
+}
+
+/* Lựu đạn: vòng đếm ngược kíp nổ (xanh → vàng → đỏ) */
+#cookHud {
+  position: absolute;
+  left: 50%;
+  bottom: 170px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+  font-family: "DM Mono", monospace;
+  z-index: 5;
+}
+#cookHud.hidden {
+  display: none;
+}
+#cookHud .ck-ring {
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  transition: box-shadow 0.2s;
+}
+#cookHud .ck-ring b {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #0d100cdd;
+  font-size: 20px;
+  font-weight: 700;
+}
+#cookHud small {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #fff;
+  text-shadow: 0 1px 4px #000;
+}
+#cookHud.danger .ck-ring {
+  animation: cook-pulse 0.3s ease-in-out infinite alternate;
+}
+@keyframes cook-pulse {
+  from { transform: scale(1); }
+  to { transform: scale(1.1); }
+}
+/* Lựu đạn choáng: loá trắng toàn màn hình */
+.flash-overlay {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 8;
+}
+
+/* Cảnh báo lựu đạn nổ ở gần: 💣 + mũi tên chỉ hướng + khoảng cách */
+#grenadeWarn {
+  position: absolute;
+  left: 50%;
+  top: 38%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  pointer-events: none;
+  font-family: "DM Mono", monospace;
+  z-index: 5;
+  text-shadow: 0 1px 4px #000;
+}
+#grenadeWarn.hidden {
+  display: none;
+}
+#grenadeWarn i {
+  color: #ffb13b;
+  font-style: normal;
+  font-size: 18px;
+  transform-origin: 50% 140%;
+}
+#grenadeWarn b {
+  font-size: 22px;
+  filter: drop-shadow(0 0 6px #ff6a2a);
+}
+#grenadeWarn small {
+  color: #ffd27a;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+#grenadeWarn.close b {
+  animation: cook-pulse 0.25s ease-in-out infinite alternate;
+}
+#grenadeWarn.close small {
+  color: #ff5a4a;
+}
+
+/* Bản đồ lớn (phím M) */
+#bigMap {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(6, 8, 6, 0.55);
+  pointer-events: auto;
+  z-index: 6;
+}
+#bigMap.hidden {
+  display: none;
+}
+#bigMap .bm-frame {
+  display: grid;
+  gap: 8px;
+  width: min(88vh, 94vw);
+}
+#bigMapCanvas {
+  width: 100%;
+  aspect-ratio: 1;
+  border: 2px solid #c8f27a;
+  box-shadow: 0 15px 60px #000a;
+  cursor: grab;
+  touch-action: none;
+}
+#bigMapCanvas.dragging {
+  cursor: grabbing;
+}
+#bigMap .bm-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-family: "DM Mono", monospace;
+  color: #f3f3ed;
+}
+#bigMap .bm-bar button {
+  min-width: 34px;
+  height: 30px;
+  padding: 0 10px;
+  background: #171a14;
+  color: #d6ff45;
+  border: 1px solid #555b48;
+  font: inherit;
+  cursor: pointer;
+}
+#bigMap .bm-bar button:hover {
+  border-color: #d6ff45;
+}
+#bigMap .bm-bar span {
+  min-width: 40px;
+  text-align: center;
+}
+#bigMap .bm-bar small {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 1px;
+  opacity: 0.75;
 }
