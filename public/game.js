@@ -323,6 +323,7 @@ function cancelSprint() {
 }
 const SLOW_SPEED = 3.2;
 const CROUCH_SPEED = 3.8;
+const CROUCH_RUN_SPEED = 5.4; // ngồi + Shift (khớp server)
 const CROUCH_SLOW_SPEED = 2.0;
 const saved = JSON.parse(localStorage.getItem("ld-settings") || "{}");
 const savedPlayerName =
@@ -1889,7 +1890,7 @@ function obstacleBoundRadius(o) {
   const length = o.length || w;
   if (o.type === "lake") return Math.max(w, length);
   if (o.type === "road" || o.type === "river") return (length + w) / 2;
-  return Math.hypot(w, length) * 0.6;
+  return Math.hypot(w, length) * 0.6 + (o.lift ? 4 : 0); // nhà sàn: + cầu thang
 }
 // Loại obstacle chỉ dùng để dựng địa hình (không va chạm, không vẽ riêng).
 const TERRAIN_ONLY = new Set(["hill", "terrain", "plateau", "pad", "swamp"]);
@@ -2768,6 +2769,27 @@ function drawMapObject(o, forest) {
           bucketAdd("#5f5a4f", "#5f5a4f", new THREE.BoxGeometry(r.x1 - r.x0, 0.06, 0.12), (t) =>
             place(t, (r.x0 + r.x1) / 2, r.from + (r.to - r.from) * t2 + 0.03, zz),
           );
+        }
+      }
+      // Lan can gỗ quanh cầu thang và lỗ sàn: cột mỗi ~0.9 m + tay vịn.
+      for (const rail of Structures.KEEP_RAILS) {
+        const len = rail.to - rail.from;
+        const n = Math.max(2, Math.round(len / 0.9) + 1);
+        const at = (u, y) => (rail.axis === "x" ? [rail.at, y, u] : [u, y, rail.at]);
+        for (let i = 0; i < n; i++) {
+          const u = rail.from + (len * i) / (n - 1);
+          const b = Structures.keepRailBase(rail, u);
+          bucketAdd("#6b4a2e", "#6b4a2e", new THREE.BoxGeometry(0.08, 1.0, 0.08), (t) => place(t, ...at(u, b + 0.5)));
+          if (i < n - 1) {
+            const u2 = u + len / (n - 1);
+            const b2 = Structures.keepRailBase(rail, u2);
+            const seg = len / (n - 1);
+            const geo =
+              rail.axis === "x" ? new THREE.BoxGeometry(0.07, 0.07, Math.hypot(seg, b2 - b)) : new THREE.BoxGeometry(Math.hypot(seg, b2 - b), 0.07, 0.07);
+            // Tay vịn nghiêng theo dốc cầu thang.
+            if (rail.axis === "x") geo.rotateX(-Math.atan2(b2 - b, seg));
+            bucketAdd("#8a6238", "#8a6238", geo, (t) => place(t, ...at((u + u2) / 2, (b + b2) / 2 + 1.0)));
+          }
         }
       }
       // Cờ đỏ trên nóc + hai băng rôn trước cửa: uy nghiêm, dễ nhận ra từ xa.
@@ -4789,6 +4811,7 @@ function renderPlayers(state) {
     if (holding && p.throwable) ud0.lastThrowable = p.throwable;
     ud0.throwable = holding ? p.throwable || null : null;
     ud0.cooking = Boolean(p.cooking);
+    ud0.aiming = Boolean(p.aiming);
     // Đang vung tay ném quả cuối (server đã xoá throwable) vẫn giữ tư thế ném.
     ud0.throwPose = ud0.throwable || (holding && nowMs - (ud0.throwAt || -1e9) < 450 ? ud0.lastThrowable : null);
     if (ud0.throwPose) {
@@ -6235,7 +6258,10 @@ function blockContextMenu(e) {
   if ($("#game").classList.contains("active")) e.preventDefault();
 }
 function onPointerLockChange() {
-  if (document.pointerLockElement !== renderer?.domElement) stopFiring();
+  if (document.pointerLockElement !== renderer?.domElement) {
+    stopFiring();
+    cancelThrowAim();
+  }
   if (deathView || $("#result")?.classList.contains("active")) return;
   if (backpackOpen || bigMap.open) return; // đang mở balo / bản đồ: thả chuột là chủ ý, không tạm dừng
   if (
@@ -6727,7 +6753,8 @@ function onFire(e) {
       local.state === "ground" &&
       document.pointerLockElement === renderer?.domElement
     )
-      throwGrenade();
+      startThrowAim();
+    else if (e.button === 2 && local.throwAimAt) cancelThrowAim(); // chuột phải: thôi không ném
     return;
   }
   if (e.button === 2) {
@@ -6785,6 +6812,83 @@ function onFire(e) {
 }
 function onMouseUp(e) {
   if (e.button === 0) stopFiring();
+  if (e.button === 0 && local.throwAimAt) {
+    // Click nhanh = ném ngay; giữ rồi nhả = ném theo đường bay đang hiện.
+    local.throwAimAt = 0;
+    if (!paused && !deathView && local.state === "ground" && local.throwable && !local.vehicleId) throwGrenade();
+    else cancelThrowAim();
+  }
+}
+// ---- Giữ chuột trái khi cầm lựu đạn: lấy đà + vẽ đường bay dự kiến ----
+const THROW_SPEED = 25; // khớp server
+const THROW_AIM_SHOW_MS = 140; // giữ quá ngần này mới hiện đường bay (click nhanh thì không)
+function startThrowAim() {
+  if (!local.throwable || !throwCount(local.throwable) || local.healing || local.throwAimAt) return;
+  local.throwAimAt = performance.now();
+  send({ type: "aimThrow", on: true });
+}
+function cancelThrowAim() {
+  if (!local.throwAimAt) return;
+  local.throwAimAt = 0;
+  send({ type: "aimThrow", on: false });
+  updateThrowArc();
+}
+let throwArc = null;
+const arcPos = new THREE.Vector3(),
+  arcVel = new THREE.Vector3();
+function updateThrowArc() {
+  const show =
+    local.throwAimAt && performance.now() - local.throwAimAt > THROW_AIM_SHOW_MS && local.throwable && !deathView && scene;
+  if (!show) {
+    if (throwArc) throwArc.line.visible = throwArc.mark.visible = false;
+    return;
+  }
+  if (!throwArc) {
+    const N = 90;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffe14a, transparent: true, opacity: 0.9, depthTest: false }));
+    line.renderOrder = 10;
+    line.frustumCulled = false;
+    const mark = new THREE.Mesh(
+      new THREE.RingGeometry(0.28, 0.4, 24).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xffe14a, transparent: true, opacity: 0.85, depthTest: false, side: THREE.DoubleSide }),
+    );
+    mark.renderOrder = 10;
+    scene.add(line, mark);
+    throwArc = { line, mark, N };
+  }
+  // Mô phỏng y hệt server: xuất phát trước mắt 0.45 m, v = hướng nhìn × 25 + 2.5 lên, g = 20.
+  camera.getWorldDirection(arcVel);
+  camera.getWorldPosition(arcPos);
+  arcPos.addScaledVector(arcVel, 0.45);
+  arcVel.multiplyScalar(THROW_SPEED);
+  arcVel.y += 2.5;
+  const arr = throwArc.line.geometry.attributes.position.array;
+  const h = 0.03;
+  let n = 0,
+    landed = false;
+  for (; n < throwArc.N; n++) {
+    arr[n * 3] = arcPos.x;
+    arr[n * 3 + 1] = arcPos.y;
+    arr[n * 3 + 2] = arcPos.z;
+    if (landed) continue;
+    for (let s = 0; s < 2; s++) {
+      arcVel.y -= 20 * h;
+      arcPos.addScaledVector(arcVel, h);
+      const floor = landingHeightAt(arcPos.x, arcPos.z, arcPos.y + 0.3) + 0.08;
+      if (arcPos.y <= floor) {
+        arcPos.y = floor;
+        landed = true;
+        break;
+      }
+    }
+  }
+  throwArc.line.geometry.attributes.position.needsUpdate = true;
+  throwArc.line.geometry.setDrawRange(0, n);
+  throwArc.line.visible = true;
+  throwArc.mark.visible = landed;
+  if (landed) throwArc.mark.position.set(arcPos.x, arcPos.y + 0.03, arcPos.z);
 }
 // Ném lựu đạn theo hướng nhìn (server tính quỹ đạo). Chưa rút chốt thì kíp bắt
 // đầu đếm từ lúc ném.
@@ -7016,6 +7120,7 @@ function setThrowable(kind) {
     return;
   }
   if (local.cookAt) return; // đã rút chốt: phải ném
+  cancelThrowAim();
   local.throwable = kind;
   send({ type: "equip", kind });
   stopFiring();
@@ -7059,8 +7164,11 @@ function poseThrowable(dt) {
   const throwing = t >= 0 && t < 1;
   // Ném: vung tay ra trước – lên rồi hạ xuống, quả lựu đạn ẩn khi rời tay.
   const swing = throwing ? Math.sin(Math.min(1, t) * Math.PI) : 0;
-  model.position.set(0.22 - swing * 0.1, -0.2 + swing * 0.22, -0.42 - swing * 0.25);
-  model.rotation.set(-swing * 1.1, 0, 0);
+  // Giữ chuột: đưa quả lựu đạn lên cao ra sau (lấy đà), nhả thì vung ra trước.
+  const aimGoal = local.throwAimAt && !throwing ? 1 : 0;
+  const aim = (model.userData.aimK = (model.userData.aimK || 0) + (aimGoal - (model.userData.aimK || 0)) * Math.min(1, 12 * dt));
+  model.position.set(0.22 + aim * 0.08 - swing * 0.1, -0.2 + aim * 0.14 + swing * 0.22, -0.42 + aim * 0.14 - swing * 0.25);
+  model.rotation.set(aim * 0.5 - swing * 1.1, 0, -aim * 0.2);
   model.children[0].visible = !throwing || t < 0.35;
   if (model.userData.ring) model.userData.ring.visible = !local.cookAt; // chốt đã rút
 }
@@ -7072,6 +7180,7 @@ let grenadeMats = null;
 function updateGrenadeWorld(dt) {
   updateCookHud();
   poseThrowable(dt);
+  updateThrowArc();
   if (!scene) return;
   grenadeMats ||= { frag: makeMat("#3d4a2e"), flash: makeMat("#7a807d") };
   const live = new Set();
@@ -7146,7 +7255,8 @@ function updateGrenadeWorld(dt) {
   const overlay = $("#flashOverlay");
   if (overlay && local.flashUntil) {
     const left = local.flashUntil - performance.now();
-    const o = left <= 0 ? 0 : Math.min(1, (left / local.flashDuration) * 1.6) * local.flashPower;
+    const f = left / local.flashDuration; // 1 → 0
+    const o = left <= 0 ? 0 : (f > 0.45 ? 1 : Math.pow(f / 0.45, 0.7)) * local.flashPower;
     setStyle(overlay, "opacity", o.toFixed(3));
     if (left <= 0) local.flashUntil = 0;
   }
@@ -7206,7 +7316,7 @@ function onExplosion(m) {
       const power = covered ? 0 : (1 - d / 20) * (facing > 0.2 ? 1 : 0.3);
       if (power > 0.05) {
         local.flashPower = Math.min(1, power * 1.25);
-        local.flashDuration = 900 + power * 3400;
+        local.flashDuration = 2500 + power * 5500; // tối đa ~8 giây
         local.flashUntil = performance.now() + local.flashDuration;
         playEarRinging(power);
       }
@@ -7700,7 +7810,7 @@ function animateAvatars(dt) {
       ud.weapon.visible || ud.sniperWeapon.visible || ud.berylWeapon.visible;
     const punchT = (now - ud.punchAt) / 320;
     const throwT = ud.throwAt && now - ud.throwAt < 450 ? (now - ud.throwAt) / 450 : null;
-    const inHand = ud.throwPose && !(throwT !== null && throwT > 0.45); // rời tay khi quăng
+    const inHand = ud.throwPose && !(throwT !== null && throwT > 0.5); // rời tay khi quăng
     if (ud.handGrenade) {
       ud.handGrenade.visible = inHand && ud.throwPose === "frag";
       ud.handFlash.visible = inHand && ud.throwPose === "flash";
@@ -7723,6 +7833,7 @@ function animateAvatars(dt) {
         fists: !armed && !ud.throwPose && ud.weaponKind === "none" && ud.state === "ground",
         throwable: ud.throwPose,
         cooking: ud.cooking,
+        throwAim: ud.aiming,
         throwT,
         punch: punchT >= 0 && punchT < 1 ? punchT : 0,
         punchSide: ud.punchSide,
@@ -9597,7 +9708,7 @@ function frame() {
       !local.healing &&
       !backpackOpen;
     if (wantSprint && !local.sprinting) {
-      local.crouchToggle = false; // chạy thì đứng dậy
+      // Đang ngồi thì VẪN ngồi (Shift = đi khom nhanh), đứng thì chạy nhanh.
       if (scoped) setScope(false); // chạy thì không ngắm được
     }
     local.sprinting = wantSprint;
@@ -9619,7 +9730,7 @@ function frame() {
     if (!isProne && isCrouching && isSlowWalking) {
       moveSpeed = CROUCH_SLOW_SPEED;
     } else if (!isProne && isCrouching) {
-      moveSpeed = CROUCH_SPEED;
+      moveSpeed = isSprinting ? CROUCH_RUN_SPEED : CROUCH_SPEED;
     } else if (!isProne && isSlowWalking) {
       moveSpeed = SLOW_SPEED;
     }

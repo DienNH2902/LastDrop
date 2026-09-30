@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.166.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.166.1/examples/jsm/"}}</script>
+<style>body{margin:0;background:#9bb}</style></head>
+<body><script type="module">
+import * as THREE from "three";
+import { buildAvatar, poseAvatar } from "./avatar.js";
+const W = 900, H = 450;
+const r = new THREE.WebGLRenderer({ antialias: true }); r.setSize(W, H); document.body.append(r.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color("#9bb");
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445544, 2.2));
+const cam = new THREE.PerspectiveCamera(30, W / H, 0.1, 100);
+cam.position.set(1.6, 2.3, 3.2); cam.lookAt(1.6, 1.75, 0);
+[0, 0.8, Math.PI / 2, Math.PI].forEach((rot, i) => {
+  const a = buildAvatar(new THREE.MeshStandardMaterial({ color: "#d9a066" }), new THREE.MeshStandardMaterial({ color: "#d9a066" }));
+  a.root.position.x = i * 1.05;
+  a.root.rotation.y = rot;
+  scene.add(a.root);
+  poseAvatar(a.rig, {}, { stance: "stand", speed: 0 }, 1 / 60);
+});
+r.render(scene, cam);
+</script></body></html>

@@ -24,6 +24,8 @@
   // ngồi / nằm chui qua được (chỉ vướng cột), đứng thẳng thì vướng sàn.
   const STILT_RAMP = 3.4;
   const STILT_POST = 0.12; // nửa bề rộng cột
+  const STILT_RAMP_HALF = 0.95; // nửa bề rộng cầu thang (tay vịn nằm ở ±0.95)
+  const RAIL = 0.05;
   const stiltPosts = (o) => {
     const e = (o.w / 2) * 0.96;
     const out = [];
@@ -45,8 +47,19 @@
   // Trả về: true (chặn) / false (không chặn) / null (đang ở trên sàn → xét
   // tường như nhà thường).
   function stiltBlocked(o, lx, lz, r, rel, low) {
-    if (rel !== null && rel >= o.lift - 0.45) return null;
     const half = o.w / 2;
+    // Cầu thang trước cửa: chỉ lên / xuống từ ĐẦU thang. Hai bên có tay vịn,
+    // phía dưới tấm ván là khung thang → đi ngang từ bên cạnh không xuyên qua được.
+    const foot = -half - STILT_RAMP;
+    if (Math.abs(lx) < STILT_RAMP_HALF + RAIL + r && lz > foot - r && lz < -half + 0.05) {
+      if (rel === null) return true; // xe
+      const t = Math.max(0, Math.min(1, (lz - foot) / STILT_RAMP));
+      const surface = o.lift * t;
+      if (rel < surface - 0.45) return true; // chui / đi xuyên thân thang
+      // Đang ở trên mặt ván: tay vịn hai bên chặn bước ra / vào từ cạnh.
+      if (Math.abs(Math.abs(lx) - STILT_RAMP_HALF) < RAIL + r && lz > foot + 0.1) return true;
+    }
+    if (rel !== null && rel >= o.lift - 0.45) return null;
     if (Math.abs(lx) >= half + r || Math.abs(lz) >= half + r) return false;
     if (rel === null || !low) return true; // xe / người đứng thẳng: vướng sàn
     for (const [px, pz] of stiltPosts(o))
@@ -96,6 +109,18 @@
   ];
   // Lỗ ở sàn trên đúng chỗ cầu thang đi lên.
   const HOLES = { 4.2: RAMPS[0], [K.roof]: RAMPS[1] };
+  // Lan can: dọc mép hở của cầu thang (phía trong phòng) và quanh lỗ sàn phía
+  // trên, để không đi sát mép rồi rơi xuống. axis "x": thanh chạy dọc trục z tại
+  // lx = at; axis "z": chạy dọc trục x tại lz = at. lo..hi: độ cao chân bị chặn.
+  const RAILS = [
+    { axis: "x", at: RAMPS[0].x1, from: RAMPS[0].z0, to: RAMPS[0].z1, lo: 0.5, hi: floorTop(4.2) + 1.3, ramp: RAMPS[0] },
+    { axis: "z", at: RAMPS[0].z0, from: RAMPS[0].x0, to: RAMPS[0].x1, lo: floorTop(4.2) - 0.3, hi: floorTop(4.2) + 1.3, floor: floorTop(4.2) },
+    { axis: "x", at: RAMPS[1].x0, from: RAMPS[1].z0, to: RAMPS[1].z1, lo: floorTop(4.2) + 0.45, hi: ROOF_TOP + 1.3, ramp: RAMPS[1] },
+    { axis: "z", at: RAMPS[1].z1, from: RAMPS[1].x0, to: RAMPS[1].x1, lo: ROOF_TOP - 0.3, hi: ROOF_TOP + 1.3, floor: ROOF_TOP },
+  ];
+  const RAIL_HALF = 0.06;
+  // Chân lan can tại vị trí u dọc thanh (độ cao so với mặt đất).
+  const railBase = (rail, u) => (rail.ramp ? Math.max(rail.floorBase ?? 0, rampHeight(rail.ramp, u)) : rail.floor);
   const inRect = (lx, lz, r, m = 0) => lx >= r.x0 - m && lx <= r.x1 + m && lz >= r.z0 - m && lz <= r.z1 + m;
   const rampHeight = (r, lz) => {
     const t = r.dir > 0 ? (lz - r.z0) / (r.z1 - r.z0) : (r.z1 - lz) / (r.z1 - r.z0);
@@ -141,6 +166,12 @@
       if (!door) return true;
     }
     if (rel === null) return false;
+    for (const rail of RAILS) {
+      const along = rail.axis === "x" ? lz : lx,
+        across = rail.axis === "x" ? lx : lz;
+      if (along < rail.from - r || along > rail.to + r || Math.abs(across - rail.at) >= RAIL_HALF + r) continue;
+      if (rel >= rail.lo && rel <= rail.hi) return true;
+    }
     // Cầu thang là khối nêm đặc: chặn khi đứng thấp hơn mặt thang tại đó.
     for (const ramp of RAMPS) {
       if (!inRect(lx, lz, ramp, r)) continue;
@@ -245,6 +276,8 @@
     stiltBulletBoxes,
     KEEP: K,
     KEEP_RAMPS: RAMPS,
+    KEEP_RAILS: RAILS,
+    keepRailBase: railBase,
     keepSurfaces,
     keepBlocked,
     keepParts,

@@ -82,15 +82,18 @@ const C = {
 
 // Đầu mèo: 6 mặt hộp đọc từ MỘT texture atlas 3×2 (xem game.js): ô = chỉ số mặt
 // BoxGeometry (+x, -x, +y, -y, +z, -z), hàng 0 nằm trên cùng của ảnh.
+// Vòm nón (khớp mesh nón bên dưới): tâm y, bán kính theo x / y / z.
+const HELMET_DOME = { cy: 0.12, rx: 0.27, ry: 0.27 * 0.72, rz: 0.27 * 1.02 };
 function atlasHeadGeometry() {
-  const g = new THREE.BoxGeometry(0.46, 0.44, 0.42);
+  const g = new THREE.BoxGeometry(0.46, 0.44, 0.42, 8, 8, 8); // chia lưới để cắt góc mượt
   const uv = g.attributes.uv;
   const pad = 0.004; // chừa mép nhỏ để mipmap không lẫn sang ô bên cạnh
+  const per = uv.count / 6; // số đỉnh mỗi mặt (lưới chia đều)
   for (let f = 0; f < 6; f++) {
     const col = f % 3,
       row = Math.floor(f / 3);
-    for (let i = 0; i < 4; i++) {
-      const k = f * 4 + i;
+    for (let i = 0; i < per; i++) {
+      const k = f * per + i;
       const u = uv.getX(k),
         v = uv.getY(k);
       uv.setXY(
@@ -101,6 +104,21 @@ function atlasHeadGeometry() {
     }
   }
   uv.needsUpdate = true;
+  // Cắt 4 góc trên lòi ra khỏi nón: điểm nào của đầu nằm trên vành nón mà ở
+  // NGOÀI vòm nón thì kéo ngang vào sát mặt trong vòm. Phần còn lại giữ nguyên.
+  const pos = g.attributes.position;
+  const { cy, rx, ry, rz } = HELMET_DOME;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i),
+      y = pos.getY(i),
+      z = pos.getZ(i);
+    if (y <= cy) continue;
+    const room = 1 - ((y - cy) / ry) ** 2; // bán kính ngang còn lại của vòm ở độ cao y
+    const k = Math.hypot(x / rx, z / rz) / (Math.sqrt(Math.max(0.0001, room)) * 0.9);
+    if (k > 1) pos.setXYZ(i, x / k, y, z / k);
+  }
+  pos.needsUpdate = true;
+  g.computeVertexNormals();
   return g;
 }
 
@@ -323,6 +341,24 @@ const damp = (current, target, rate, dt) =>
 // Gọi mỗi khung hình. state: { stance, speed, slow, reloading, driver,
 // weaponGrip:{right:Vector3,left:Vector3} (toạ độ trong mount), now }
 const _t = new THREE.Vector3();
+// Đích bàn tay (toạ độ thân: x phải, y lên, -z trước) cho động tác ném lựu đạn.
+const THROW_KEYS = {
+  holdR: [0.1, 0.44, -0.27],
+  holdL: [-0.05, 0.43, -0.29],
+  aimR: [0.3, 0.95, 0.24],
+  aimL: [-0.2, 0.74, -0.52],
+  releaseR: [0.12, 0.88, -0.5],
+  releaseL: [-0.32, 0.42, 0.02],
+  followR: [-0.12, 0.3, -0.36],
+  followL: [-0.3, 0.18, 0.06],
+};
+const smooth = (k) => {
+  const x = Math.max(0, Math.min(1, k));
+  return x * x * (3 - 2 * x);
+};
+function lerpKeys(out, a, b, k) {
+  out.set(a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k);
+}
 export function poseAvatar(rig, pose, state, dt) {
   const { stance } = state;
   const speed = Math.min(state.speed || 0, 10);
@@ -455,27 +491,59 @@ export function poseAvatar(rig, pose, state, dt) {
     0.33 + pose.prone * 0.27 - pose.reload * 0.06 - pose.sprint * 0.06,
     -0.25 + pose.prone * 0.45 + pose.sprint * 0.1,
   );
+  // ---- Lựu đạn: vặn thân + đích tay theo pha cầm / lấy đà / ném ----
+  const throwStance = Boolean(state.throwable) && (stance === "stand" || stance === "crouch" || stance === "jump");
+  if (throwStance) {
+    const t = state.throwT;
+    const throwing = t !== null && t !== undefined && t >= 0 && t < 1;
+    pose.rh ||= new THREE.Vector3().fromArray(THROW_KEYS.holdR);
+    pose.lh ||= new THREE.Vector3().fromArray(THROW_KEYS.holdL);
+    let twist = 0,
+      tilt = 0;
+    if (throwing) {
+      const K = THROW_KEYS;
+      if (t < 0.22) {
+        // Lấy đà nhanh (nếu chưa giữ chuột trước đó).
+        pose.rh.lerp(_t.fromArray(K.aimR), Math.min(1, 30 * dt));
+        pose.lh.lerp(_t.fromArray(K.aimL), Math.min(1, 30 * dt));
+        twist = -0.55;
+        tilt = -0.1;
+      } else if (t < 0.5) {
+        const k = smooth((t - 0.22) / 0.28);
+        lerpKeys(pose.rh, K.aimR, K.releaseR, k);
+        lerpKeys(pose.lh, K.aimL, K.releaseL, k);
+        twist = -0.55 + 1.05 * k;
+        tilt = -0.1 + 0.38 * k;
+      } else {
+        const k = smooth((t - 0.5) / 0.5);
+        lerpKeys(pose.rh, K.releaseR, K.followR, k);
+        lerpKeys(pose.lh, K.releaseL, K.followL, k);
+        twist = 0.5 - 0.4 * k;
+        tilt = 0.28 - 0.18 * k;
+      }
+      pose.twist = twist;
+      pose.tilt = tilt;
+    } else {
+      const aim = Boolean(state.throwAim);
+      pose.rh.lerp(_t.fromArray(aim ? THROW_KEYS.aimR : THROW_KEYS.holdR), Math.min(1, 10 * dt));
+      pose.lh.lerp(_t.fromArray(aim ? THROW_KEYS.aimL : THROW_KEYS.holdL), Math.min(1, 10 * dt));
+      pose.twist = damp(pose.twist ?? 0, aim ? -0.55 : 0, 10, dt);
+      pose.tilt = damp(pose.tilt ?? 0, aim ? -0.1 : 0, 10, dt);
+    }
+  } else {
+    pose.twist = damp(pose.twist ?? 0, 0, 10, dt);
+    pose.tilt = damp(pose.tilt ?? 0, 0, 10, dt);
+  }
+  rig.torso.rotation.y += pose.twist; // âm = vai phải ra sau
+  rig.torso.rotation.x -= pose.tilt; // dương = gập người ra trước khi quăng
   // Tay: cầm súng (IK) hoặc tư thế riêng khi bay / lái xe / bơi.
   const grip = state.weaponGrip;
   rig.arms.forEach((arm, i) => {
-    if (state.throwable && (stance === "stand" || stance === "crouch" || stance === "jump")) {
-      // LỰU ĐẠN: tay trái chỉ hướng ném; tay phải cầm quả lựu đạn — giơ cao khi
-      // rút chốt, khi ném thì vung ra sau rồi quăng mạnh về trước.
-      if (arm.side < 0) {
-        _t.set(-0.22, 0.6, -0.38);
-      } else {
-        const t = state.throwT;
-        const hold = state.cooking ? [0.28, 0.8, 0.12] : [0.26, 0.6, -0.08];
-        if (t === null || t === undefined || t >= 1) _t.set(...hold);
-        else if (t < 0.35) {
-          const k = t / 0.35;
-          _t.set(hold[0] + (0.3 - hold[0]) * k, hold[1] + (0.9 - hold[1]) * k, hold[2] + (0.26 - hold[2]) * k);
-        } else {
-          const k = Math.sin(((t - 0.35) / 0.65) * Math.PI * 0.5);
-          _t.set(0.3 - 0.18 * k, 0.9 - 0.32 * k, 0.26 - 0.84 * k);
-        }
-      }
-      solveArm(arm, _t, "free");
+    if (throwStance) {
+      // LỰU ĐẠN (tay phải cầm): cầm thường = hai tay ôm quả trước ngực; GIỮ
+      // CHUỘT = lấy đà (tay phải vòng ra sau cao ngang đầu, tay trái duỗi chỉ
+      // hướng); NÉM = vung qua đỉnh đầu, buông quả, tay theo đà chéo xuống thân.
+      solveArm(arm, arm.side < 0 ? pose.lh : pose.rh, "free");
     } else if (
       state.fists &&
       (stance === "stand" || stance === "crouch" || stance === "jump")

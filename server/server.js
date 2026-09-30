@@ -359,6 +359,7 @@ const snapshot = (room) => ({
     // Người khác nhìn thấy: đang cầm lựu đạn loại nào, đã rút chốt chưa, số lần ném.
     throwable: p.alive && !p.vehicleId ? p.throwable || null : null,
     cooking: Boolean(p.cook),
+    aiming: Boolean(p.aimThrow) && p.alive && !p.vehicleId, // đang giữ chuột lấy đà ném
     throwId: p.throwId || 0,
     healing: p.alive && p.healingUntil > Date.now(),
     healLeftMs: p.alive ? Math.max(0, (p.healingUntil || 0) - Date.now()) : 0,
@@ -583,7 +584,7 @@ const GRENADE = {
   frag: { fuse: 6000, kill: 3.5, reach: 11, name: "LỰU ĐẠN NỔ" },
   flash: { fuse: 2000, name: "LỰU ĐẠN CHOÁNG" }, // choáng nổ nhanh hơn
 };
-const THROW_SPEED = 17;
+const THROW_SPEED = 25; // m/s — ném xa ~30 m (góc 45°), khớp client
 const throwKey = (kind) => (kind === "flash" ? "flashes" : "frags");
 // ---------------------------------------------------------------------------
 // LƯỚI KHÔNG GIAN (spatial grid) cho vật cản tĩnh
@@ -601,7 +602,7 @@ function obstacleBoundRadius(o) {
   if (o.type === "lake") return Math.max(w, length);
   // Đường được đo như hình con nhộng (đoạn thẳng + nửa bề rộng ở hai đầu).
   if (o.type === "road" || o.type === "river") return (length + w) / 2;
-  return Math.hypot(w, length) * 0.6;
+  return Math.hypot(w, length) * 0.6 + (o.lift ? 4 : 0); // nhà sàn: + cầu thang
 }
 // Gắn hàm tra ô trực tiếp lên mảng obstacles (JSON.stringify bỏ qua thuộc tính
 // không phải chỉ số nên dữ liệu gửi cho client không đổi).
@@ -1404,6 +1405,7 @@ function dropDeathLoot(room, victim) {
   victim.frags = 0;
   victim.flashes = 0;
   victim.throwable = null;
+  victim.aimThrow = false;
   victim.ammo = 0;
   victim.weapon = "none";
 }
@@ -2455,7 +2457,7 @@ wss.on("connection", (ws) => {
       if (p.prone) p.crouching = false;
       p.slowWalking = Boolean(m.slowWalking);
       // Chạy nhanh (Shift): chỉ khi đứng, không đi chậm; hết chạy khi ngồi/nằm.
-      p.sprinting = Boolean(m.sprinting) && !p.crouching && !p.prone && !p.slowWalking;
+      p.sprinting = Boolean(m.sprinting) && !p.prone && !p.slowWalking; // ngồi + Shift = đi khom nhanh
       p.jumpY = Math.max(0, Math.min(1.7, Number(m.jumpY) || 0));
       p.jumping = p.jumpY > 0.02;
       p.yaw = Number(m.yaw) || 0;
@@ -2482,7 +2484,9 @@ wss.on("connection", (ws) => {
           : p.crouching && p.slowWalking
             ? 2
             : p.crouching
-              ? 3.8
+              ? p.sprinting
+                ? 5.4 // ngồi + Shift: đi khom nhanh
+                : 3.8
               : p.slowWalking
                 ? 3.2
                 : p.sprinting
@@ -2717,7 +2721,16 @@ wss.on("connection", (ws) => {
       broadcast(room);
       return;
     }
+    if (m.type === "aimThrow") {
+      const on = Boolean(m.on) && Boolean(p.throwable) && canFight(room, p) && !p.vehicleId;
+      if (Boolean(p.aimThrow) !== on) {
+        p.aimThrow = on;
+        broadcast(room);
+      }
+      return;
+    }
     if (m.type === "equip") {
+      p.aimThrow = false;
       const kind = m.kind === "frag" || m.kind === "flash" ? m.kind : null;
       if (p.cook) return; // đã rút chốt thì phải ném
       p.throwable = kind && (p[throwKey(kind)] || 0) > 0 ? kind : null;
@@ -2745,6 +2758,7 @@ wss.on("connection", (ws) => {
       p.cook = null;
       p[key] -= 1;
       p.throwId = (p.throwId || 0) + 1; // client phát hoạt ảnh vung tay ném
+      p.aimThrow = false;
       if (p[key] <= 0) p.throwable = null;
       const eyeY = Number(m.eyeY);
       const base = {
