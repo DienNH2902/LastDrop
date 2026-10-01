@@ -3004,3 +3004,23 @@ body:has(#game.active) #game {
   left: 40%;
   transform: translateX(-50%);
 }
+
+/* Xem trực tiếp người khác sau khi bị hạ: thanh tên gọn ở trên, không che tâm màn hình */
+.death-view-overlay.spectating {
+  top: 70px;
+  padding: 8px 16px;
+  background: #0d100bcc;
+  border: 1px solid #d6ff4566;
+}
+.death-view-overlay.spectating b {
+  font-size: 20px;
+  color: #d6ff45;
+}
+
+#game.spectating #flightInfo,
+#game.spectating #chuteOverlay,
+#game.spectating #lootHud,
+#game.spectating #cookHud,
+#game.spectating .bottom-hud {
+  display: none !important;
+}

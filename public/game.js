@@ -4609,6 +4609,87 @@ function placeRemote(mesh, p) {
   // Khom người là tư thế (gập gối, cúi thân) do poseAvatar dựng, không bóp dẹt mô hình.
   mesh.scale.set(1, 1, 1);
 }
+// ================= XEM TRỰC TIẾP (sau khi bị hạ) =================
+function spectateCandidates() {
+  return (gameState?.players || []).filter((p) => p.alive && p.id !== playerId && p.state !== "lobby");
+}
+// dir: +1 người kế tiếp, -1 người trước. Trả về false nếu không còn ai sống.
+function startSpectating(dir = 1) {
+  if (!deathView) return false;
+  const list = spectateCandidates();
+  if (!list.length) return false;
+  const idx = list.findIndex((p) => p.id === deathView.spectateId);
+  const next = list[(((idx < 0 ? (dir > 0 ? -1 : 0) : idx) + dir) % list.length + list.length) % list.length];
+  deathView.spectateId = next.id;
+  deathView.mode = "pov";
+  deathView.pitch = Number(next.pitch) || 0;
+  camera.up.set(0, 1, 0);
+  renderer.domElement.style.filter = "none";
+  $("#deathViewOverlay")?.classList.add("spectating");
+  $("#game")?.classList.add("spectating"); // ẩn HUD của chính mình (dù, nhặt đồ...)
+  updateSpectateHud();
+  return true;
+}
+function updateSpectateHud() {
+  const box = $("#deathViewOverlay");
+  if (!box || !deathView) return;
+  const p = (gameState?.players || []).find((q) => q.id === deathView.spectateId);
+  const n = spectateCandidates().length;
+  setText(box.querySelector("b"), deathView.mode === "pov" && p ? `ĐANG XEM: ${p.name || "NGƯỜI CHƠI"}` : "BẠN ĐÃ BỊ HẠ");
+  setText(
+    box.querySelector("small"),
+    deathView.mode === "pov" && p
+      ? `${Math.max(0, Math.round(p.hp))} HP · ${p.kills || 0} HẠ · CÒN ${n} NGƯỜI · PAGE UP / PAGE DOWN ĐỔI NGƯỜI · ENTER XEM KẾT QUẢ`
+      : "QUAN SÁT TRẬN ĐẤU",
+  );
+}
+const specHead = new THREE.Vector3();
+let spectateHudAt = 0;
+// Mỗi khung: đặt camera vào mắt người đang được xem (theo đúng hướng nhìn của họ),
+// ẩn thân họ (không thấy bên trong đầu), hiện súng họ đang cầm ở góc màn hình.
+function updateSpectateCamera(dt) {
+  if (deathView?.mode !== "pov") return false;
+  const p = (gameState?.players || []).find((q) => q.id === deathView.spectateId);
+  const mesh = remoteMeshes.get(deathView.spectateId);
+  if (!p || !p.alive || !mesh) {
+    // Người đang xem vừa bị hạ / rời trận: chuyển sang người khác (hoặc quay về nhìn từ trên).
+    if (!startSpectating(1)) {
+      deathView.mode = "top";
+      camera.up.set(0, 0, -1);
+      $("#deathViewOverlay")?.classList.remove("spectating");
+      updateSpectateHud();
+    }
+    return false;
+  }
+  mesh.updateMatrixWorld(true);
+  const rig = mesh.userData.rig;
+  if (rig?.head) rig.head.getWorldPosition(specHead);
+  else specHead.set(mesh.position.x, mesh.position.y + 1.7, mesh.position.z);
+  specHead.y += 0.1;
+  mesh.visible = false;
+  // Góc nhìn mượt theo gói tin (yaw đã được nội suy trên thân nhân vật).
+  deathView.pitch += ((Number(p.pitch) || 0) - deathView.pitch) * Math.min(1, 12 * dt);
+  camera.position.copy(specHead);
+  camera.rotation.set(deathView.pitch, mesh.rotation.y, 0, "YXZ");
+  if (camera.fov !== baseFov) {
+    camera.fov = baseFov;
+    camera.near = 0.1;
+    camera.updateProjectionMatrix();
+  }
+  // Súng của họ ở góc màn hình (dùng lại mô hình súng góc nhìn thứ nhất, tư thế hông).
+  if (gun?.userData.models) {
+    const key = p.vehicleId ? null : p.throwable ? (p.throwable === "flash" ? "flashbang" : "grenade") : weaponKey(p.weapon);
+    gun.visible = Boolean(key);
+    for (const [kind, model] of Object.entries(gun.userData.models)) model.visible = kind === key;
+    gun.position.set(0, 0, 0);
+    gun.rotation.set(0, 0, 0);
+  }
+  if (performance.now() - spectateHudAt > 250) {
+    spectateHudAt = performance.now();
+    updateSpectateHud();
+  }
+  return true;
+}
 function beginDeathView(position = local) {
   if (deathView || !renderer) return;
   stopFiring();
@@ -4628,11 +4709,13 @@ function beginDeathView(position = local) {
   renderer.domElement.style.filter = "grayscale(1)";
   $("#deathViewOverlay")?.classList.remove("hidden");
   if (deathResultTimer) clearTimeout(deathResultTimer);
-  // Give the eliminated player time to see the battlefield from above.
+  // 3 s nhìn chỗ mình ngã từ trên cao, rồi XEM TRỰC TIẾP góc nhìn người còn sống
+  // (PAGE UP / PAGE DOWN đổi người, ENTER xem kết quả). Không còn ai để xem thì
+  // hiện kết quả như cũ.
   deathResultTimer = setTimeout(() => {
     deathResultTimer = null;
-    showResult();
-  }, 10000);
+    if (!startSpectating(1)) showResult();
+  }, 3000);
 }
 
 function renderPlayers(state) {
@@ -6249,6 +6332,8 @@ function beginGame() {
   if (deathResultTimer) clearTimeout(deathResultTimer);
   deathResultTimer = null;
   $("#deathViewOverlay")?.classList.add("hidden");
+  $("#deathViewOverlay")?.classList.remove("spectating");
+  $("#game")?.classList.remove("spectating");
   local.kills = 0;
   verticalSpeed = 0;
   grounded = true;
@@ -6624,6 +6709,18 @@ function onKeyDown(e) {
     return;
   }
 
+  if (deathView && !$("#result")?.classList.contains("active")) {
+    if (e.code === "PageUp" || e.code === "PageDown") {
+      e.preventDefault();
+      startSpectating(e.code === "PageDown" ? 1 : -1);
+      return;
+    }
+    if (e.code === "Enter" || e.code === "NumpadEnter") {
+      e.preventDefault();
+      showResult();
+      return;
+    }
+  }
   if (e.code === "Escape") {
     e.preventDefault();
 
@@ -6936,6 +7033,8 @@ function cleanupGame() {
   deathView = null;
   camera?.up.set(0, 1, 0);
   $("#deathViewOverlay")?.classList.add("hidden");
+  $("#deathViewOverlay")?.classList.remove("spectating");
+  $("#game")?.classList.remove("spectating");
   setStyle($("#zoneGrayOverlay"), "opacity", "0");
   document.removeEventListener("mousemove", onMouse);
   document.removeEventListener("mousedown", onFire);
@@ -8134,6 +8233,7 @@ function updatePlane() {
 }
 // Rơi tự do và dù: WASD bay ngang theo hướng nhìn, Shift lao nhanh, Space bung dù.
 function updateAir(dt) {
+  if (deathView) return; // đã bị hạ: không mô phỏng rơi / dù của mình nữa
   const chute = local.state === "parachute";
   airState.time += dt;
   const input = !paused;
@@ -10434,7 +10534,7 @@ function frame() {
   }
   updateLootHud(dt);
   updateGunPose(dt);
-  if (deathView) {
+  if (deathView && deathView.mode !== "pov") {
     if (gun) gun.visible = false;
   }
   updatePhaseOverlay();
@@ -10692,13 +10792,14 @@ function frame() {
     if (nowMove - lastMove > 50) {
       // Đứng yên, không xoay: bỏ gói trùng lặp (chỉ nhắc lại mỗi 250 ms) —
       // giảm ~80% gói gửi lên khi núp/ngắm, đỡ nghẽn Wi-Fi yếu và đỡ tải server.
-      const moveKey = `${local.x.toFixed(2)}|${local.z.toFixed(2)}|${local.yaw.toFixed(3)}|${+local.crouching}${+local.prone}${+Boolean(local.swimming)}${+isSlowWalking}${+isSprinting}|${(local.swimY ?? 0).toFixed(2)}|${jumpOffset.toFixed(2)}|${local.peek.toFixed(2)}`;
+      const moveKey = `${local.x.toFixed(2)}|${local.z.toFixed(2)}|${local.yaw.toFixed(3)}|${+local.crouching}${+local.prone}${+Boolean(local.swimming)}${+isSlowWalking}${+isSprinting}|${(local.swimY ?? 0).toFixed(2)}|${jumpOffset.toFixed(2)}|${local.peek.toFixed(2)}|${camera.rotation.x.toFixed(2)}`; // kèm góc ngẩng (người xem trực tiếp)
       if (moveKey !== lastMoveKey || nowMove - lastMove > 250) {
         send({
           type: "move",
           x: local.x,
           z: local.z,
           yaw: local.yaw,
+          pitch: camera ? Math.round(camera.rotation.x * 100) / 100 : 0,
           crouching: local.crouching,
           prone: local.prone,
           swimming: local.swimming,
@@ -10725,7 +10826,7 @@ function frame() {
     recoilYaw -= recoverYaw;
     camera.rotation.y = local.yaw + recoilYaw;
   }
-  if (deathView) {
+  if (deathView && !updateSpectateCamera(dt)) {
     camera.position.set(deathView.x, deathView.y + 45, deathView.z);
     camera.lookAt(deathView.x, deathView.y, deathView.z);
   }
@@ -10829,6 +10930,8 @@ function showResult() {
     if (id === "damageDirection") overlay.classList.add("hidden");
   }
   $("#deathViewOverlay")?.classList.add("hidden");
+  $("#deathViewOverlay")?.classList.remove("spectating");
+  $("#game")?.classList.remove("spectating");
   closeBackpack(false);
   // Tắt scope và đóng menu ESC ngay khi trận kết thúc — không mang trạng thái
   // này sang trận sau.

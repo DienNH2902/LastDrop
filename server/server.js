@@ -338,6 +338,7 @@ const snapshot = (room) => ({
     swimming: Boolean(p.swimming),
     swimY: p.swimming ? r2(p.swimY) : null,
     yaw: r3(p.yaw),
+    pitch: r2(p.pitch || 0),
     peek: r2(p.peek || 0),
     hp: Math.round(p.hp),
     kills: p.kills,
@@ -2549,6 +2550,7 @@ wss.on("connection", (ws) => {
       p.sprinting = Boolean(m.sprinting) && !p.prone && !p.slowWalking; // ngồi + Shift = đi khom nhanh
       p.jumpY = Math.max(0, Math.min(1.7, Number(m.jumpY) || 0));
       p.jumping = p.jumpY > 0.02;
+      p.pitch = Math.max(-1.4, Math.min(1.4, Number(m.pitch) || 0)); // người xem trực tiếp thấy đúng góc nhìn
       p.yaw = Number(m.yaw) || 0;
       p.peek =
         p.state === "ground" && !p.prone && !p.swimming && !p.jumping
