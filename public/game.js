@@ -271,6 +271,16 @@ const tmpColorB = new THREE.Color();
 
 // Vật phẩm / balo / hồi máu (server quyết định kết quả, khớp với server.js)
 const PICKUP_RADIUS = 2;
+const PICKUP_ANIM_MS = 700; // động tác cúi xuống nhặt đồ
+// Độ cúi khi nhặt (0 → 1 → 0).
+function pickupDip() {
+  const t = (performance.now() - (local.pickupAt || -1e9)) / PICKUP_ANIM_MS;
+  return t >= 0 && t < 1 ? Math.sin(t * Math.PI) : 0;
+}
+function playPickupAnim() {
+  if (local.prone || local.vehicleId) return;
+  local.pickupAt = performance.now();
+}
 const HEAL_DURATION_MS = 5000;
 const lootItems = new Map(); // id -> { id, type, x, z, amount, mesh, body }
 const lootCrates = new Map(); // Hòm đồ được đồng bộ từ server theo vị trí người chơi bị hạ.
@@ -4802,6 +4812,9 @@ function renderPlayers(state) {
     mesh.userData.berylWeapon.visible = holding && p.weapon === "beryl";
     // Lựu đạn: cầm (throwable), rút chốt (cooking), vừa ném (throwId tăng).
     const ud0 = mesh.userData;
+    const picked = (Number(p.pickupId) || 0) - (ud0.pickupId ?? (Number(p.pickupId) || 0));
+    ud0.pickupId = Number(p.pickupId) || 0;
+    if (picked > 0) ud0.pickupAt = nowMs;
     const thrown = (Number(p.throwId) || 0) - (ud0.throwId ?? (Number(p.throwId) || 0));
     ud0.throwId = Number(p.throwId) || 0;
     if (thrown > 0) {
@@ -5421,7 +5434,7 @@ function onInteract() {
     return;
   }
   if (target?.kind === "loot" && target.data) {
-    if (packHasRoom(target.data.type)) send({ type: "pickup", itemId: target.data.id });
+    pickupLoot(target.data);
     return;
   }
   if (nearestVehicle()) {
@@ -5481,156 +5494,244 @@ function installLootUi() {
   }
   const panel = document.createElement("div");
   panel.id = "backpack";
-  panel.className = "hidden";
+  panel.className = "hidden inv";
   panel.innerHTML = `
-    <div class="bp-head"><span id="bpTitle">BALO</span><small>F / TAB / ESC · ĐÓNG</small></div>
-    <div class="bp-row"><b>▮</b><div><strong>ĐẠN 5.56 MM</strong><small>ĐANG LẮP TRONG SÚNG: <span id="bpMag">30</span> / 30</small></div><span class="bp-count" id="bpAmmoCount">0</span><div class="bp-actions"><input id="bpDropAmmo" type="number" min="1" value="1" aria-label="Số viên đạn muốn thả"><button data-drop-item="ammo">THẢ</button></div></div>
-    <div class="bp-row" id="bpMed"><b>✚</b><div><strong>BỊCH MÁU</strong><small>+20 MÁU · HỒI TRONG 5 GIÂY</small></div><span class="bp-count" id="bpMedCount">0</span><div class="bp-actions"><input id="bpDropMedkit" type="number" min="1" value="1" aria-label="Số bịch máu muốn thả"><button class="secondary-action" data-use-medkit>DÙNG</button><button data-drop-item="medkit">THẢ</button></div></div>
-    <div class="bp-row"><b>💣</b><div><strong>LỰU ĐẠN NỔ</strong><small>PHÍM 4 · R RÚT CHỐT · KÍP 6 GIÂY</small></div><span class="bp-count" id="bpFragCount">0</span><div class="bp-actions"><input id="bpDropFrag" type="number" min="1" value="1" aria-label="Số lựu đạn nổ muốn thả"><button data-drop-item="frag">THẢ</button></div></div>
-    <div class="bp-row"><b>⚡</b><div><strong>LỰU ĐẠN CHOÁNG</strong><small>PHÍM 5 · LOÁ MẮT · KÍP 2 GIÂY</small></div><span class="bp-count" id="bpFlashCount">0</span><div class="bp-actions"><input id="bpDropFlash" type="number" min="1" value="1" aria-label="Số lựu đạn choáng muốn thả"><button data-drop-item="flash">THẢ</button></div></div>
-    <div id="crateSection" class="bp-section hidden"><h3>HÒM TIẾP TẾ</h3><div id="crateRows"></div></div>
-    <div class="bp-foot">F · MỞ HÒM / NHẶT ĐỒ · NHẬP SỐ LƯỢNG ĐỂ THẢ HOẶC LẤY ĐỒ</div>`;
+    <div class="bp-head"><span id="bpTitle">BALO</span><small>TAB / ESC · ĐÓNG</small></div>
+    <div class="inv-grid">
+      <section class="inv-col" data-zone="ground"><h4>XUNG QUANH</h4><div id="invGround" class="inv-list"></div></section>
+      <section class="inv-col" data-zone="pack"><h4>KHO ĐỒ</h4><div id="invPack" class="inv-list"></div></section>
+      <section class="inv-col inv-equip" data-zone="equip"><h4>TRANG BỊ</h4><div id="invEquip" class="inv-list"></div></section>
+    </div>
+    <div class="bp-foot">GIỮ CHUỘT TRÁI KÉO ĐỒ SANG KHO ĐỂ NHẶT · KÉO RA NGOÀI ĐỂ VỨT · CHUỘT PHẢI: NHẶT NHANH / DÙNG / VỨT SÚNG</div>`;
   $(".hud").append(panel);
-  panel.addEventListener("click", (event) => {
-    const useButton = event.target.closest("[data-use-medkit]");
-    if (useButton) {
-      useMedkit();
-      return;
-    }
-    const dropButton = event.target.closest("[data-drop-item]");
-    if (dropButton) {
-      const type = dropButton.dataset.dropItem;
-      const input = $(type === "ammo" ? "#bpDropAmmo" : "#bpDropMedkit");
-      const amount = Math.floor(Number(input.value));
-      const owned =
-        type === "ammo" ? local.reserveAmmo || 0 : local.medkits || 0;
-      if (!Number.isFinite(amount) || amount <= 0 || amount > owned) {
-        showLootToast(`NHẬP SỐ LƯỢNG TỪ 1 ĐẾN ${owned}`);
-        return;
-      }
-      send({ type: "dropItem", itemType: type, amount });
-      return;
-    }
-    const takeButton = event.target.closest("[data-take-item]");
-    if (takeButton && crateOpenId) {
-      const type = takeButton.dataset.takeItem;
-      const amount = Math.floor(Number($(`#crateAmount-${type}`)?.value));
-      const crate = lootCrates.get(crateOpenId);
-      const capacity =
-        type === "ammo"
-          ? packLimits.ammo - (local.reserveAmmo || 0)
-          : packLimits.medkits - (local.medkits || 0);
-      const available = crate?.contents?.[type] || 0;
-      if (
-        !Number.isFinite(amount) ||
-        amount <= 0 ||
-        amount > Math.min(capacity, available)
-      ) {
-        showLootToast("SỐ LƯỢNG KHÔNG HỢP LỆ HOẶC BALO ĐÃ ĐẦY");
-        return;
-      }
-      if (
-        send({
-          type: "transferCrate",
-          crateId: crateOpenId,
-          itemType: type,
-          amount,
-        })
-      )
-        showLootToast("ĐANG LẤY VẬT PHẨM...");
-    }
-  });
+  installInventoryDrag(panel);
   const hud = document.createElement("div");
   hud.id = "lootHud";
   hud.innerHTML = `<div class="lh-toast hidden"></div><div class="lh-prompt hidden"></div><div class="lh-heal hidden"><span></span><div><i></i></div></div>`;
   $(".hud").append(hud);
 }
-function renderBackpack() {
-  if (!$("#backpack")) return;
-  const enteredAmounts = new Map(
-    [...$("#backpack").querySelectorAll("input[type=number]")].map((input) => [
-      input.id,
-      input.value,
-    ]),
-  );
-  // Balo mở thì hàm này chạy theo mỗi gói state (20 lần/giây): chỉ ghi DOM khi số đổi.
-  setHtml(
-    $("#bpAmmoCount"),
-    `${local.reserveAmmo ?? 0}<small>/${packLimits.ammo}</small>`,
-  );
-  setText($("#bpMag"), ammo);
-  setHtml(
-    $("#bpMedCount"),
-    `${local.medkits || 0}<small>/${packLimits.medkits}</small>`,
-  );
-  $("#bpAmmoCount").classList.toggle("full", !packHasRoom("ammo"));
-  $("#bpMedCount").classList.toggle("full", !packHasRoom("medkit"));
-  const throwMax = packLimits.throwables || 3;
-  setHtml($("#bpFragCount"), `${local.frags || 0}<small>/${throwMax}</small>`);
-  setHtml($("#bpFlashCount"), `${local.flashes || 0}<small>/${throwMax}</small>`);
-  const ammoDrop = $("#bpDropAmmo");
-  const medkitDrop = $("#bpDropMedkit");
-  for (const [input, count] of [
-    [ammoDrop, local.reserveAmmo || 0],
-    [medkitDrop, local.medkits || 0],
-    [$("#bpDropFrag"), local.frags || 0],
-    [$("#bpDropFlash"), local.flashes || 0],
-  ]) {
-    input.max = count;
-    input.disabled = count <= 0;
-    const nextValue = String(
-      Math.min(count, Math.max(1, Number(enteredAmounts.get(input.id) || 1))),
-    );
-    if (input.value !== nextValue) input.value = nextValue;
+// ================= KHO ĐỒ 3 CỘT: XUNG QUANH · KHO ĐỒ · TRANG BỊ =================
+const INV_NAMES = {
+  ammo: "ĐẠN 5.56 MM",
+  medkit: "BỊCH MÁU",
+  frag: "LỰU ĐẠN NỔ",
+  flash: "LỰU ĐẠN CHOÁNG",
+};
+const GUN_NAMES = { sniper: "KAR98K", beryl: "BERYL M762", ranger: "AUG" };
+const INV_EMOJI = { ammo: "▮", medkit: "✚", frag: "💣", flash: "⚡" };
+// Ảnh vật phẩm: chụp chính mô hình 3D trong game một lần (súng nghiêng ngang, lựu đạn).
+let invIcons = null;
+function inventoryIcons() {
+  if (invIcons) return invIcons;
+  invIcons = {};
+  try {
+    const W = 240,
+      H = 110;
+    const r = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
+    r.setSize(W, H);
+    const sc = new THREE.Scene();
+    sc.add(new THREE.HemisphereLight(0xffffff, 0x3a3f33, 2.6));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+    sun.position.set(2, 3, 4);
+    sc.add(sun);
+    const shoot = (key, obj, w = W, h = H) => {
+      r.setSize(w, h);
+      sc.add(obj);
+      const box = new THREE.Box3().setFromObject(obj);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const cam = new THREE.OrthographicCamera(-w / 2, w / 2, h / 2, -h / 2, 0.01, 100);
+      const fit = Math.min((w * 0.92) / Math.max(1e-3, size.x), (h * 0.86) / Math.max(1e-3, size.y));
+      cam.zoom = fit;
+      cam.position.set(center.x, center.y, center.z + 10);
+      cam.lookAt(center);
+      cam.updateProjectionMatrix();
+      r.render(sc, cam);
+      invIcons[key] = r.domElement.toDataURL("image/png");
+      sc.remove(obj);
+    };
+    for (const kind of ["ranger", "beryl", "sniper"]) {
+      const w = buildBakedWeapon(kind, mergeGeometries);
+      w.rotation.y = -Math.PI / 2; // nòng chĩa sang phải
+      w.updateMatrixWorld(true);
+      shoot(kind, w);
+    }
+    // Hộp đạn, bịch máu, 2 loại lựu đạn: dùng đúng mô hình vật phẩm nằm trên đất
+    // (chỉ vật phẩm, không có tay cầm), nhìn chếch từ trên xuống cho dễ nhận ra.
+    lootAssets ||= buildLootAssets();
+    for (const key of ["ammo", "medkit", "frag", "flash"]) {
+      const geo = lootAssets.bodies[key];
+      if (!geo) continue;
+      const obj = new THREE.Mesh(geo, lootAssets.bodyMaterial);
+      obj.rotation.set(0.55, -0.6, 0);
+      obj.updateMatrixWorld(true);
+      shoot(key, obj, 110, 110);
+    }
+    r.dispose();
+    r.forceContextLoss?.();
+  } catch {
+    // Không tạo được ảnh (máy không hỗ trợ): dùng biểu tượng chữ.
   }
-  const crateSection = $("#crateSection");
-  const crateRows = $("#crateRows");
+  return invIcons;
+}
+function invSpace(type) {
+  if (type === "ammo") return packLimits.ammo - (local.reserveAmmo || 0);
+  if (type === "medkit") return packLimits.medkits - (local.medkits || 0);
+  if (type === "frag" || type === "flash") return (packLimits.throwables || 3) - throwCount(type);
+  return 1;
+}
+// Đồ nằm quanh chân (trong tầm nhặt, cùng tầng) + đồ trong hòm đang mở / hòm sát bên.
+function groundEntries() {
+  const out = [];
+  if (local.state !== "ground" || local.swimming) return out;
+  for (const item of lootItems.values()) {
+    const d = Math.hypot(item.x - local.x, item.z - local.z);
+    if (d > PICKUP_RADIUS + 0.4) continue;
+    if (Number.isFinite(item.y) && Math.abs((local.groundY || 0) - item.y) > 1.6) continue;
+    out.push({ src: "loot", id: item.id, type: item.type, weapon: item.weapon, amount: item.amount || 1, d });
+  }
+  out.sort((p, q) => p.d - q.d);
+  const crate = (crateOpenId && lootCrates.get(crateOpenId)) || nearestCrate();
+  if (crate)
+    for (const type of ["ammo", "medkit", "frag", "flash"]) {
+      const amount = crate.contents?.[type] || 0;
+      if (amount > 0) out.push({ src: "crate", crateId: crate.id, type, amount });
+    }
+  return out;
+}
+function invItemHtml(e, zone, extra = "") {
+  const icons = inventoryIcons();
+  const isGun = e.type === "weapon";
+  const key = isGun ? e.weapon : e.type;
+  const img = icons[key] ? `<img src="${icons[key]}" alt="">` : `<b>${INV_EMOJI[key] || "■"}</b>`;
+  const name = isGun ? GUN_NAMES[e.weapon] || "SÚNG" : INV_NAMES[e.type] || e.type;
+  const attrs = `data-zone-from="${zone}" data-src="${e.src}" data-type="${e.type}" data-id="${e.id ?? ""}" data-crate="${e.crateId ?? ""}"`;
+  return `<div class="inv-item${isGun ? " gun" : ""}${e.cls ? " " + e.cls : ""}" ${attrs}>${e.key ? `<kbd>${e.key}</kbd>` : ""}<span class="inv-img">${img}</span><span class="inv-name">${name}${extra}</span><span class="inv-count">${e.count ?? (e.amount > 1 ? "×" + e.amount : "")}</span></div>`;
+}
+function renderBackpack() {
+  const panel = $("#backpack");
+  if (!panel || panel.classList.contains("hidden") || invDrag) return;
   const crate = crateOpenId ? lootCrates.get(crateOpenId) : null;
   setText($("#bpTitle"), crate ? "BALO / HÒM TIẾP TẾ" : "BALO");
-  crateSection.classList.toggle("hidden", !crate);
-  if (!crate) {
-    if (crateRows.innerHTML) crateRows.innerHTML = "";
-    delete crateRows.dataset.renderKey;
+  // XUNG QUANH
+  const ground = groundEntries();
+  const groundHtml = ground.length
+    ? ground.map((e) => invItemHtml(e, "ground", e.src === "crate" ? '<small>TRONG HÒM</small>' : "")).join("")
+    : '<p class="inv-empty">KHÔNG CÓ ĐỒ GẦN ĐÂY</p>';
+  // KHO ĐỒ
+  const pack = [
+    { src: "pack", type: "ammo", count: `${local.reserveAmmo || 0}<small>/${packLimits.ammo}</small>`, cls: (local.reserveAmmo || 0) ? "" : "empty" },
+    { src: "pack", type: "medkit", count: `${local.medkits || 0}<small>/${packLimits.medkits}</small>`, cls: (local.medkits || 0) ? "" : "empty" },
+  ];
+  const packHtml =
+    invItemHtml(pack[0], "pack", `<small>TRONG SÚNG: ${ammo}</small>`) +
+    invItemHtml(pack[1], "pack", "<small>CHUỘT PHẢI · DÙNG (+20 MÁU)</small>");
+  // TRANG BỊ: súng (1), lựu đạn nổ (4), lựu đạn choáng (5)
+  const wk = weaponKey(local.weapon);
+  const gunEntry =
+    wk === "none"
+      ? null
+      : { src: "equip", type: "weapon", weapon: local.weapon, key: "1", count: `${ammo}` };
+  const max = packLimits.throwables || 3;
+  const equipHtml =
+    (gunEntry
+      ? invItemHtml(gunEntry, "equip", "<small>CHUỘT PHẢI · VỨT SÚNG</small>")
+      : '<div class="inv-item gun empty-slot"><kbd>1</kbd><span class="inv-name">CHƯA CÓ SÚNG</span></div>') +
+    invItemHtml({ src: "equip", type: "frag", key: "4", count: `${local.frags || 0}<small>/${max}</small>`, cls: (local.frags || 0) ? "" : "empty" }, "equip") +
+    invItemHtml({ src: "equip", type: "flash", key: "5", count: `${local.flashes || 0}<small>/${max}</small>`, cls: (local.flashes || 0) ? "" : "empty" }, "equip");
+  // Chỉ ghi DOM khi nội dung đổi (state tới 20 lần/giây).
+  for (const [el, html] of [[$("#invGround"), groundHtml], [$("#invPack"), packHtml], [$("#invEquip"), equipHtml]])
+    if (el && el.dataset.html !== html) {
+      el.innerHTML = html;
+      el.dataset.html = html;
+    }
+}
+// ---- Nhặt / vứt / dùng ----
+function pickupLoot(item) {
+  if (!item) return;
+  if (!packHasRoom(item.type)) return showLootToast(`BALO ĐẦY ${INV_NAMES[item.type] || ""}`.trim());
+  if (send({ type: "pickup", itemId: item.id })) playPickupAnim();
+}
+function invPickup(el) {
+  if (el.dataset.src === "loot") {
+    pickupLoot(lootItems.get(Number(el.dataset.id)) || lootItems.get(el.dataset.id));
+  } else if (el.dataset.src === "crate") {
+    const type = el.dataset.type;
+    const crate = lootCrates.get(Number(el.dataset.crate)) || lootCrates.get(el.dataset.crate);
+    const amount = Math.min(crate?.contents?.[type] || 0, invSpace(type));
+    if (amount <= 0) return showLootToast(`BALO ĐẦY ${INV_NAMES[type]}`);
+    if (send({ type: "transferCrate", crateId: crate.id, itemType: type, amount })) playPickupAnim();
+  }
+}
+function invDrop(el) {
+  const type = el.dataset.type;
+  if (type === "weapon") {
+    send({ type: "dropWeapon" });
     return;
   }
-  const specs = [
-    {
-      type: "ammo",
-      name: "ĐẠN 5.56 MM",
-      space: packLimits.ammo - (local.reserveAmmo || 0),
-    },
-    {
-      type: "medkit",
-      name: "BỊCH MÁU",
-      space: packLimits.medkits - (local.medkits || 0),
-    },
-    { type: "frag", name: "LỰU ĐẠN NỔ", space: (packLimits.throwables || 3) - (local.frags || 0) },
-    { type: "flash", name: "LỰU ĐẠN CHOÁNG", space: (packLimits.throwables || 3) - (local.flashes || 0) },
-  ];
-  const renderKey = JSON.stringify({
-    id: crate.id,
-    items: specs.map(({ type, space }) => [
-      type,
-      crate.contents?.[type] || 0,
-      space,
-    ]),
+  const owned = type === "ammo" ? local.reserveAmmo || 0 : type === "medkit" ? local.medkits || 0 : throwCount(type);
+  if (owned <= 0) return;
+  if (local.throwable === type && local.cookAt) return showLootToast("ĐÃ RÚT CHỐT · PHẢI NÉM");
+  send({ type: "dropItem", itemType: type, amount: owned });
+}
+function invUse(el) {
+  const zone = el.dataset.zoneFrom;
+  const type = el.dataset.type;
+  if (zone === "ground") return invPickup(el);
+  if (type === "medkit") return useMedkit();
+  if (type === "weapon") return invDrop(el); // chuột phải vào súng = vứt súng
+  if (type === "frag" || type === "flash") {
+    if (!throwCount(type)) return;
+    closeBackpack();
+    setThrowable(type);
+    return;
+  }
+  if (type === "ammo") showLootToast("ĐẠN TỰ DÙNG KHI NẠP (R)");
+}
+// ---- Kéo thả bằng chuột trái ----
+let invDrag = null;
+function installInventoryDrag(panel) {
+  panel.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    const el = e.target.closest(".inv-item[data-type]");
+    if (el) invUse(el);
   });
-  // State snapshots arrive repeatedly. Keep the same buttons/inputs in the DOM
-  // between actual inventory changes so a click cannot be interrupted mid-flight.
-  if (crateRows.dataset.renderKey === renderKey) return;
-  crateRows.innerHTML = specs
-    .map(({ type, name, space }) => {
-      const available = crate.contents?.[type] || 0;
-      const maximum = Math.max(0, Math.min(available, space));
-      const inputId = `crateAmount-${type}`;
-      const desired = Math.max(
-        1,
-        Number(enteredAmounts.get(inputId) || maximum || 1),
-      );
-      return `<div class="bp-row"><b>${type === "ammo" ? "▮" : "✚"}</b><div><strong>${name}</strong><small>CÒN TRONG HÒM: ${available}</small></div><span class="bp-count">${available}</span><div class="bp-actions"><input id="${inputId}" type="number" min="1" max="${maximum}" value="${Math.min(maximum, desired)}" ${maximum <= 0 ? "disabled" : ""} aria-label="Số lượng muốn lấy"><button data-take-item="${type}" ${maximum <= 0 ? "disabled" : ""}>LẤY</button></div></div>`;
-    })
-    .join("");
-  crateRows.dataset.renderKey = renderKey;
+  panel.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    const el = e.target.closest(".inv-item[data-type]");
+    if (!el || el.classList.contains("empty")) return;
+    e.preventDefault();
+    invDrag = { el, x: e.clientX, y: e.clientY, ghost: null };
+  });
+  window.addEventListener("pointermove", (e) => {
+    if (!invDrag) return;
+    if (!invDrag.ghost) {
+      if (Math.hypot(e.clientX - invDrag.x, e.clientY - invDrag.y) < 6) return;
+      invDrag.ghost = invDrag.el.cloneNode(true);
+      invDrag.ghost.classList.add("inv-ghost");
+      document.body.append(invDrag.ghost);
+      invDrag.el.classList.add("dragging");
+      panel.classList.add("is-dragging", "from-" + invDrag.el.dataset.zoneFrom);
+    }
+    invDrag.ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 8}px)`;
+    for (const col of panel.querySelectorAll(".inv-col"))
+      col.classList.toggle("drop-hover", col.contains(document.elementFromPoint(e.clientX, e.clientY)));
+  });
+  window.addEventListener("pointerup", (e) => {
+    if (!invDrag) return;
+    const { el, ghost } = invDrag;
+    invDrag = null;
+    panel.classList.remove("is-dragging", "from-ground", "from-pack", "from-equip");
+    for (const col of panel.querySelectorAll(".inv-col")) col.classList.remove("drop-hover");
+    el.classList.remove("dragging");
+    if (!ghost) return renderBackpack(); // chỉ click, không kéo
+    ghost.remove();
+    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-zone]")?.dataset.zone || "outside";
+    const from = el.dataset.zoneFrom;
+    if (from === "ground" && (target === "pack" || target === "equip")) invPickup(el);
+    else if (from !== "ground" && (target === "ground" || target === "outside")) invDrop(el);
+    renderBackpack();
+  });
 }
 function openBackpack(forCrateId = null) {
   if (
@@ -5644,8 +5745,8 @@ function openBackpack(forCrateId = null) {
   crateOpenId = forCrateId;
   stopFiring();
   if (scoped) setScope(false);
-  renderBackpack();
   $("#backpack").classList.remove("hidden");
+  renderBackpack();
   // Thả chuột để bấm được vào balo; trận vẫn tiếp tục chạy (không tạm dừng).
   if (document.pointerLockElement) document.exitPointerLock();
 }
@@ -5685,7 +5786,7 @@ function updateGunPose(dt) {
     scoped && local.weapon !== "sniper" && local.state === "ground" ? 1 : 0;
   gunAimBlend += (aimTarget - gunAimBlend) * Math.min(12 * dt, 1);
   if (Math.abs(aimTarget - gunAimBlend) < 0.002) gunAimBlend = aimTarget;
-  const target = local.healing ? 1 : 0;
+  const target = local.healing ? 1 : Math.min(1, pickupDip() * 1.6); // nhặt đồ: súng hạ sang bên, một tay với xuống
   gunBusy += (target - gunBusy) * Math.min(10 * dt, 1);
   if (Math.abs(target - gunBusy) < 0.002) gunBusy = target;
   const reloadProgress =
@@ -5939,6 +6040,7 @@ function beginGame() {
   local.healEndsAt = 0;
   backpackOpen = false;
   closeBigMap(false);
+  bigMap.zoom = 1; // trận mới: bản đồ lớn mở ra là thấy toàn bộ map
   paused = false;
   scoped = false;
   ammo = 30;
@@ -7809,6 +7911,7 @@ function animateAvatars(dt) {
     const armed =
       ud.weapon.visible || ud.sniperWeapon.visible || ud.berylWeapon.visible;
     const punchT = (now - ud.punchAt) / 320;
+    const pickupT = ud.pickupAt && now - ud.pickupAt < PICKUP_ANIM_MS ? (now - ud.pickupAt) / PICKUP_ANIM_MS : null;
     const throwT = ud.throwAt && now - ud.throwAt < 450 ? (now - ud.throwAt) / 450 : null;
     const inHand = ud.throwPose && !(throwT !== null && throwT > 0.5); // rời tay khi quăng
     if (ud.handGrenade) {
@@ -7834,6 +7937,7 @@ function animateAvatars(dt) {
         throwable: ud.throwPose,
         cooking: ud.cooking,
         throwAim: ud.aiming,
+        pickupT,
         throwT,
         punch: punchT >= 0 && punchT < 1 ? punchT : 0,
         punchSide: ud.punchSide,
@@ -8383,8 +8487,8 @@ function openBigMap() {
   if (scoped) setScope(false);
   const el = ensureBigMap();
   bigMap.open = true;
-  if (bigMap.zoom === 1 && bigMapMe()) setBigMapZoom(2.5); // lần đầu: zoom vừa, quanh mình
-  centerBigMapOnMe();
+  setBigMapZoom(bigMap.zoom);
+  centerBigMapOnMe(); // mặc định zoom 1× = toàn bộ map (lăn chuột để phóng to)
   el.classList.remove("hidden");
   // Thả chuột để kéo / zoom bản đồ; trận vẫn chạy, WASD vẫn đi được.
   if (document.pointerLockElement) document.exitPointerLock();
@@ -9872,7 +9976,7 @@ function frame() {
             ? Math.sin(localGaitPhase * 2) * (isSprinting ? 0.04 : 0.022)
             : 0;
         headBob += (bob - headBob) * Math.min(14 * dt, 1);
-        camera.position.y = cameraBaseY + headBob;
+        camera.position.y = cameraBaseY + headBob - pickupDip() * (isCrouching ? 0.25 : 0.55);
       } else {
         cameraBaseY = targetHeight;
         camera.position.y = targetHeight + jumpOffset;

@@ -361,6 +361,7 @@ const snapshot = (room) => ({
     cooking: Boolean(p.cook),
     aiming: Boolean(p.aimThrow) && p.alive && !p.vehicleId, // đang giữ chuột lấy đà ném
     throwId: p.throwId || 0,
+    pickupId: p.pickupId || 0,
     healing: p.alive && p.healingUntil > Date.now(),
     healLeftMs: p.alive ? Math.max(0, (p.healingUntil || 0) - Date.now()) : 0,
     reloading: p.reloadingUntil > Date.now(),
@@ -1227,6 +1228,11 @@ function tickZone(room, now) {
 }
 // Sự kiện âm thanh loot (nhặt / thả) — client phát tiếng theo loại vật phẩm.
 function lootSfx(room, p, sound, x = p.x, z = p.z) {
+  // Nhặt được đồ: tăng bộ đếm để mọi người thấy động tác cúi xuống nhặt.
+  if (sound.startsWith("pickup-")) {
+    p.pickupId = (p.pickupId || 0) + 1;
+    broadcast(room);
+  }
   broadcastRaw(room, {
     type: "lootSfx",
     sound,
