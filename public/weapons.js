@@ -4,7 +4,8 @@
 // (kích thước thật). Mỗi mô hình trả về Group kèm userData:
 //   muzzle   — Vector3 đầu nòng (để đặt tia lửa / vệt đạn)
 //   magazine — mesh băng đạn (hoạt ảnh nạp đạn)
-//   sightY   — độ cao tâm ống ngắm so với trục nòng (để ngắm trúng tâm)
+//   sightY   — độ cao đường ngắm so với trục nòng (thước ngắm cơ khí: ironY;
+//              gắn ống ngắm thì game.js đổi theo sightY của ống ngắm)
 //   bolt     — (Kar98k) khóa nòng để kéo sau mỗi phát
 import * as THREE from "three";
 
@@ -40,7 +41,12 @@ export function buildBeryl() {
   // Hộp khóa nòng + nắp che bụi bo tròn phía trên.
   part(g, box(0.058, 0.1, 0.36), black, 0, -0.02, 0.02);
   part(g, tubeZ(0.029, 0.029, 0.32, 12), steel, 0, 0.03, 0.03);
-  part(g, box(0.012, 0.018, 0.05), steel, 0.035, 0.005, -0.06); // tay kéo khóa nòng
+  // Tay kéo khóa nòng (bên phải) — tách riêng để kéo lùi lên đạn sau khi nạp.
+  const charge = new THREE.Group();
+  charge.position.set(0.035, 0.005, -0.06);
+  part(charge, box(0.012, 0.018, 0.05), steel, 0, 0, 0);
+  part(charge, box(0.022, 0.014, 0.014), steel, 0.014, 0, 0.018); // núm kéo
+  g.add(charge);
   // Thước ngắm cơ khí (thước sau + đầu ruồi) vẫn giữ, nằm thấp dưới kính ngắm.
   const ironY = 0.075;
   part(g, box(0.03, ironY - 0.045, 0.03), black, 0, (ironY + 0.045) / 2 - 0.01, -0.12);
@@ -48,80 +54,10 @@ export function buildBeryl() {
   for (const side of [-1, 1]) part(g, box(0.008, 0.028, 0.012), black, side * 0.016, ironY + 0.004, -0.57);
   part(g, box(0.004, 0.022, 0.006), black, 0, ironY - 0.004, -0.57); // đầu ruồi
   part(g, box(0.03, 0.05, 0.03), black, 0, 0.03, -0.57); // đế đầu ruồi
-  // Red dot kiểu ống giống AUG nhưng tiết diện OVAL (rộng ngang hơn cao) —
-  // nhìn là phân biệt được với ống tròn của AUG. Gắn trên ray nắp che bụi;
-  // tâm ống (đường ngắm) ở độ cao sightY.
-  const sightY = 0.132;
-  const sightZ = -0.01;
-  const R = 0.03, // bán kính dọc
-    OVAL = 1.32; // bề ngang = R × OVAL
-  part(g, box(0.026, 0.01, 0.2), black, 0, 0.063, -0.01); // ray Picatinny
+  // Ray Picatinny trên nắp che bụi (gắn ống ngắm). Mặc định ngắm bằng thước
+  // ngắm cơ khí (thước sau + đầu ruồi) ở độ cao ironY.
+  part(g, box(0.026, 0.01, 0.2), black, 0, 0.063, -0.01);
   for (let i = 0; i < 7; i++) part(g, box(0.03, 0.004, 0.008), steel, 0, 0.069, -0.1 + i * 0.03);
-  part(g, box(0.034, sightY - R - 0.066, 0.05), black, 0, (sightY - R + 0.066) / 2, sightZ); // chân đế ống
-  // Ống rỗng oval: chỉ thành ống + 2 vành (không nắp đặc che tầm nhìn).
-  const tube = new THREE.Mesh(
-    new THREE.CylinderGeometry(R, R, 0.075, 28, 1, true).rotateX(Math.PI / 2),
-    new THREE.MeshLambertMaterial({ color: "#121412", side: THREE.DoubleSide }),
-  );
-  tube.scale.x = OVAL;
-  tube.position.set(0, sightY, sightZ);
-  g.add(tube);
-  for (const z of [sightZ - 0.037, sightZ + 0.037])
-    part(g, new THREE.TorusGeometry(R, 0.0045, 6, 28), black, 0, sightY, z).scale.x = OVAL;
-  part(g, box(0.012, 0.012, 0.02), steel, R * OVAL + 0.005, sightY, sightZ); // núm chỉnh
-  // Kính trong, ngả tối nhẹ (oval theo ống).
-  const lens = part(
-    g,
-    new THREE.CircleGeometry(R - 0.002, 28),
-    new THREE.MeshBasicMaterial({
-      color: 0x14231d,
-      transparent: true,
-      opacity: 0.2,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    }),
-    0,
-    sightY,
-    sightZ - 0.035,
-  );
-  lens.scale.x = OVAL;
-  lens.renderOrder = 2;
-  lens.userData.redDot = true;
-  // Chấm đỏ phát sáng + quầng sáng (giống AUG).
-  const dot = part(
-    g,
-    new THREE.SphereGeometry(0.0012, 8, 6),
-    new THREE.MeshBasicMaterial({ color: 0xff2a1f, toneMapped: false }),
-    0,
-    sightY,
-    sightZ - 0.037,
-  );
-  dot.userData.redDot = true;
-  const glowCanvas = document.createElement("canvas");
-  glowCanvas.width = glowCanvas.height = 32;
-  const gc = glowCanvas.getContext("2d");
-  const grd = gc.createRadialGradient(16, 16, 0, 16, 16, 16);
-  grd.addColorStop(0, "rgba(255,70,50,1)");
-  grd.addColorStop(0.35, "rgba(255,40,30,0.5)");
-  grd.addColorStop(1, "rgba(255,0,0,0)");
-  gc.fillStyle = grd;
-  gc.fillRect(0, 0, 32, 32);
-  const glow = part(
-    g,
-    new THREE.PlaneGeometry(0.009, 0.009),
-    new THREE.MeshBasicMaterial({
-      map: new THREE.CanvasTexture(glowCanvas),
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      toneMapped: false,
-    }),
-    0,
-    sightY,
-    sightZ - 0.0365,
-  );
-  glow.renderOrder = 3;
-  glow.userData.redDot = true;
   // Ốp tay có ray + ống trích khí.
   part(g, box(0.064, 0.074, 0.27), tan, 0, -0.012, -0.3);
   part(g, box(0.03, 0.014, 0.27), black, 0, 0.032, -0.3);
@@ -146,7 +82,7 @@ export function buildBeryl() {
   part(g, tubeZ(0.01, 0.01, 0.27, 8), black, 0, 0.0, 0.33);
   part(g, new THREE.CylinderGeometry(0.009, 0.009, 0.28, 8), black, 0, -0.055, 0.33, 1.35);
   part(g, box(0.04, 0.13, 0.025), polymer, 0, -0.045, 0.47);
-  g.userData = { muzzle: new THREE.Vector3(0, 0, -0.69), magazine, sightY, kind: "beryl" };
+  g.userData = { muzzle: new THREE.Vector3(0, 0, -0.69), magazine, sightY: ironY, ironY, kind: "beryl", charge, chargeGrip: new THREE.Vector3(0.03, -0.01, 0.02) };
   return g;
 }
 
@@ -201,85 +137,31 @@ export function buildAug() {
     0.18,
   );
   part(magazine, box(0.036, 0.02, 0.078), metal, 0, -0.08, 0); // đế băng
-  // Ray trên + red dot dạng ống.
+  // Tay gài đạn (cần lên đạn) bên TRÁI thân súng như AUG thật — khi ngắm vẫn thấy
+  // ló ra ở góc dưới bên trái.
+  const charge = new THREE.Group(); // tách riêng để kéo lùi lên đạn sau khi nạp
+  charge.position.set(-0.05, 0.045, -0.07);
+  part(charge, box(0.024, 0.022, 0.1), steel, 0, 0, 0); // thanh trượt
+  part(charge, box(0.075, 0.02, 0.026), steel, -0.04, 0, -0.03); // cần gạt chìa ra trái
+  part(charge, new THREE.CylinderGeometry(0.016, 0.016, 0.03, 12), polymer, -0.085, 0, -0.03, 0, 0, Math.PI / 2); // núm cầm
+  g.add(charge);
+  // Ray trên (gắn ống ngắm) + thước ngắm cơ khí gập: thước sau có khe chữ U,
+  // đầu ruồi có tai bảo vệ — mặc định ngắm bằng hai điểm này ở độ cao ironY.
   part(g, box(0.03, 0.018, 0.2), metal, 0, 0.066, -0.02);
-  const sightY = 0.13;
-  part(
-    g,
-    box(0.034, sightY - 0.075 - 0.02, 0.05),
-    metal,
-    0,
-    (0.075 + sightY - 0.03) / 2,
-    -0.02,
-  ); // chân đế ống
-  // Ống red dot rỗng: chỉ có thành ống và hai vành hình khuyên (KHÔNG có nắp
-  // đặc che tầm nhìn). Kính trong, ngả tối nhẹ; chấm đỏ phát sáng ở giữa.
-  const R = 0.03;
-  const tube = new THREE.Mesh(
-    new THREE.CylinderGeometry(R, R, 0.07, 24, 1, true).rotateX(Math.PI / 2),
-    new THREE.MeshLambertMaterial({ color: "#121412", side: THREE.DoubleSide }),
-  );
-  tube.position.set(0, sightY, -0.02);
-  g.add(tube);
-  for (const z of [-0.055, 0.015])
-    part(g, new THREE.TorusGeometry(R, 0.0045, 6, 24), metal, 0, sightY, z);
-  part(g, box(0.012, 0.012, 0.018), metal, R + 0.004, sightY, -0.02); // núm chỉnh
-  const lens = part(
-    g,
-    new THREE.CircleGeometry(R - 0.002, 24),
-    new THREE.MeshBasicMaterial({
-      color: 0x14231d,
-      transparent: true,
-      opacity: 0.2,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    }),
-    0,
-    sightY,
-    -0.05,
-  );
-  lens.renderOrder = 2;
-  lens.userData.redDot = true; // lớp kính chỉ dùng ở góc nhìn thứ nhất, không gộp
-  const dot = part(
-    g,
-    new THREE.SphereGeometry(0.0012, 8, 6),
-    new THREE.MeshBasicMaterial({ color: 0xff2a1f, toneMapped: false }),
-    0,
-    sightY,
-    -0.052,
-  );
-  // Quầng sáng nhẹ quanh chấm đỏ (cộng màu, không che tầm nhìn).
-  const glowCanvas = document.createElement("canvas");
-  glowCanvas.width = glowCanvas.height = 32;
-  const gc = glowCanvas.getContext("2d");
-  const grd = gc.createRadialGradient(16, 16, 0, 16, 16, 16);
-  grd.addColorStop(0, "rgba(255,70,50,1)");
-  grd.addColorStop(0.35, "rgba(255,40,30,0.5)");
-  grd.addColorStop(1, "rgba(255,0,0,0)");
-  gc.fillStyle = grd;
-  gc.fillRect(0, 0, 32, 32);
-  const glow = part(
-    g,
-    new THREE.PlaneGeometry(0.009, 0.009),
-    new THREE.MeshBasicMaterial({
-      map: new THREE.CanvasTexture(glowCanvas),
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      toneMapped: false,
-    }),
-    0,
-    sightY,
-    -0.0515,
-  );
-  glow.renderOrder = 3;
-  glow.userData.redDot = true;
-  dot.userData.redDot = true;
+  const ironY = 0.1;
+  for (const side of [-1, 1]) part(g, box(0.008, 0.03, 0.012), metal, side * 0.011, ironY - 0.008, 0.06); // thước sau (khe)
+  part(g, box(0.03, 0.012, 0.014), metal, 0, ironY - 0.024, 0.06);
+  part(g, box(0.004, 0.026, 0.006), metal, 0, ironY - 0.012, -0.11); // đầu ruồi
+  for (const side of [-1, 1]) part(g, box(0.005, 0.03, 0.012), metal, side * 0.014, ironY - 0.01, -0.11); // tai che
+  part(g, box(0.034, 0.012, 0.016), metal, 0, ironY - 0.028, -0.11);
   g.userData = {
     muzzle: new THREE.Vector3(0, 0, -0.54),
     magazine,
-    sightY,
+    sightY: ironY,
+    ironY,
     kind: "aug",
+    charge,
+    chargeGrip: new THREE.Vector3(-0.09, 0, -0.03),
   };
   return g;
 }
@@ -334,49 +216,175 @@ export function buildKar98() {
   // Nòng dài + đầu ngắm có vành che.
   part(g, tubeZ(0.014, 0.012, 0.66), metal, 0, 0, -0.62);
   part(g, tubeZ(0.02, 0.02, 0.04, 10), metal, 0, 0.004, -0.93);
-  // Ống ngắm 8x trên ngàm.
-  const sightY = 0.085;
-  for (const z of [-0.08, 0.1])
-    part(g, box(0.026, sightY - 0.02, 0.022), metal, 0, sightY / 2, z);
-  part(g, tubeZ(0.02, 0.02, 0.28, 16), blued, 0, sightY, 0.0);
-  part(g, tubeZ(0.034, 0.02, 0.1, 16), blued, 0, sightY, -0.18); // loa vật kính
-  part(g, tubeZ(0.024, 0.03, 0.08, 16), blued, 0, sightY, 0.17); // loa thị kính
-  part(
-    g,
-    new THREE.CylinderGeometry(0.012, 0.012, 0.03, 10),
-    metal,
-    0,
-    sightY + 0.03,
-    0.0,
-  ); // núm chỉnh
-  part(
-    g,
-    new THREE.CylinderGeometry(0.012, 0.012, 0.03, 10).rotateZ(Math.PI / 2),
-    metal,
-    0.03,
-    sightY,
-    0.0,
-  );
-  part(
-    g,
-    new THREE.CircleGeometry(0.03, 16),
-    new THREE.MeshBasicMaterial({ color: 0x5e8ea0 }),
-    0,
-    sightY,
-    -0.231,
-    0,
-    Math.PI,
-    0,
-  );
+  // Thước ngắm cơ khí: thước sau chữ V trên ốp nòng + đầu ruồi có vành che ở mũi
+  // súng (ironY). Ống ngắm chỉ có khi gắn phụ kiện.
+  const ironY = 0.042;
+  for (const side of [-1, 1]) part(g, box(0.008, 0.026, 0.01), metal, side * 0.009, ironY - 0.01, -0.1);
+  part(g, box(0.03, 0.012, 0.016), metal, 0, ironY - 0.024, -0.1);
+  part(g, box(0.004, 0.03, 0.006), metal, 0, ironY - 0.014, -0.92); // đầu ruồi
+  part(g, tubeZ(0.016, 0.016, 0.02, 10), metal, 0, ironY - 0.012, -0.92).scale.set(1, 1.2, 1); // vành che
+  // Ngàm ống ngắm (để gắn 4X / 8X).
+  for (const z of [-0.08, 0.1]) part(g, box(0.026, 0.012, 0.022), metal, 0, 0.03, z);
   magazine.userData.fromTop = true;
   g.userData = {
     muzzle: new THREE.Vector3(0, 0, -0.96),
     magazine,
     bolt,
-    sightY,
+    sightY: ironY,
+    ironY,
     kind: "kar98",
   };
   return g;
+}
+
+// ---------------------------------------------------------------------------
+// PHỤ KIỆN: mô hình trong toạ độ của súng (gốc tại tay cầm, nòng về -Z).
+// MOUNTS: điểm gắn của từng súng — ray trên (ống ngắm), đầu nòng, dưới ốp tay
+// (tay cầm dọc) và băng đạn (băng mở rộng gắn vào băng đạn để chạy theo hoạt ảnh nạp).
+// ---------------------------------------------------------------------------
+export const MOUNTS = {
+  ranger: { rail: [0.075, -0.02], muzzle: -0.54, under: [-0.04, -0.3], magBase: [0, -0.14, 0.1, 0.18], magTip: [0, -0.115, 0, 0] },
+  beryl: { rail: [0.068, -0.01], muzzle: -0.69, under: [-0.05, -0.33], magBase: [0, -0.07, -0.05, 0], magTip: [0, -0.27, -0.12, 0.8] },
+  sniper: { rail: [0.036, 0.01], muzzle: -0.96, under: [-0.06, -0.3], magBase: null, magTip: null },
+};
+const glowTexture = (() => {
+  let tex = null;
+  return () => {
+    if (tex) return tex;
+    const c = document.createElement("canvas");
+    c.width = c.height = 32;
+    const gc = c.getContext("2d");
+    const grd = gc.createRadialGradient(16, 16, 0, 16, 16, 16);
+    grd.addColorStop(0, "rgba(255,70,50,1)");
+    grd.addColorStop(0.35, "rgba(255,40,30,0.5)");
+    grd.addColorStop(1, "rgba(255,0,0,0)");
+    gc.fillStyle = grd;
+    gc.fillRect(0, 0, 32, 32);
+    tex = new THREE.CanvasTexture(c);
+    return tex;
+  };
+})();
+// Trả về { obj, parent: "model" | "magazine", sightY?, muzzleExt? }.
+export function buildAttachment(id, kind) {
+  const M = MOUNTS[kind] || MOUNTS.ranger;
+  const g = new THREE.Group();
+  const black = mat("#151714");
+  const steel = mat("#2e312c");
+  const [ry, rz] = M.rail;
+  const out = { obj: g, parent: "model" };
+  if (id === "reddot") {
+    // Red dot ống tròn (như red dot cũ của AUG): ống rỗng, kính trong, chấm đỏ.
+    const R = 0.03,
+      cy = ry + 0.058;
+    part(g, box(0.034, cy - R - ry + 0.004, 0.05), black, 0, (ry + cy - R) / 2, rz);
+    const tube = new THREE.Mesh(
+      new THREE.CylinderGeometry(R, R, 0.07, 24, 1, true).rotateX(Math.PI / 2),
+      new THREE.MeshLambertMaterial({ color: "#121412", side: THREE.DoubleSide }),
+    );
+    tube.position.set(0, cy, rz);
+    g.add(tube);
+    for (const z of [rz - 0.035, rz + 0.035]) part(g, new THREE.TorusGeometry(R, 0.0045, 6, 24), black, 0, cy, z);
+    part(g, box(0.012, 0.012, 0.018), black, R + 0.004, cy, rz);
+    const lens = part(
+      g,
+      new THREE.CircleGeometry(R - 0.002, 24),
+      new THREE.MeshBasicMaterial({ color: 0x14231d, transparent: true, opacity: 0.2, depthWrite: false, side: THREE.DoubleSide }),
+      0,
+      cy,
+      rz - 0.03,
+    );
+    lens.renderOrder = 2;
+    lens.userData.redDot = true;
+    const dot = part(g, new THREE.SphereGeometry(0.0012, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff2a1f, toneMapped: false }), 0, cy, rz - 0.032);
+    dot.userData.redDot = true;
+    const glow = part(
+      g,
+      new THREE.PlaneGeometry(0.009, 0.009),
+      new THREE.MeshBasicMaterial({ map: glowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }),
+      0,
+      cy,
+      rz - 0.0315,
+    );
+    glow.renderOrder = 3;
+    glow.userData.redDot = true;
+    out.sightY = cy;
+  } else if (id === "x4" || id === "x8") {
+    // 4X: ống ngắn kiểu ACOG có chóp che nắng; 8X: ống dài có loa vật kính lớn.
+    const long = id === "x8";
+    const r = long ? 0.02 : 0.022,
+      len = long ? 0.3 : 0.15,
+      cy = ry + (long ? 0.05 : 0.046);
+    const body = mat(long ? "#262a2d" : "#2b2f26");
+    for (const z of long ? [rz - 0.08, rz + 0.08] : [rz - 0.035, rz + 0.035]) part(g, box(0.026, cy - ry - r + 0.006, 0.022), black, 0, (ry + cy - r) / 2, z);
+    part(g, tubeZ(r, r, len, 16), body, 0, cy, rz);
+    part(g, tubeZ(long ? 0.034 : 0.03, r, long ? 0.1 : 0.05, 16), body, 0, cy, rz - len / 2 - (long ? 0.03 : 0.015)); // loa vật kính
+    part(g, tubeZ(0.024, 0.03, 0.06, 16), body, 0, cy, rz + len / 2 + 0.02); // thị kính
+    if (!long) part(g, box(0.05, 0.008, 0.08), body, 0, cy + r + 0.005, rz - 0.01); // chóp che nắng
+    part(g, new THREE.CylinderGeometry(0.011, 0.011, 0.026, 10), black, 0, cy + r + 0.012, rz + (long ? 0 : 0.03)); // núm chỉnh
+    part(g, new THREE.CylinderGeometry(0.011, 0.011, 0.026, 10).rotateZ(Math.PI / 2), black, r + 0.012, cy, rz + (long ? 0 : 0.03));
+    part(g, new THREE.CircleGeometry(long ? 0.03 : 0.026, 16), new THREE.MeshBasicMaterial({ color: long ? 0x5e8ea0 : 0x8a5a2a }), 0, cy, rz - len / 2 - (long ? 0.081 : 0.041), 0, Math.PI, 0);
+    out.sightY = cy;
+  } else if (id === "comp") {
+    // Nòng giảm giật: khối vuông có các khe xả khí hai bên + trên.
+    const z0 = M.muzzle;
+    part(g, box(0.04, 0.04, 0.08), steel, 0, 0, z0 - 0.035);
+    for (let i = 0; i < 3; i++) {
+      part(g, box(0.044, 0.008, 0.012), black, 0, 0.012, z0 - 0.015 - i * 0.022);
+      for (const side of [-1, 1]) part(g, box(0.006, 0.026, 0.012), black, side * 0.021, 0, z0 - 0.015 - i * 0.022);
+    }
+    out.muzzleExt = 0.075;
+  } else if (id === "supp") {
+    // Nòng giảm thanh: ống trụ dài, đầu thuôn.
+    const z0 = M.muzzle;
+    part(g, tubeZ(0.026, 0.026, 0.2, 16), mat("#1d1f1c"), 0, 0, z0 - 0.1);
+    part(g, tubeZ(0.02, 0.026, 0.02, 16), black, 0, 0, z0 - 0.21);
+    part(g, tubeZ(0.027, 0.027, 0.012, 16), steel, 0, 0, z0 - 0.02);
+    out.muzzleExt = 0.215;
+  } else if (id === "vgrip") {
+    // Tay cầm dọc dưới ốp tay (súng auto).
+    const [uy, uz] = M.under;
+    part(g, box(0.034, 0.016, 0.06), black, 0, uy - 0.006, uz);
+    part(g, box(0.03, 0.1, 0.034), mat("#24261f"), 0, uy - 0.062, uz + 0.004, 0.12);
+    for (let i = 0; i < 4; i++) part(g, box(0.033, 0.004, 0.036), black, 0, uy - 0.03 - i * 0.022, uz + 0.004 + i * 0.003, 0.12);
+  } else if (id === "extAR" && M.magTip) {
+    // Băng mở rộng: nối dài phía dưới băng đạn (chạy theo hoạt ảnh nạp).
+    const [x, y, z, rx] = M.magTip;
+    part(g, box(0.035, 0.08, 0.074), mat("#2a2b28"), x, y - 0.03, z, rx);
+    part(g, box(0.037, 0.012, 0.078), black, x, y - 0.07, z - Math.sin(rx) * 0.04, rx);
+    out.parent = "magazine";
+  } else if (id === "extSR") {
+    // Kar98k: hộp tiếp đạn rời dưới thân súng (+5 viên).
+    part(g, box(0.034, 0.07, 0.11), mat("#232422"), 0, -0.1, 0.02);
+    part(g, box(0.036, 0.01, 0.112), black, 0, -0.135, 0.02);
+  }
+  return out;
+}
+// Phụ kiện gộp 1 geometry màu (súng người khác + vật phẩm trên đất). center=true:
+// dời về tâm (vật phẩm nằm đất); ngược lại giữ toạ độ súng (để gắn lên súng).
+const bakedAtt = new Map();
+export function bakeAttachment(id, kind, mergeGeometries, center = false) {
+  const key = id + "|" + kind + "|" + center;
+  let geo = bakedAtt.get(key);
+  if (geo) return geo;
+  const a = buildAttachment(id, kind);
+  const holder = new THREE.Group();
+  holder.add(a.obj);
+  if (a.parent === "magazine") {
+    const b = (MOUNTS[kind] || MOUNTS.ranger).magBase;
+    if (b) {
+      a.obj.position.set(b[0], b[1], b[2]);
+      a.obj.rotation.x = b[3];
+    }
+  }
+  geo = bakeModel(holder, mergeGeometries, true);
+  if (center) {
+    geo.computeBoundingBox();
+    const c = geo.boundingBox.getCenter(new THREE.Vector3());
+    geo.translate(-c.x, -c.y, -c.z);
+  }
+  geo.computeBoundingBox();
+  bakedAtt.set(key, geo);
+  return geo;
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +493,7 @@ export function weaponToColoredGeometry(group, mergeGeometries) {
 // do game.js gắn riêng). Geometry + material tạo đúng 1 lần cho mỗi loại súng và
 // dùng chung cho mọi nhân vật; mỗi người chỉ tạo Group + Mesh nhỏ.
 const bakedWeapons = new Map();
-const bakedWeaponMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+export const bakedWeaponMat = new THREE.MeshLambertMaterial({ vertexColors: true });
 export function buildBakedWeapon(kind, mergeGeometries) {
   const key = kind === "sniper" || kind === "beryl" ? kind : "ranger";
   let entry = bakedWeapons.get(key);

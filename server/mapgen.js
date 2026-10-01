@@ -724,16 +724,36 @@ function createObstacles(seed, mapId) {
       while (j + 1 < segs.length && segs[j + 1].bridge) j++;
       // Kéo lan can thêm một đoạn ở mỗi đầu cầu.
       const run = segs.slice(Math.max(0, i - 1), Math.min(segs.length, j + 2));
-      for (const s of run) {
-        const c = Math.cos(s.yaw),
-          sn = Math.sin(s.yaw);
-        const hx = (sn * s.length) / 2,
-          hz = (c * s.length) / 2;
-        for (const side of [-1, 1]) {
-          const ox = c * side * (s.w / 2 - 0.2),
-            oz = -sn * side * (s.w / 2 - 0.2);
-          addFence(s.x - hx + ox, s.z - hz + oz, s.x + hx + ox, s.z + hz + oz);
+      // Lan can CONG theo tim đường: lệch từng ĐỈNH của đường gấp khúc theo pháp
+      // tuyến trung bình (nối góc kiểu miter) → các đoạn lan can nối liền nhau,
+      // ôm sát mép đường ở chỗ cua, không lòi ra / hụt vào như khi mỗi đoạn
+      // đường có một thanh thẳng riêng.
+      const pts = line.points;
+      const k0 = run[0].seq,
+        k1 = run[run.length - 1].seq + 1;
+      const half = run[0].w / 2 - 0.2;
+      const dirAt = (k) => {
+        const a = pts[Math.max(0, k)],
+          b = pts[Math.min(pts.length - 1, k + 1)];
+        const len = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+        return { x: (b.x - a.x) / len, z: (b.z - a.z) / len };
+      };
+      for (const side of [-1, 1]) {
+        const rail = [];
+        for (let k = k0; k <= k1; k++) {
+          const d0 = dirAt(Math.min(k, k1 - 1) - (k > k0 && k < k1 ? 1 : 0)),
+            d1 = dirAt(Math.min(k, k1 - 1));
+          // Pháp tuyến (bên phải hướng đi) của 2 đoạn kề nhau, lấy trung bình.
+          let nx = d0.z + d1.z,
+            nz = -d0.x - d1.x;
+          const nl2 = Math.hypot(nx, nz) || 1;
+          nx /= nl2;
+          nz /= nl2;
+          const cosHalf = Math.max(0.5, nx * d1.z - nz * d1.x);
+          const off = (side * half) / cosHalf;
+          rail.push({ x: pts[k].x + nx * off, z: pts[k].z + nz * off });
         }
+        for (let k = 0; k < rail.length - 1; k++) addFence(rail[k].x, rail[k].z, rail[k + 1].x, rail[k + 1].z);
       }
       // Rào dọc bờ sông hai bên đường, trong phạm vi ~16 m quanh cầu.
       const mid = segs[Math.floor((i + j) / 2)];

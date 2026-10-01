@@ -2846,3 +2846,161 @@ body:has(#game.active) #game {
     min-height: 0;
   }
 }
+
+/* Ống ngắm 4X (kiểu ACOG): đỉnh chữ V đỏ phát sáng NẰM ĐÚNG TÂM (điểm chạm
+   đạn), viền đen cho nổi trên nền sáng; vạch ngang dày ở hai mép, mảnh dần vào
+   giữa; cột dọc phía dưới có vạch bù tầm xa. Phóng theo kích thước ống ngắm. */
+.scope-overlay.x4 {
+  background: radial-gradient(circle at center, transparent 0 26%, #050605 27% 100%);
+}
+.scope-overlay.x4 .scope-reticle {
+  position: absolute;
+  width: min(54vh, 54vw);
+  height: min(54vh, 54vw);
+  border-radius: 50%;
+  padding: 0;
+  font-size: 0;
+  text-shadow: none;
+  background: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%20200%20200%27%3E%3Cg%20stroke%3D%27%230b0d09%27%20fill%3D%27none%27%3E%3Cpath%20d%3D%27M0%20100H70M130%20100H200%27%20stroke-width%3D%273.2%27%2F%3E%3Cpath%20d%3D%27M70%20100H86M114%20100H130%27%20stroke-width%3D%270.9%27%2F%3E%3Cpath%20d%3D%27M100%20118V200%27%20stroke-width%3D%273.2%27%2F%3E%3Cpath%20d%3D%27M93%20130H107M95%20142H105M96%20154H104M97%20166H103%27%20stroke-width%3D%271.2%27%2F%3E%3C%2Fg%3E%3Cpath%20d%3D%27M86%20114%20L100%20100%20L114%20114%27%20stroke%3D%27%231a0503%27%20stroke-width%3D%275.2%27%20fill%3D%27none%27%20stroke-linejoin%3D%27miter%27%2F%3E%3Cpath%20d%3D%27M86%20114%20L100%20100%20L114%20114%27%20stroke%3D%27%23ff2a1a%27%20stroke-width%3D%273%27%20fill%3D%27none%27%20stroke-linejoin%3D%27miter%27%2F%3E%3Ccircle%20cx%3D%27100%27%20cy%3D%27100%27%20r%3D%271.6%27%20fill%3D%27%23ffd2c8%27%2F%3E%3C%2Fsvg%3E") center/100% 100% no-repeat;
+  filter: drop-shadow(0 0 2px rgba(255, 50, 30, 0.35));
+}
+.scope-overlay.x4 .scope-reticle:after {
+  display: none;
+}
+/* Phụ kiện trong balo */
+.inv-sub {
+  margin: 10px 0 2px;
+  font: 900 13px "Barlow Condensed", Arial, sans-serif;
+  letter-spacing: 2px;
+  color: #9aa08e;
+}
+.inv-empty.small {
+  margin: 8px 0;
+}
+.inv-item.att {
+  grid-template-columns: 70px 1fr auto;
+}
+.inv-item.nofit {
+  opacity: 0.7;
+}
+.inv-slots {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+}
+.inv-item.att-slot {
+  display: grid;
+  grid-template-columns: 1fr;
+  justify-items: center;
+  gap: 2px;
+  min-height: 62px;
+  padding: 4px;
+  text-align: center;
+}
+.inv-item.att-slot .inv-img {
+  height: 34px;
+}
+.inv-item.att-slot .inv-name {
+  font-size: 8.5px;
+}
+.inv-item.att-slot.empty {
+  border-style: dashed;
+  opacity: 0.55;
+  align-content: center;
+}
+.inv-item.att-slot.na {
+  opacity: 0.25;
+  background: repeating-linear-gradient(45deg, transparent 0 6px, #ffffff0d 6px 7px);
+}
+/* Dưới nước: nhìn mờ */
+.underwater-tint {
+  background: linear-gradient(180deg, #1b7f9b40, #063b59a0);
+}
+.underwater-tint.active {
+  backdrop-filter: blur(1.6px);
+}
+
+/* Balo: CHIỀU CAO CỐ ĐỊNH — danh sách dài thì cuộn trong từng cột, khung không co giãn */
+#backpack.inv {
+  height: min(760px, 90vh);
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#backpack.inv .inv-grid {
+  flex: 1;
+  min-height: 0;
+}
+#backpack.inv .inv-col {
+  min-height: 0;
+  overflow-y: auto;
+}
+/* Súng + 4 ô phụ kiện đặt theo vị trí thật trên súng */
+.gun-rig {
+  position: relative;
+  height: 196px;
+  margin-bottom: 6px;
+}
+.gun-rig .inv-item.gun-core {
+  position: absolute;
+  left: 70px;
+  right: 0;
+  top: 50px;
+  bottom: 50px;
+  grid-template-columns: 1fr auto;
+  min-height: 0;
+}
+.gun-rig .gun-core .inv-img {
+  grid-row: 1 / 3;
+  height: 74px;
+}
+.gun-rig .gun-core .inv-name {
+  position: absolute;
+  left: 26px;
+  bottom: 3px;
+  font-size: 10px;
+}
+.gun-rig .gun-core .inv-name small {
+  display: none;
+}
+.gun-rig .gun-core .inv-count {
+  position: absolute;
+  right: 8px;
+  top: 4px;
+  font-size: 16px;
+}
+.gun-rig .att-slot {
+  position: absolute;
+  width: 72px;
+  min-height: 0;
+  height: 46px;
+  z-index: 1;
+}
+.gun-rig .att-slot .inv-img {
+  height: 24px;
+}
+/* Súng quay nòng sang TRÁI, báng bên phải: các ô đặt theo đó. */
+.gun-rig .gun-core .inv-img img {
+  transform: scaleX(-1);
+}
+.gun-rig .slot-scope {
+  top: 0;
+  left: 60%;
+  transform: translateX(-50%);
+}
+.gun-rig .slot-muzzle {
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.gun-rig .slot-mag {
+  bottom: 0;
+  left: 74%;
+  transform: translateX(-50%);
+}
+.gun-rig .slot-grip {
+  bottom: 0;
+  left: 40%;
+  transform: translateX(-50%);
+}

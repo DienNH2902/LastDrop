@@ -9,6 +9,7 @@ const { WebSocketServer } = require("ws");
 const Terrain = require("../public/terrain.js");
 // Nhà sàn + thành chính: hình học dùng chung với client (public/structures.js).
 const Structures = require("../public/structures.js");
+const Attach = require("../public/attachments.js");
 const { createObstacles } = require("./mapgen.js");
 
 const ROOT = path.join(__dirname, "..", "public");
@@ -362,6 +363,8 @@ const snapshot = (room) => ({
     aiming: Boolean(p.aimThrow) && p.alive && !p.vehicleId, // đang giữ chuột lấy đà ném
     throwId: p.throwId || 0,
     pickupId: p.pickupId || 0,
+    att: Attach.encode(p.att), // phụ kiện đang gắn: mọi người thấy + nghe (giảm thanh)
+    packAtt: (p.packAtt || []).join(","),
     healing: p.alive && p.healingUntil > Date.now(),
     healLeftMs: p.alive ? Math.max(0, (p.healingUntil || 0) - Date.now()) : 0,
     reloading: p.reloadingUntil > Date.now(),
@@ -421,6 +424,7 @@ function createVehicles(obstacles) {
     () => Math.random() - 0.5,
   );
   const usedPositions = [];
+  const spawnProbeRoom = { obstacles, players: new Map(), vehicles: [] }; // chỉ để dò va chạm
   const carClearance = 2.8; // bán kính thân xe + khoảng hở an toàn
   const isClear = (x, z, selectedRoad) => {
     if (
@@ -477,6 +481,18 @@ function createVehicles(obstacles) {
         if (Math.hypot(dx, dz) < obstacleRadius + carClearance) return false;
       }
     }
+    // Kiểm thêm TOÀN BỘ thân xe bằng đúng va chạm của game (tường thành, hàng rào,
+    // tháp, thành chính, cầu thang nhà sàn, đá, cây...): trước đây chỉ so khoảng
+    // cách tới TÂM vật thể nên tường / hàng rào dài vẫn xuyên qua thân xe → kẹt.
+    const yaw = selectedRoad?.yaw || 0,
+      c = Math.cos(yaw),
+      sn = Math.sin(yaw);
+    for (let lx = -1.6; lx <= 1.6001; lx += 0.4)
+      for (let lz = -2.8; lz <= 2.8001; lz += 0.4) {
+        const px = x + c * lx + sn * lz,
+          pz = z - sn * lx + c * lz;
+        if (blockedPosition(spawnProbeRoom, px, pz, null, null, true, 0.25)) return false;
+      }
     // Không đặt xe sát các điểm bắt đầu ở khu chờ.
     if (
       [
@@ -772,6 +788,14 @@ function createLoot(room) {
   place("flash", FLASH_COUNT, 1);
   place("ammo", AMMO_BOX_COUNT, AMMO_PER_BOX);
   place("medkit", MEDKIT_COUNT, 1);
+  for (const [att, count] of Object.entries(Attach.SPAWNS)) {
+    const before = items.length;
+    place("attach", count, 1);
+    for (const item of items.slice(before)) {
+      item.att = att;
+      item.yaw = Math.round(Math.random() * 628) / 100;
+    }
+  }
   return items;
 }
 // Thông số vũ khí (server là nơi quyết định). "none" = tay không.
@@ -784,7 +808,58 @@ const WEAPON_STATS = {
 // Số súng rải trong các khu nhà mỗi trận (sniper tăng từ 2 lên 7 cho dễ tìm hơn).
 const WEAPON_SPAWNS = { ranger: 14, beryl: 10, sniper: 7 };
 const weaponStats = (player) => WEAPON_STATS[player.weapon] || WEAPON_STATS.none;
-const magazineSize = (player) => weaponStats(player).mag;
+const magazineSize = (player) =>
+  weaponStats(player).mag +
+  (player.att && player.att.mag && Attach.fits(player.att.mag, player.weapon) ? Attach.magBonus(player.att) : 0);
+
+// ================= PHỤ KIỆN SÚNG =================
+// p.att: { scope, muzzle, grip, mag } đang gắn trên súng · p.packAtt: [id] trong balo.
+function dropAttLoot(room, p, id, x = p.x, z = p.z) {
+  const a = Math.random() * Math.PI * 2,
+    r = 0.35 + Math.random() * 0.4;
+  const item = {
+    id: room.nextLootId++,
+    type: "attach",
+    att: id,
+    x: Math.round((x + Math.cos(a) * r) * 100) / 100,
+    z: Math.round((z + Math.sin(a) * r) * 100) / 100,
+    yaw: Math.round(Math.random() * 628) / 100,
+    amount: 1,
+  };
+  // Đứng trên tầng cao (thành chính / nhà sàn): đồ nằm đúng tầng đó.
+  if ((p.groundY || 0) - groundHeightAt(room, x, z) > 1) item.y = Math.round((p.groundY || 0) * 100) / 100;
+  room.loot ||= [];
+  room.loot.push(item);
+  broadcastRaw(room, { type: "lootAdded", item });
+}
+function attToPack(room, p, id) {
+  p.packAtt ||= [];
+  if (p.packAtt.length < Attach.PACK_MAX) p.packAtt.push(id);
+  else dropAttLoot(room, p, id); // balo đầy: rơi xuống đất
+}
+// Súng rời tay (vứt / đổi súng): phụ kiện đang gắn chuyển vào balo.
+function stripGunAttachments(room, p) {
+  for (const s of Attach.SLOTS) if (p.att && p.att[s]) attToPack(room, p, p.att[s]);
+  p.att = {};
+}
+// Cầm súng mới: tự gắn các phụ kiện hợp trong balo vào ô còn trống.
+function autoAttachFromPack(p) {
+  p.att ||= {};
+  p.packAtt ||= [];
+  for (const s of Attach.SLOTS) {
+    if (p.att[s]) continue;
+    const i = p.packAtt.findIndex((id) => Attach.ATTACH[id].slot === s && Attach.fits(id, p.weapon));
+    if (i >= 0) p.att[s] = p.packAtt.splice(i, 1)[0];
+  }
+}
+// Tháo băng mở rộng: số đạn dư trong súng trả về balo.
+function clampMagazine(p) {
+  const cap = magazineSize(p);
+  if (p.ammo > cap) {
+    p.reserveAmmo = (p.reserveAmmo || 0) + (p.ammo - cap);
+    p.ammo = cap;
+  }
+}
 
 // Vật thể trên map đứng yên nên độ cao nền dưới chân chúng không bao giờ đổi:
 // tính 1 lần rồi nhớ lại.
@@ -1405,6 +1480,10 @@ function dropDeathLoot(room, victim) {
     room.loot.push(dropped);
     broadcastRaw(room, { type: "lootAdded", item: dropped });
   }
+  for (const id of [...Attach.SLOTS.map((s) => victim.att && victim.att[s]), ...(victim.packAtt || [])])
+    if (id) dropAttLoot(room, victim, id, spot.x, spot.z);
+  victim.att = {};
+  victim.packAtt = [];
   // Người chết không còn giữ gì (tránh rơi đồ 2 lần nếu có đường chết khác).
   victim.reserveAmmo = 0;
   victim.medkits = 0;
@@ -2622,8 +2701,10 @@ wss.on("connection", (ws) => {
                 ammo: p.ammo,
               };
         if (dropped) room.loot.push(dropped);
+        stripGunAttachments(room, p);
         p.weapon =
           WEAPON_STATS[best.weapon] && best.weapon !== "none" ? best.weapon : "ranger";
+        autoAttachFromPack(p);
         const storedMagazineAmmo = Number(best.ammo);
         p.ammo = Math.max(
           0,
@@ -2645,6 +2726,32 @@ wss.on("connection", (ws) => {
           type: "toast",
           text: `${dropped ? "ĐÃ ĐỔI SANG" : "ĐÃ NHẶT"} ${weaponStats(p).name}`,
         });
+      } else if (best.type === "attach") {
+        const id = best.att;
+        const A = Attach.ATTACH[id];
+        if (!A) return;
+        let text;
+        if (p.weapon && Attach.fits(id, p.weapon)) {
+          // Có súng hợp: gắn luôn; đang có món cùng ô thì món cũ rơi xuống đất.
+          if (p.reloadingUntil > Date.now() && A.slot === "mag")
+            return send(ws, { type: "toast", text: "CHỜ NẠP ĐẠN XONG" });
+          p.att ||= {};
+          const old = p.att[A.slot];
+          p.att[A.slot] = id;
+          if (old) dropAttLoot(room, p, old);
+          clampMagazine(p);
+          text = `ĐÃ GẮN ${A.name}${old ? " · ĐÃ BỎ " + Attach.ATTACH[old].short : ""}`;
+        } else {
+          p.packAtt ||= [];
+          if (p.packAtt.length >= Attach.PACK_MAX)
+            return send(ws, { type: "toast", text: `BALO ĐẦY PHỤ KIỆN (${Attach.PACK_MAX})` });
+          p.packAtt.push(id);
+          text = `+ ${A.name} · VÀO BALO`;
+        }
+        room.loot = room.loot.filter((item) => item !== best);
+        broadcastRaw(room, { type: "lootRemoved", id: best.id });
+        lootSfx(room, p, "pickup-attach", best.x, best.z);
+        send(ws, { type: "toast", text });
       } else if (best.type === "frag" || best.type === "flash") {
         const key = throwKey(best.type);
         const name = GRENADE[best.type].name;
@@ -2727,6 +2834,51 @@ wss.on("connection", (ws) => {
       broadcast(room);
       return;
     }
+    if ((m.type === "attach" || m.type === "detach" || m.type === "dropAtt") && canFight(room, p)) {
+      p.att ||= {};
+      p.packAtt ||= [];
+      const reloading = p.reloadingUntil > Date.now();
+      if (m.type === "attach") {
+        const i = Number(m.index);
+        const id = p.packAtt[i];
+        if (!id || id !== m.att) return;
+        const A = Attach.ATTACH[id];
+        if (!p.weapon || p.weapon === "none") return send(ws, { type: "toast", text: "CHƯA CÓ SÚNG ĐỂ GẮN" });
+        if (!Attach.fits(id, p.weapon)) return send(ws, { type: "toast", text: `${A.name} KHÔNG HỢP ${weaponStats(p).name}` });
+        if (reloading && A.slot === "mag") return send(ws, { type: "toast", text: "CHỜ NẠP ĐẠN XONG" });
+        p.packAtt.splice(i, 1);
+        const old = p.att[A.slot];
+        p.att[A.slot] = id;
+        if (old) p.packAtt.push(old); // đổi chỗ: món cũ vào balo
+        clampMagazine(p);
+        lootSfx(room, p, "attach");
+      } else if (m.type === "detach") {
+        const slot = Attach.SLOTS.includes(m.slot) ? m.slot : null;
+        const id = slot && p.att[slot];
+        if (!id) return;
+        if (reloading && slot === "mag") return send(ws, { type: "toast", text: "CHỜ NẠP ĐẠN XONG" });
+        delete p.att[slot];
+        attToPack(room, p, id);
+        clampMagazine(p);
+        lootSfx(room, p, "attach");
+      } else {
+        if (p.swimming) return send(ws, { type: "toast", text: "KHÔNG THỂ THẢ ĐỒ KHI ĐANG BƠI" });
+        let id = null;
+        if (m.from === "gun" && Attach.SLOTS.includes(m.slot) && p.att[m.slot]) {
+          if (reloading && m.slot === "mag") return send(ws, { type: "toast", text: "CHỜ NẠP ĐẠN XONG" });
+          id = p.att[m.slot];
+          delete p.att[m.slot];
+          clampMagazine(p);
+        } else if (m.from === "pack" && p.packAtt[Number(m.index)] === m.att) {
+          id = p.packAtt.splice(Number(m.index), 1)[0];
+        }
+        if (!id) return;
+        dropAttLoot(room, p, id);
+        lootSfx(room, p, "drop-attach");
+      }
+      broadcast(room);
+      return;
+    }
     if (m.type === "aimThrow") {
       const on = Boolean(m.on) && Boolean(p.throwable) && canFight(room, p) && !p.vehicleId;
       if (Boolean(p.aimThrow) !== on) {
@@ -2798,6 +2950,7 @@ wss.on("connection", (ws) => {
       room.loot ||= [];
       room.loot.push(dropped);
       const name = weaponStats(p).name;
+      stripGunAttachments(room, p);
       p.weapon = "none";
       p.ammo = 0;
       broadcastRaw(room, { type: "lootAdded", item: dropped });
@@ -2916,6 +3069,8 @@ wss.on("connection", (ws) => {
       const melee = stats === WEAPON_STATS.none;
       if (
         p.sprinting || // đang chạy nhanh thì không bắn/đấm được (client dừng chạy trước khi bắn)
+        p.swimming || // dưới nước không dùng được súng
+        p.state !== "ground" ||
         p.healingUntil > shotTime ||
         p.reloadingUntil > shotTime ||
         (!melee && p.ammo <= 0) ||
@@ -3395,4 +3550,5 @@ server.listen(PORT, () => {
   console.log(`Last Drop Arena listening on http://localhost:${PORT}`);
   scheduleMapRefill(300); // sinh sẵn map rừng + sa mạc ngay khi server rảnh
 });
+
 
