@@ -193,6 +193,9 @@ let keys = {},
 // cause valid automatic shots to be rejected by the server.
 const FIRE_INTERVAL_MS = 80;
 const SNIPER_FIRE_INTERVAL_MS = 2500;
+// Thời gian nạp đạn (khớp RELOAD_MS server): Kar98k mở khóa nòng → ấn từng viên
+// qua khe trên → đóng khóa nòng, lâu hơn nhịp lên đạn giữa 2 phát.
+const reloadDurationMs = () => (local.weapon === "sniper" ? 3400 : 1800);
 // Hoạt ảnh kéo khóa nòng kéo dài gần hết thời gian chờ giữa 2 phát (bắt đầu sau
 // phát bắn 260 ms, xong trước khi bắn được ~140 ms) — không còn đứng chờ không.
 const BOLT_ANIM_MS = SNIPER_FIRE_INTERVAL_MS - 260 - 140;
@@ -4996,6 +4999,10 @@ function renderPlayers(state) {
     mesh.userData.weaponKind = weaponKey(p.weapon);
     mesh.userData.driver = p.vehicleSeat === 0;
     mesh.visible = p.alive;
+    // Vừa bị hạ: tách avatar thành XÁC (ngã theo quán tính, lăn xuống dốc, mất sau 20 s);
+    // lần cập nhật sau sẽ tạo avatar mới (ẩn) cho người này.
+    if (mesh.userData.wasAlive && !p.alive && local.state !== "lobby") spawnCorpse(p.id, mesh, p);
+    mesh.userData.wasAlive = p.alive;
   }
   for (const [id, m] of remoteMeshes)
     if (!living.has(id)) {
@@ -5910,7 +5917,7 @@ function updateGunPose(dt) {
   if (Math.abs(target - gunBusy) < 0.002) gunBusy = target;
   const reloadProgress =
     local.reloading && local.reloadStartedAt
-      ? clamp((performance.now() - local.reloadStartedAt) / 1800, 0, 1)
+      ? clamp((performance.now() - local.reloadStartedAt) / reloadDurationMs(), 0, 1)
       : 0;
   const reloading = local.reloading && reloadProgress < 1;
   const reloadBlend = reloading ? Math.sin(reloadProgress * Math.PI) : 0;
@@ -6130,8 +6137,11 @@ function poseFpHands(reloadProgress, reloading) {
     const span = charge ? 0.74 : 1;
     const reach = clamp(Math.sin((reloadProgress / span) * Math.PI) * 1.7, 0, 1);
     fpT.copy(mag.position);
-    if (mag.userData.fromTop) fpT.y += 0.05;
-    else fpT.y -= 0.06;
+    if (mag.userData.fromTop) {
+      // Kar98k: ngón cái ấn từng viên xuống khe đạn (5 nhịp) giữa lúc mở và đóng khóa nòng.
+      const press = clamp((reloadProgress - 0.18) / 0.62, 0, 1);
+      fpT.y += 0.05 - (press > 0 && press < 1 ? Math.abs(Math.sin(press * Math.PI * 5)) * 0.035 : 0);
+    } else fpT.y -= 0.06;
     fpH.lerp(fpT, reach);
   } else if (reloading && charge) {
     // Lên đạn: tay trái với tới tay gạt, kéo lùi theo nó rồi trở về ốp tay.
@@ -7155,60 +7165,173 @@ function cancelThrowAim() {
 }
 let throwArc = null;
 const arcPos = new THREE.Vector3(),
-  arcVel = new THREE.Vector3();
+  arcVel = new THREE.Vector3(),
+  arcHand = new THREE.Vector3(),
+  arcRight = new THREE.Vector3();
+const ARC_MAX_LEN = 42; // độ dài tối đa của đường vẽ (m)
+const ARC_POINTS = 260;
+// Điểm (x,y,z) có trong vật rắn không — bản client của solidPoint (server) để vẽ
+// đường nảy giống hệt quả lựu đạn thật (lọt cửa sổ / cửa, dội tường / đá / cây).
+function solidPointClient(x, y, z) {
+  for (const o of obstaclesNear(x, z)) {
+    if (o.solid === false) continue;
+    const base = groundHeightAt(o.x, o.z);
+    if (y < base - 0.5) continue;
+    if (o.type === "house" || o.type === "hut") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      const half = o.w / 2;
+      if (Math.abs(lx) > half + 0.05 || Math.abs(lz) > half + 0.05) continue;
+      if (o.lift) {
+        const ry = y - base;
+        if (ry < o.lift + 0.1) {
+          for (const bx of Structures.stiltBulletBoxes(o))
+            if (Math.abs(lx - bx.x) < bx.hx && Math.abs(ry - bx.y) < bx.hy && Math.abs(lz - bx.z) < bx.hz) return true;
+          continue;
+        }
+      }
+      const wallH = o.h * 0.72;
+      const ry = y - base - (o.lift || 0);
+      if (ry < 0 || ry > wallH) continue;
+      const side = Math.abs(lx) >= half - 0.2,
+        end = Math.abs(lz) >= half - 0.2;
+      if (!side && !end) continue;
+      if (side && Math.abs(lz) < 0.72 && ry > wallH * 0.34 && ry < wallH * 0.73) continue;
+      if (end && lz < 0 && Math.abs(lx) < 1.05 && ry < Math.min(2.25, wallH * 0.78)) continue;
+      return true;
+    }
+    if (o.type === "keep") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      const ry = y - base;
+      for (const bx of Structures.keepParts(o))
+        if (bx.kind !== "floor" && Math.abs(lx - bx.x) < bx.hx && Math.abs(ry - bx.y) < bx.hy && Math.abs(lz - bx.z) < bx.hz) return true;
+      if (Structures.keepRampSolid(lx, ry, lz)) return true;
+      continue;
+    }
+    if (o.type === "fence" || o.type === "stonewall") {
+      if (y < base + o.h && fenceBlocks(o, x, z, 0)) return true;
+      continue;
+    }
+    if (o.type === "tower") {
+      if (y < base + o.h && Math.abs(x - o.x) < o.w / 2 && Math.abs(z - o.z) < o.w / 2) return true;
+      continue;
+    }
+    const d = Math.hypot(x - o.x, z - o.z);
+    if (o.type === "tree") {
+      if (d < o.w * 0.25 && y < base + o.h * 0.62) return true;
+    } else if (o.type === "deadTree") {
+      if (d < o.w * 0.28 && y < base + o.h) return true;
+    } else if (o.type === "cactus") {
+      if (d < o.w * 0.48 && y < base + o.h) return true;
+    } else if (o.type === "banana" || o.type === "palm") {
+      if (d < o.w * (o.type === "palm" ? 0.2 : 0.14) && y < base + o.h * 0.6) return true;
+    } else if (o.type === "rock") {
+      const r = o.w * 0.46;
+      if (d < r && y < base + o.h * (0.42 + 0.5 * Math.sqrt(Math.max(0, 1 - (d / r) ** 2)))) return true;
+    }
+  }
+  return false;
+}
 function updateThrowArc() {
   const show =
     local.throwAimAt && performance.now() - local.throwAimAt > THROW_AIM_SHOW_MS && local.throwable && !deathView && scene;
   if (!show) {
-    if (throwArc) throwArc.line.visible = throwArc.mark.visible = false;
+    if (throwArc) throwArc.line.visible = throwArc.mark.visible = throwArc.bounce.visible = false;
     return;
   }
   if (!throwArc) {
-    const N = 90;
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(ARC_POINTS * 3), 3));
     const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffe14a, transparent: true, opacity: 0.9, depthTest: false }));
     line.renderOrder = 10;
     line.frustumCulled = false;
     const mark = new THREE.Mesh(
-      new THREE.RingGeometry(0.28, 0.4, 24).rotateX(-Math.PI / 2),
+      new THREE.RingGeometry(0.32, 0.46, 28).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: 0xffe14a, transparent: true, opacity: 0.85, depthTest: false, side: THREE.DoubleSide }),
     );
     mark.renderOrder = 10;
-    scene.add(line, mark);
-    throwArc = { line, mark, N };
+    // Chấm đỏ nhỏ tại chỗ quả lựu đạn dội vào tường.
+    const bounce = new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 10, 8),
+      new THREE.MeshBasicMaterial({ color: 0xff5a3a, transparent: true, opacity: 0.9, depthTest: false }),
+    );
+    bounce.renderOrder = 10;
+    scene.add(line, mark, bounce);
+    throwArc = { line, mark, bounce };
   }
-  // Mô phỏng y hệt server: xuất phát trước mắt 0.45 m, v = hướng nhìn × 25 + 2.5 lên, g = 20.
+  // Quỹ đạo thật (y như server): từ trước mắt 0.45 m, v = hướng nhìn × 25 + 2.5 lên,
+  // g = 20, dội tường (đảo hướng, mất 65% tốc độ), nảy đất, lăn có ma sát.
   camera.getWorldDirection(arcVel);
   camera.getWorldPosition(arcPos);
   arcPos.addScaledVector(arcVel, 0.45);
   arcVel.multiplyScalar(THROW_SPEED);
   arcVel.y += 2.5;
+  // Đường VẼ xuất phát từ tay phải (lệch sang phải + xuống), hoà dần vào quỹ đạo
+  // thật trong ~4 m đầu → nhìn thấy rõ đường cong thay vì một đường thẳng trước mắt.
+  arcRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  arcHand.copy(arcRight).multiplyScalar(0.28);
+  arcHand.y -= 0.22;
   const arr = throwArc.line.geometry.attributes.position.array;
-  const h = 0.03;
+  const h = 0.01;
   let n = 0,
-    landed = false;
-  for (; n < throwArc.N; n++) {
-    arr[n * 3] = arcPos.x;
-    arr[n * 3 + 1] = arcPos.y;
-    arr[n * 3 + 2] = arcPos.z;
-    if (landed) continue;
-    for (let s = 0; s < 2; s++) {
-      arcVel.y -= 20 * h;
-      arcPos.addScaledVector(arcVel, h);
-      const floor = landingHeightAt(arcPos.x, arcPos.z, arcPos.y + 0.3) + 0.08;
-      if (arcPos.y <= floor) {
-        arcPos.y = floor;
-        landed = true;
-        break;
+    walked = 0,
+    landed = null,
+    bounced = null;
+  let px = arcPos.x,
+    py = arcPos.y,
+    pz = arcPos.z;
+  const put = () => {
+    const blend = Math.max(0, 1 - walked / 4);
+    arr[n * 3] = arcPos.x + arcHand.x * blend;
+    arr[n * 3 + 1] = arcPos.y + arcHand.y * blend;
+    arr[n * 3 + 2] = arcPos.z + arcHand.z * blend;
+    n++;
+  };
+  put();
+  for (let step = 0; step < 900 && n < ARC_POINTS && walked < ARC_MAX_LEN; step++) {
+    arcVel.y -= 20 * h;
+    const nx = arcPos.x + arcVel.x * h,
+      nz = arcPos.z + arcVel.z * h;
+    if (solidPointClient((arcPos.x + nx) / 2, arcPos.y, (arcPos.z + nz) / 2) || solidPointClient(nx, arcPos.y, nz)) {
+      arcVel.x *= -0.35;
+      arcVel.z *= -0.35;
+      bounced ||= arcPos.clone();
+    } else {
+      arcPos.x = nx;
+      arcPos.z = nz;
+    }
+    arcPos.y += arcVel.y * h;
+    const floor = landingHeightAt(arcPos.x, arcPos.z, arcPos.y + 0.3) + 0.08;
+    if (arcPos.y <= floor) {
+      arcPos.y = floor;
+      landed ||= arcPos.clone();
+      if (arcVel.y < -1.5) {
+        arcVel.y = -arcVel.y * 0.32;
+        arcVel.x *= 0.7;
+        arcVel.z *= 0.7;
+      } else {
+        arcVel.y = 0;
+        const fr = Math.max(0, 1 - 1.0 * h);
+        arcVel.x *= fr;
+        arcVel.z *= fr;
+        if (Math.hypot(arcVel.x, arcVel.z) < 0.3) break; // đã nằm yên
       }
     }
+    walked += Math.hypot(arcPos.x - px, arcPos.y - py, arcPos.z - pz);
+    px = arcPos.x;
+    py = arcPos.y;
+    pz = arcPos.z;
+    if (step % 3 === 2) put();
   }
+  put();
   throwArc.line.geometry.attributes.position.needsUpdate = true;
   throwArc.line.geometry.setDrawRange(0, n);
   throwArc.line.visible = true;
-  throwArc.mark.visible = landed;
-  if (landed) throwArc.mark.position.set(arcPos.x, arcPos.y + 0.03, arcPos.z);
+  // Trong tầm: vòng tròn điểm rơi (lần chạm đất đầu). Quá tầm (hết độ dài mà
+  // chưa chạm đất): chỉ có đường, không có vòng.
+  throwArc.mark.visible = Boolean(landed);
+  if (landed) throwArc.mark.position.set(landed.x, landed.y - 0.05, landed.z);
+  throwArc.bounce.visible = Boolean(bounced);
+  if (bounced) throwArc.bounce.position.copy(bounced);
 }
 // Ném lựu đạn theo hướng nhìn (server tính quỹ đạo). Chưa rút chốt thì kíp bắt
 // đầu đếm từ lúc ném.
@@ -8173,6 +8296,262 @@ const WEAPON_GRIPS = {
 // Dựng tư thế + hoạt ảnh cho người chơi khác mỗi khung hình (sau khi đã nội
 // suy vị trí). Tốc độ lấy từ chính chuyển động đang hiển thị nên bước chân
 // khớp với tốc độ trượt thật, không bị "trượt băng".
+// ================= XÁC CHẾT: RAGDOLL (chỉ hiển thị) =================
+// Thân người là 13 khớp nối bằng "xương" có độ dài cố định (Verlet): hông 2,
+// vai 2, đầu, gối 2, bàn chân 2, khuỷu 2, bàn tay 2. KHÔNG có cơ bắp giữ tư thế
+// → chịu trọng lực là khuỵu gối, đổ gục, tay chân buông thõng theo quán tính;
+// chạm đất có ma sát nên trên dốc thân người lăn ngang, chậm dần xuống dưới.
+// Mỗi khung, vị trí các khớp được chuyển thành góc xoay của khung xương avatar.
+const CORPSE_LIFE_MS = 20000;
+const corpses = [];
+// Khớp: 0 hông T, 1 hông P, 2 vai T, 3 vai P, 4 đầu, 5 gối T, 6 gối P,
+// 7 chân T, 8 chân P, 9 khuỷu T, 10 khuỷu P, 11 tay T, 12 tay P.
+const RD_RADIUS = [0.12, 0.12, 0.13, 0.13, 0.14, 0.07, 0.07, 0.06, 0.06, 0.06, 0.06, 0.05, 0.05];
+// Vị trí nghỉ trong hệ toạ độ nhân vật (gốc dưới chân) của phần thân cứng.
+const RD_REST = [
+  [-0.1, 0.86, 0],
+  [0.1, 0.86, 0],
+  [-0.26, 1.44, 0],
+  [0.26, 1.44, 0],
+  [0, 1.86, 0],
+];
+const _rv = new THREE.Vector3(),
+  _rw = new THREE.Vector3(),
+  _rX = new THREE.Vector3(),
+  _rY = new THREE.Vector3(),
+  _rZ = new THREE.Vector3(),
+  _rM = new THREE.Matrix4(),
+  _rQ = new THREE.Quaternion(),
+  _rQi = new THREE.Quaternion(),
+  _rQp = new THREE.Quaternion(),
+  RD_DOWN = new THREE.Vector3(0, -1, 0),
+  RD_UP = new THREE.Vector3(0, 1, 0);
+function spawnCorpse(id, mesh, p) {
+  remoteMeshes.delete(id);
+  const ud = mesh.userData;
+  for (const k of ["weapon", "sniperWeapon", "berylWeapon", "handGrenade", "handFlash", "chute"]) if (ud[k]) ud[k].visible = false;
+  // Vận tốc lúc chết (2 gói vị trí cuối).
+  let vx = 0,
+    vz = 0;
+  const snaps = ud.snaps || [];
+  if (snaps.length >= 2) {
+    const s0 = snaps[snaps.length - 2],
+      s1 = snaps[snaps.length - 1];
+    const dt = Math.max(0.03, (s1.t - s0.t) / 1000);
+    vx = (s1.x - s0.x) / dt;
+    vz = (s1.z - s0.z) / dt;
+    const sp = Math.hypot(vx, vz);
+    if (sp > 10) {
+      vx *= 10 / sp;
+      vz *= 10 / sp;
+    }
+  }
+  mesh.visible = true;
+  mesh.scale.set(1, 1, 1);
+  mesh.updateMatrixWorld(true);
+  const rig = ud.rig;
+  // Vị trí khớp hiện tại (đúng tư thế lúc trúng đạn).
+  const pts = [];
+  const wp = (obj, x = 0, y = 0, z = 0) => obj.localToWorld(new THREE.Vector3(x, y, z));
+  pts.push(wp(rig.legs[0].thigh), wp(rig.legs[1].thigh), wp(rig.arms[0].shoulder), wp(rig.arms[1].shoulder), wp(rig.head, 0, 0.12, 0));
+  pts.push(wp(rig.legs[0].knee), wp(rig.legs[1].knee), wp(rig.legs[0].ankle), wp(rig.legs[1].ankle));
+  pts.push(wp(rig.arms[0].elbow), wp(rig.arms[1].elbow), wp(rig.arms[0].elbow, 0, HAND_OFFSET, 0), wp(rig.arms[1].elbow, 0, HAND_OFFSET, 0));
+  const P = new Float32Array(39),
+    O = new Float32Array(39);
+  const h = 1 / 60;
+  // Hướng nhìn (để đẩy nhẹ đầu gối khuỵu về trước) + hướng đổ.
+  const fx = -Math.sin(mesh.rotation.y),
+    fz = -Math.cos(mesh.rotation.y);
+  const sp = Math.hypot(vx, vz);
+  const tip = sp > 1.2 ? 1 : Math.random() < 0.5 ? -1 : 1; // đứng yên: đổ trước / sau ngẫu nhiên
+  pts.forEach((v, i) => {
+    P[i * 3] = v.x;
+    P[i * 3 + 1] = v.y;
+    P[i * 3 + 2] = v.z;
+    // Vận tốc ban đầu = vận tốc chạy; phần trên người hơi chúi theo hướng đổ,
+    // đầu gối khuỵu về trước một chút (không có cơ giữ).
+    // Chỉ một phần đà chạy truyền sang xác (chân khuỵu ngay, không lao xa).
+    let ix = vx * 0.55,
+      iz = vz * 0.55,
+      iy = 0;
+    if (i === 2 || i === 3 || i === 4) {
+      ix += fx * 0.9 * tip;
+      iz += fz * 0.9 * tip;
+    }
+    if (i === 5 || i === 6) {
+      ix += fx * 0.7;
+      iz += fz * 0.7;
+      iy -= 0.3;
+    }
+    O[i * 3] = v.x - ix * h;
+    O[i * 3 + 1] = v.y - iy * h;
+    O[i * 3 + 2] = v.z - iz * h;
+  });
+  const cons = [];
+  const link = (i, j, stiff = 1) => cons.push([i, j, pts[i].distanceTo(pts[j]), stiff]);
+  // Thân (hông + vai + đầu): khối cứng — nối mọi cặp, độ dài theo dáng nghỉ.
+  for (let i = 0; i < 5; i++)
+    for (let j = i + 1; j < 5; j++) {
+      const len = Math.hypot(RD_REST[i][0] - RD_REST[j][0], RD_REST[i][1] - RD_REST[j][1], RD_REST[i][2] - RD_REST[j][2]);
+      cons.push([i, j, len, j === 4 ? 0.5 : 1]); // cổ mềm hơn: đầu gật / ngoẹo được
+    }
+  link(0, 5); link(5, 7); link(1, 6); link(6, 8); // chân
+  link(2, 9); link(9, 11); link(3, 10); link(10, 12); // tay
+  corpses.push({ mesh, rig, P, O, cons, born: performance.now(), acc: 0, still: 0, sleeping: false });
+  if (corpses.length > 8) removeCorpse(corpses.shift()); // giới hạn để giữ FPS
+}
+function removeCorpse(c) {
+  scene?.remove(c.mesh);
+}
+function ragdollStep(c, h) {
+  const { P, O } = c;
+  let moved = 0;
+  // Tích phân Verlet: quán tính (có cản không khí) + trọng lực.
+  for (let i = 0; i < 13; i++) {
+    const k = i * 3;
+    const vx = (P[k] - O[k]) * 0.995,
+      vy = (P[k + 1] - O[k + 1]) * 0.995,
+      vz = (P[k + 2] - O[k + 2]) * 0.995;
+    O[k] = P[k];
+    O[k + 1] = P[k + 1];
+    O[k + 2] = P[k + 2];
+    P[k] += vx;
+    P[k + 1] += vy - 13 * h * h;
+    P[k + 2] += vz;
+    moved = Math.max(moved, Math.abs(vx) + Math.abs(vy) + Math.abs(vz));
+  }
+  // Độ cao nền dưới mỗi khớp: tra 1 lần mỗi bước (khớp chỉ dịch vài cm / bước).
+  const floors = c.floors || (c.floors = new Float32Array(13));
+  for (let i = 0; i < 13; i++) floors[i] = landingHeightAt(P[i * 3], P[i * 3 + 2], P[i * 3 + 1] + 0.4) + RD_RADIUS[i];
+  for (let it = 0; it < 8; it++) {
+    // Giữ độ dài xương.
+    for (const [i, j, len, stiff] of c.cons) {
+      const a = i * 3,
+        b = j * 3;
+      const dx = P[b] - P[a],
+        dy = P[b + 1] - P[a + 1],
+        dz = P[b + 2] - P[a + 2];
+      const d = Math.hypot(dx, dy, dz) || 1e-6;
+      const f = ((d - len) / d) * 0.5 * stiff;
+      P[a] += dx * f;
+      P[a + 1] += dy * f;
+      P[a + 2] += dz * f;
+      P[b] -= dx * f;
+      P[b + 1] -= dy * f;
+      P[b + 2] -= dz * f;
+    }
+    // Mặt đất / sàn / mái: không lún, có ma sát (giữ lại một phần trượt ngang).
+    for (let i = 0; i < 13; i++) {
+      const k = i * 3;
+      const floor = floors[i];
+      if (P[k + 1] < floor) {
+        P[k + 1] = floor;
+        if (it === 7) {
+          // Chạm đất: lực trượt dọc sườn (trọng lực chiếu lên mặt dốc) + ma sát.
+          // Dốc thoải (< ~25°): ma sát tĩnh giữ xác nằm yên; dốc gắt: trượt / lăn
+          // ngang chậm xuống dưới (ma sát lớn nên không lao vùn vụt).
+          const e = 0.35;
+          const gx = (groundHeightAt(P[k] + e, P[k + 2]) - groundHeightAt(P[k] - e, P[k + 2])) / (2 * e);
+          const gz = (groundHeightAt(P[k], P[k + 2] + e) - groundHeightAt(P[k], P[k + 2] - e)) / (2 * e);
+          const steep = Math.hypot(gx, gz);
+          let keep = 0.86;
+          if (steep > 0.45) {
+            const pull = (13 * h * h) / (1 + steep * steep);
+            P[k] -= gx * pull;
+            P[k + 2] -= gz * pull;
+            keep = 0.93;
+          }
+          O[k] = P[k] - (P[k] - O[k]) * keep;
+          O[k + 2] = P[k + 2] - (P[k + 2] - O[k + 2]) * keep;
+          if (steep <= 0.45 && Math.hypot(P[k] - O[k], P[k + 2] - O[k + 2]) < 0.004) {
+            O[k] = P[k];
+            O[k + 2] = P[k + 2];
+          }
+          if (O[k + 1] < P[k + 1]) O[k + 1] = P[k + 1] - (P[k + 1] - O[k + 1]) * 0.2; // nảy rất ít
+        }
+      }
+    }
+  }
+  // Tường / đá / cây: khớp nào lọt vào vật cản thì lùi lại vị trí cũ (theo phương ngang).
+  for (let i = 0; i < 5; i++) {
+    const k = i * 3;
+    if (isBlockedAt(P[k], P[k + 2], 0.05)) {
+      P[k] = O[k];
+      P[k + 2] = O[k + 2];
+    }
+  }
+  return moved;
+}
+// Ánh xạ 13 khớp → khung xương avatar.
+function applyRagdollPose(c, sink) {
+  const { P, rig, mesh } = c;
+  const at = (i, out) => out.set(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]);
+  // Hệ trục thân: X = hông/vai trái → phải, Y = hông → vai, Z = X × Y.
+  at(1, _rX).sub(at(0, _rv)).add(at(3, _rw)).sub(at(2, _rv));
+  _rX.normalize();
+  at(2, _rY).add(at(3, _rv)).multiplyScalar(0.5);
+  const hipC = at(0, new THREE.Vector3()).add(at(1, _rv)).multiplyScalar(0.5);
+  _rY.sub(hipC);
+  _rY.addScaledVector(_rX, -_rY.dot(_rX)).normalize();
+  _rZ.crossVectors(_rX, _rY);
+  _rM.makeBasis(_rX, _rY, _rZ);
+  _rQ.setFromRotationMatrix(_rM);
+  mesh.quaternion.copy(_rQ);
+  mesh.position.copy(hipC).sub(_rv.set(0, 0.86, 0).applyQuaternion(_rQ));
+  mesh.position.y -= sink;
+  rig.hips.position.set(0, 0.9, 0);
+  rig.hips.rotation.set(0, 0, 0);
+  rig.torso.position.set(0, 0.04, 0);
+  rig.torso.rotation.set(0, 0, 0);
+  _rQi.copy(_rQ).invert();
+  // Đầu: hướng từ cổ (giữa 2 vai) tới đỉnh đầu.
+  at(4, _rv).sub(at(2, _rw).add(at(3, _rX)).multiplyScalar(0.5)).applyQuaternion(_rQi).normalize();
+  rig.head.quaternion.setFromUnitVectors(RD_UP, _rv);
+  // Chân / tay: xương trên hướng tới khớp giữa, xương dưới hướng tới đầu mút.
+  const chain = (upper, lower, a, m, e) => {
+    at(m, _rv).sub(at(a, _rw)).applyQuaternion(_rQi).normalize();
+    upper.quaternion.setFromUnitVectors(RD_DOWN, _rv);
+    _rQp.copy(_rQ).multiply(upper.quaternion).invert();
+    at(e, _rv).sub(at(m, _rw)).applyQuaternion(_rQp).normalize();
+    lower.quaternion.setFromUnitVectors(RD_DOWN, _rv);
+  };
+  chain(rig.legs[0].thigh, rig.legs[0].knee, 0, 5, 7);
+  chain(rig.legs[1].thigh, rig.legs[1].knee, 1, 6, 8);
+  chain(rig.arms[0].shoulder, rig.arms[0].elbow, 2, 9, 11);
+  chain(rig.arms[1].shoulder, rig.arms[1].elbow, 3, 10, 12);
+  for (const leg of rig.legs) leg.ankle.rotation.set(0.4, 0, 0);
+}
+function updateCorpses(dt) {
+  if (!corpses.length) return;
+  const now = performance.now();
+  for (let i = corpses.length - 1; i >= 0; i--) {
+    const c = corpses[i];
+    const age = now - c.born;
+    if (age > CORPSE_LIFE_MS || c.mesh.parent !== scene) {
+      removeCorpse(c);
+      corpses.splice(i, 1);
+      continue;
+    }
+    // Bước cố định 1/60 s (ổn định), tối đa 4 bước mỗi khung; nằm yên lâu thì ngủ.
+    const far = camera && Math.hypot(c.P[0] - camera.position.x, c.P[2] - camera.position.z) > 90;
+    if (!c.sleeping && !far) {
+      c.acc = Math.min(c.acc + dt, 2 / 60); // khung chậm: tối đa 2 bước, không dồn
+
+      while (c.acc >= 1 / 60) {
+        c.acc -= 1 / 60;
+        const moved = ragdollStep(c, 1 / 60);
+        c.still = moved < 0.0015 ? c.still + 1 : 0;
+        if (c.still > 90) c.sleeping = true;
+      }
+    }
+    // 1.5 s cuối: lún dần xuống đất rồi biến mất.
+    const sink = Math.max(0, (age - (CORPSE_LIFE_MS - 1500)) / 1500) * 0.5;
+    if (!c.sleeping || sink > 0 || !c.posedAsleep) {
+      applyRagdollPose(c, sink);
+      c.posedAsleep = c.sleeping;
+    }
+  }
+}
 function animateAvatars(dt) {
   const now = Date.now();
   for (const mesh of remoteMeshes.values()) {
@@ -10065,6 +10444,7 @@ function frame() {
   updateVehicleMeshes(dt);
   updateRemoteMotion(dt);
   animateAvatars(dt);
+  updateCorpses(dt);
   updateAutoFire();
   updateShotEffects();
   updateGrenadeWorld(dt);

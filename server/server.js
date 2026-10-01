@@ -808,6 +808,10 @@ const WEAPON_STATS = {
 // Số súng rải trong các khu nhà mỗi trận (sniper tăng từ 2 lên 7 cho dễ tìm hơn).
 const WEAPON_SPAWNS = { ranger: 14, beryl: 10, sniper: 7 };
 const weaponStats = (player) => WEAPON_STATS[player.weapon] || WEAPON_STATS.none;
+// Thời gian nạp đạn (ms): Kar98k mở khóa nòng, ấn kẹp đạn, đóng khóa nòng —
+// lâu hơn nhịp lên đạn giữa 2 phát; súng trường thay băng 1.8 s. Khớp client.
+const RELOAD_MS = { ranger: 1800, beryl: 1800, sniper: 3400 };
+const reloadMs = (player) => RELOAD_MS[player.weapon] || 1800;
 const magazineSize = (player) =>
   weaponStats(player).mag +
   (player.att && player.att.mag && Attach.fits(player.att.mag, player.weapon) ? Attach.magBonus(player.att) : 0);
@@ -2821,8 +2825,7 @@ wss.on("connection", (ws) => {
         type: "toast",
         text: `ĐÃ LẤY ${amount} ${type === "ammo" ? "VIÊN ĐẠN" : type === "medkit" ? "BỊCH MÁU" : GRENADE[type].name}`,
       });
-      if (!crate.contents.ammo && !crate.contents.medkit && !crate.contents.frag && !crate.contents.flash)
-        room.crates = room.crates.filter((item) => item !== crate);
+      // Lấy hết đồ: hòm vẫn nằm lại tại chỗ (không xoá).
       broadcast(room);
       return;
     }
@@ -3043,7 +3046,7 @@ wss.on("connection", (ws) => {
         return;
       }
       const reloadCapacity = magazineSize(p);
-      p.reloadingUntil = now + 1800;
+      p.reloadingUntil = now + reloadMs(p);
       const reloadFinishesAt = p.reloadingUntil;
       broadcast(room);
       setTimeout(() => {
@@ -3054,7 +3057,7 @@ wss.on("connection", (ws) => {
         p.reserveAmmo -= amount;
         p.reloadingUntil = 0;
         broadcast(room);
-      }, 1800);
+      }, reloadMs(p));
       return;
     }
     if (m.type === "shoot" && canFight(room, p) && !p.vehicleId) {
