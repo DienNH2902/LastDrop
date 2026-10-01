@@ -2,13 +2,14 @@
 // (Chrome/Edge require one). It also caches the static shell so the menu
 // still opens if a friend's connection blips, but it never caches or
 // interferes with the WebSocket game traffic.
-const CACHE = "last-drop-shell-v38";
+const CACHE = "last-drop-shell-v45";
 const SHELL = [
   "/",
   "/style.css",
   "/game.js",
   "/terrain.js",
   "/structures.js",
+  "/attachments.js",
   "/weapons.js",
   "/avatar.js",
   "/logo.svg",

@@ -468,6 +468,17 @@ export function poseAvatar(rig, pose, state, dt) {
       (stance === "crouch" ? 0.9 : 0.3);
     leg.thigh.rotation.z = stance === "air" ? (i === 0 ? -0.35 : 0.35) : 0;
   });
+  // NHẶT ĐỒ: khuỵu gối, gập người về trước (0 → 1 → 0 trong ~0.7 s).
+  const pick = state.pickupT !== null && state.pickupT !== undefined && state.pickupT < 1 ? Math.sin(state.pickupT * Math.PI) : 0;
+  if (pick > 0 && stance !== "prone" && stance !== "seat") {
+    rig.hips.position.y -= 0.3 * pick;
+    rig.torso.rotation.x -= 0.8 * pick;
+    rig.legs.forEach((leg) => {
+      leg.thigh.rotation.x += 0.95 * pick;
+      leg.knee.rotation.x -= 1.5 * pick;
+      leg.ankle.rotation.x += 0.4 * pick;
+    });
+  }
   // Nạp đạn: hạ súng xuống, tay trái rời báng về phía băng đạn.
   const reload = state.reloading ? 1 : 0;
   pose.reload = damp(pose.reload ?? 0, reload, 8, dt);
@@ -606,4 +617,10 @@ export function poseAvatar(rig, pose, state, dt) {
       solveArm(arm, _t, "free");
     }
   });
+  if (pick > 0.08 && stance !== "prone" && stance !== "seat") {
+    // Một tay (phải) với xuống mặt đất phía trước để nhặt.
+    const arm = rig.arms.find((a) => a.side > 0);
+    _t.set(0.16, 0.55 - 0.85 * pick, -0.22 - 0.3 * pick);
+    solveArm(arm, _t, "free");
+  }
 }
