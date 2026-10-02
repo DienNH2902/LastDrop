@@ -60,15 +60,7 @@
         <div class="ld-home-bg" aria-hidden="true"><img src="/forest-home-hero.svg" alt=""></div>
         <div class="ld-home-grid">
           <div class="ld-home-hero">
-            <div class="ld-eyebrow">MÙA 01 · ĐẤU TRƯỜNG SINH TỒN</div>
-            <h1>Đấu trường<br><em>Sống sót đến cuối.</em></h1>
-            <p>Mỗi trận tối đa 5 người trên hai bản đồ rộng 400 × 400 m: rừng núi có sông, cầu, đầm lầy và sa mạc đá đỏ. Chọn điểm nhảy, lục soát từng khu nhà tìm AUG, Kar98k, đạn và túi máu, lái xe băng qua đèo — rồi trụ lại đến khi vòng bo khép chặt.</p>
-            <ul class="ld-chips">
-              <li><b>5</b> người / trận</li>
-              <li><b>2</b> bản đồ</li>
-              <li><b>FPP</b> góc nhìn thứ nhất</li>
-              <li>Xe · Vòng bo · Nhảy dù</li>
-            </ul>
+            <div id="homeAvatar" class="ld-home-avatar" aria-label="Nhân vật của bạn"></div>
             <div class="ld-controls"><span><kbd>W A S D</kbd> di chuyển</span><span><kbd>Chuột</kbd> ngắm / bắn</span><span><kbd>F</kbd> nhặt đồ · lên xe</span><span><kbd>Tab</kbd> balo</span></div>
           </div>
           <div class="ld-home-panel">
@@ -79,7 +71,10 @@
               <div class="map-select"><button type="button" data-map-choice="forest">RỪNG</button><button type="button" data-map-choice="desert">SA MẠC</button><button type="button" data-map-choice="jungle">THÀNH CỔ</button></div>
             </div>
             <div class="ld-field"><span>3 · VÀO TRẬN</span>
-              <button class="primary ld-create" id="createBtn">TẠO PHÒNG MỚI <b>→</b></button>
+              <div class="ld-start-row">
+                <button class="primary ld-play" id="playBtn" title="Vào ngay phòng chung đang chờ — không cần mã phòng">CHƠI <b>▶</b></button>
+                <button class="primary ld-create" id="createBtn">TẠO PHÒNG MỚI <b>→</b></button>
+              </div>
               <div class="ld-or">hoặc vào phòng của bạn bè</div>
               <div class="join ld-join"><input id="codeInput" maxlength="6" inputmode="numeric" placeholder="MÃ PHÒNG 6 SỐ"><button id="joinBtn">THAM GIA</button></div>
             </div>

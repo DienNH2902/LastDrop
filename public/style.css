@@ -3128,3 +3128,60 @@ body:has(#game.active) #game {
     grid-template-columns: 1fr;
   }
 }
+
+/* Trang chủ: nhân vật 3D thay cho khối giới thiệu */
+.ld-home-avatar {
+  position: relative;
+  width: 100%;
+  height: min(62vh, 560px);
+  min-height: 300px;
+}
+.ld-home-avatar canvas {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+/* Trận kết thúc khi đang quan sát */
+.death-view-overlay.match-over {
+  top: 38%;
+  padding: 18px 28px;
+  border-color: #ff922f99;
+}
+.death-view-overlay.match-over b {
+  font-size: 34px;
+  color: #ff922f;
+}
+
+/* Trang chủ: không bôi đen chữ (ô nhập vẫn chọn / gõ được) */
+body,
+.ld-home,
+.ld-home * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+/* Nút CHƠI cạnh TẠO PHÒNG MỚI */
+.ld-start-row {
+  display: grid;
+  grid-template-columns: 0.8fr 1.2fr;
+  gap: 8px;
+}
+.ld-play {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 56px;
+  font-size: 16px;
+  background: #ff922f;
+  border-color: #ff922f;
+}
+.ld-play:hover {
+  background: #ffa955;
+}

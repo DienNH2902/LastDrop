@@ -2207,9 +2207,15 @@ wss.on("connection", (ws) => {
     if (!m || typeof m !== "object") return;
     // Đo độ trễ khứ hồi: client dùng để dự đoán xe và hiển thị ping.
     if (m.type === "ping") return send(ws, { type: "pong", t: m.t, lag: serverLagMs });
-    if (m.type === "create" || m.type === "join") {
+    if (m.type === "create" || m.type === "join" || m.type === "play") {
       if (room) return;
-      const code = m.type === "create" ? roomCode() : String(m.code || "");
+      // "play" (nút CHƠI): vào phòng CHUNG đang chờ còn chỗ — không cần mã phòng;
+      // chưa có (hoặc phòng chung đang đánh / đã đủ người) thì mở phòng chung mới.
+      let code = m.type === "create" ? roomCode() : String(m.code || "");
+      if (m.type === "play") {
+        const open = [...rooms.values()].find((r) => r.isPublic && r.phase === "waiting" && r.players.size < 5);
+        code = open ? open.code : roomCode();
+      }
       room = rooms.get(code);
       if (m.type === "join" && !room)
         return send(ws, { type: "error", message: "Không tìm thấy phòng." });
@@ -2230,6 +2236,7 @@ wss.on("connection", (ws) => {
           nextCrateId: 1,
           nextLootId: 1,
         };
+        if (m.type === "play") room.isPublic = true;
         rooms.set(code, room);
         // Vòng lặp gửi state phải chạy NGAY từ lúc tạo phòng — không đợi tới
         // lúc bấm Start — nếu không thì mọi broadcast() lúc đang chờ trong

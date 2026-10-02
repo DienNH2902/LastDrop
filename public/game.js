@@ -1376,6 +1376,7 @@ const KEY_ACTIONS = [
   ["peekRight", "NGHIÊNG PHẢI", "KeyE"],
   ["interact", "NHẶT ĐỒ / LÊN XE", "KeyF"],
   ["reload", "NẠP ĐẠN / RÚT CHỐT", "KeyR"],
+  ["primary", "CẦM SÚNG CHÍNH", "Digit1"],
   ["frag", "LỰU ĐẠN NỔ", "Digit4"],
   ["flash", "LỰU ĐẠN CHOÁNG", "Digit5"],
   ["drop", "BỎ SÚNG", "KeyG"],
@@ -1691,6 +1692,11 @@ $("#createBtn").onclick = () => {
   if (!requireHomePlayerName()) return;
   connect({ type: "create", mapId: selectedMap });
 };
+// CHƠI: vào thẳng phòng chung đang chờ (bạn bè cùng bấm CHƠI là chung phòng).
+$("#playBtn").onclick = () => {
+  if (!requireHomePlayerName()) return;
+  connect({ type: "play", mapId: selectedMap });
+};
 $("#joinBtn").onclick = () => {
   if (!requireHomePlayerName()) return;
   const code = $("#codeInput").value.trim();
@@ -1841,7 +1847,8 @@ function connect(message) {
       ) {
         if (!inMatch) beginGame();
         renderPlayers(m);
-        if (local.hp <= 0) beginDeathView(local);
+        if (deathView) announceMatchOverWhileSpectating();
+        else if (local.hp <= 0) beginDeathView(local);
         else if ((Number(m.total) || 0) > 1) showVictory();
         else showResult();
       }
@@ -4851,6 +4858,37 @@ function placeRemote(mesh, p) {
   // Khom người là tư thế (gập gối, cúi thân) do poseAvatar dựng, không bóp dẹt mô hình.
   mesh.scale.set(1, 1, 1);
 }
+// Trận kết thúc khi đang xem người khác: hiện "TRẬN ĐẤU ĐÃ KẾT THÚC", đếm ngược
+// 15 s rồi tự thoát về trang chủ (ENTER để xem kết quả ngay).
+let matchOverTimer = null;
+function announceMatchOverWhileSpectating() {
+  if (matchOverTimer || !deathView) return;
+  if (deathResultTimer) clearTimeout(deathResultTimer);
+  deathResultTimer = null;
+  const box = $("#deathViewOverlay");
+  const endsAt = performance.now() + 15000;
+  deathView.matchOver = true;
+  const tick = () => {
+    if (!deathView || $("#result")?.classList.contains("active")) {
+      clearInterval(matchOverTimer);
+      matchOverTimer = null;
+      return;
+    }
+    const left = Math.max(0, Math.ceil((endsAt - performance.now()) / 1000));
+    box?.classList.remove("hidden");
+    box?.classList.add("spectating", "match-over");
+    setText(box?.querySelector("b"), "TRẬN ĐẤU ĐÃ KẾT THÚC");
+    setText(box?.querySelector("small"), `TỰ THOÁT VỀ TRANG CHỦ SAU ${left} GIÂY · ENTER XEM KẾT QUẢ`);
+    if (left <= 0) {
+      clearInterval(matchOverTimer);
+      matchOverTimer = null;
+      showResult();
+      setTimeout(() => $("#trophyHomeBtn")?.click(), 30);
+    }
+  };
+  tick();
+  matchOverTimer = setInterval(tick, 250);
+}
 // ================= XEM TRỰC TIẾP (sau khi bị hạ) =================
 function spectateCandidates() {
   return (gameState?.players || []).filter((p) => p.alive && p.id !== playerId && p.state !== "lobby");
@@ -4874,7 +4912,7 @@ function startSpectating(dir = 1) {
 }
 function updateSpectateHud() {
   const box = $("#deathViewOverlay");
-  if (!box || !deathView) return;
+  if (!box || !deathView || deathView.matchOver) return;
   const p = (gameState?.players || []).find((q) => q.id === deathView.spectateId);
   const n = spectateCandidates().length;
   setText(box.querySelector("b"), deathView.mode === "pov" && p ? `ĐANG XEM: ${p.name || "NGƯỜI CHƠI"}` : "BẠN ĐÃ BỊ HẠ");
@@ -7083,6 +7121,12 @@ function onKeyDown(e) {
     return;
   }
 
+  if (e.code === "Digit1" && !e.repeat && !paused && $("#game").classList.contains("active")) {
+    // Phím 1: cất lựu đạn, cầm lại súng chính (đã rút chốt thì phải ném trước).
+    e.preventDefault();
+    if (local.throwable && !local.cookAt) setThrowable(null);
+    return;
+  }
   if (
     (e.code === "Digit4" || e.code === "Digit5") &&
     !e.repeat &&
@@ -11244,8 +11288,10 @@ function showResult() {
     if (id === "damageDirection") overlay.classList.add("hidden");
   }
   $("#deathViewOverlay")?.classList.add("hidden");
-  $("#deathViewOverlay")?.classList.remove("spectating");
+  $("#deathViewOverlay")?.classList.remove("spectating", "match-over");
   $("#game")?.classList.remove("spectating");
+  if (matchOverTimer) clearInterval(matchOverTimer);
+  matchOverTimer = null;
   closeBackpack(false);
   // Tắt scope và đóng menu ESC ngay khi trận kết thúc — không mang trạng thái
   // này sang trận sau.
@@ -11336,3 +11382,113 @@ function returnHome(target = "menu") {
 }
 $("#returnBtn").onclick = showTrophies;
 $("#trophyHomeBtn").onclick = () => show("menu");
+
+// ================= TRANG CHỦ: NHÂN VẬT 3D NHÌN THEO CHUỘT =================
+// Đúng nhân vật trong game (đầu mèo + nón + giáp, cầm Beryl). Đầu / thân xoay
+// theo con trỏ chuột. Chỉ vẽ khi trang chủ đang hiện (không tốn tài nguyên trong trận).
+(function homeAvatar() {
+  const host = document.getElementById("homeAvatar");
+  if (!host) return;
+  let homeGrass = null;
+  let renderer3 = null,
+    scene3,
+    cam3,
+    avatar,
+    pose = {},
+    lastT = performance.now();
+  const mouse = { x: 0, y: 0 },
+    look = { yaw: 0, pitch: 0 };
+  window.addEventListener("pointermove", (e) => {
+    const r = host.getBoundingClientRect();
+    if (!r.width) return;
+    // Hướng từ ngực nhân vật tới con trỏ (chuẩn hoá theo kích thước khung).
+    mouse.x = Math.max(-1.6, Math.min(1.6, (e.clientX - (r.left + r.width / 2)) / (r.width * 0.55)));
+    mouse.y = Math.max(-1.2, Math.min(1.2, (e.clientY - (r.top + r.height * 0.32)) / (r.height * 0.6)));
+  });
+  function init() {
+    try {
+      renderer3 = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    } catch {
+      return false;
+    }
+    renderer3.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    host.append(renderer3.domElement);
+    scene3 = new THREE.Scene();
+    scene3.add(new THREE.HemisphereLight(0xeaf5df, 0x2e3a28, 2.3));
+    const key = new THREE.DirectionalLight(0xfff0d6, 1.6);
+    key.position.set(2, 4, 3);
+    scene3.add(key);
+    const rim = new THREE.DirectionalLight(0xd6ff45, 0.9);
+    rim.position.set(-3, 2, -2);
+    scene3.add(rim);
+    cam3 = new THREE.PerspectiveCamera(30, 1, 0.1, 50);
+    cam3.position.set(0, 1.25, 5.2);
+    cam3.lookAt(0, 1.05, 0);
+    const built = buildAvatar(catHeadMaterials, catEarMat);
+    avatar = built;
+    built.root.add(new THREE.Mesh(new THREE.CircleGeometry(0.7, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })));
+    const gunModel = buildBakedWeapon("beryl", mergeGeometries);
+    built.rig.weaponMount.add(gunModel);
+    scene3.add(built.root);
+    // Vài khóm cỏ lác đác quanh chân (không nền đất; bóng nhân vật giữ nguyên).
+    const blade = new THREE.ConeGeometry(0.035, 1, 3).translate(0, 0.5, 0);
+    const grassMat = new THREE.MeshLambertMaterial({ color: 0x6f9a43 });
+    const N = 26;
+    const blades = new THREE.InstancedMesh(blade, grassMat, N);
+    const m4 = new THREE.Matrix4(),
+      q = new THREE.Quaternion(),
+      sc = new THREE.Vector3(),
+      pos = new THREE.Vector3(),
+      eu = new THREE.Euler();
+    const col = new THREE.Color();
+    for (let i = 0; i < N; i++) {
+      const r = 0.3 + Math.random() * 0.55,
+        a = Math.random() * Math.PI * 2;
+      pos.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+      eu.set((Math.random() - 0.5) * 0.5, Math.random() * Math.PI, (Math.random() - 0.5) * 0.5);
+      q.setFromEuler(eu);
+      const h = 0.1 + Math.random() * 0.16;
+      sc.set(1, h, 1);
+      blades.setMatrixAt(i, m4.compose(pos, q, sc));
+      blades.setColorAt(i, col.setHSL(0.24 + Math.random() * 0.05, 0.45, 0.32 + Math.random() * 0.16));
+    }
+    scene3.add(blades);
+    homeGrass = blades;
+    return true;
+  }
+  function resize() {
+    const w = host.clientWidth,
+      h = host.clientHeight;
+    if (!w || !h) return;
+    const cw = Math.round(w),
+      ch = Math.round(h);
+    if (renderer3.domElement.width !== cw * renderer3.getPixelRatio()) {
+      renderer3.setSize(cw, ch, false);
+      cam3.aspect = cw / ch;
+      cam3.updateProjectionMatrix();
+    }
+  }
+  function frame() {
+    requestAnimationFrame(frame);
+    const visible = document.getElementById("menu")?.classList.contains("active") && host.offsetParent !== null && !document.hidden;
+    if (!visible) return;
+    if (!renderer3 && !init()) return;
+    resize();
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - lastT) / 1000);
+    lastT = now;
+    // Nhìn theo chuột: thân xoay ít, đầu xoay nhiều (mượt).
+    look.yaw += (mouse.x * 0.9 - look.yaw) * Math.min(1, 6 * dt);
+    look.pitch += (mouse.y * 0.45 - look.pitch) * Math.min(1, 6 * dt);
+    const { rig, root } = avatar;
+    poseAvatar(rig, pose, { stance: "stand", speed: 0, weaponGrip: WEAPON_GRIPS.beryl }, dt);
+    root.rotation.y = Math.PI + look.yaw * 0.45 + Math.sin(now / 2600) * 0.03; // quay mặt ra người chơi
+    rig.torso.rotation.y += look.yaw * 0.25;
+    rig.head.rotation.y = look.yaw * 0.5;
+    rig.head.rotation.x = -look.pitch; // chuột ở dưới thì cúi xuống
+    root.position.y = Math.sin(now / 900) * 0.008; // thở nhẹ
+    if (homeGrass) homeGrass.rotation.y = Math.sin(now / 3200) * 0.015; // cỏ đung đưa nhẹ
+    renderer3.render(scene3, cam3);
+  }
+  requestAnimationFrame(frame);
+})();
