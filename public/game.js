@@ -97,15 +97,22 @@ function runLoader(duration) {
   };
   tick();
 }
+// Màn khởi động (nền đen, logo) 5 s → màn giới thiệu nhà phát triển & studio
+// 4.2 s → màn nạp trò chơi → trang chủ.
+const BOOT_MS = 5000;
 setTimeout(() => {
-  companySplash.classList.add("hidden");
-  loading.classList.remove("hidden");
-  runLoader(loadingDurationMs);
+  $("#bootSplash")?.classList.add("hidden");
+  companySplash.classList.remove("hidden");
   setTimeout(() => {
-    loading.classList.add("hidden");
-    app.classList.remove("hidden");
-  }, loadingDurationMs + 250);
-}, 4200);
+    companySplash.classList.add("hidden");
+    loading.classList.remove("hidden");
+    runLoader(loadingDurationMs);
+    setTimeout(() => {
+      loading.classList.add("hidden");
+      app.classList.remove("hidden");
+    }, loadingDurationMs + 250);
+  }, 4200);
+}, BOOT_MS);
 
 let socket = null,
   roomCode = "",
@@ -312,7 +319,7 @@ const PRONE_HEIGHT = 0.48;
 
 // Ba map: rừng, sa mạc, THÀNH CỔ (rừng rậm nhiệt đới kiểu Sanhok).
 const MAP_INFO = {
-  forest: { label: "RỪNG", name: "VERDANT WILDS", count: "01 / 03", description: "CỎ XANH · HỒ · SÔNG · ĐỒI" },
+  forest: { label: "RỪNG RẬM", name: "VERDANT WILDS", count: "01 / 03", description: "CỎ XANH · HỒ · SÔNG · ĐỒI" },
   desert: { label: "SA MẠC", name: "DUSTY BASIN", count: "02 / 03", description: "SA MẠC · ĐÁ · XƯƠNG RỒNG" },
   jungle: { label: "THÀNH CỔ", name: "ANCIENT CITADEL", count: "03 / 03", description: "RỪNG RẬM · NHÀ SÀN · PHÁO ĐÀI · SÔNG LỚN · ĐỒI NÚI" },
 };
@@ -1292,16 +1299,27 @@ function startReloadSounds(playerKey, weapon = "ranger") {
     }, stage.at);
   }
 }
-document
-  .querySelectorAll("button")
-  .forEach((b) =>
-    b.addEventListener("mouseenter", () => tone(580, 0.025, "sine", 0.008)),
-  );
-document
-  .querySelectorAll("button")
-  .forEach((b) =>
-    b.addEventListener("click", () => tone(310, 0.055, "triangle", 0.025)),
-  );
+// Tiếng rê chuột / bấm cho MỌI phần tử bấm được — gắn 1 lần ở document nên
+// áp dụng cả cho nút tạo sau (bảng màu nhân vật, đổi phím, menu ESC, balo...).
+const UI_SOUND_SEL = "button, a[href], select, summary, [role='button'], [data-skin], [data-kb], [data-map-choice], .inv-item[data-type], input[type='range'], input[type='checkbox']";
+document.addEventListener("mouseover", (e) => {
+  const el = e.target.closest?.(UI_SOUND_SEL);
+  if (!el || el.disabled) return;
+  if (el === e.relatedTarget?.closest?.(UI_SOUND_SEL)) return; // còn trong cùng nút: không kêu lại
+  tone(580, 0.025, "sine", 0.008);
+});
+document.addEventListener(
+  "click",
+  (e) => {
+    const el = e.target.closest?.(UI_SOUND_SEL);
+    if (!el || el.disabled || el.matches("input[type='range']")) return;
+    tone(310, 0.055, "triangle", 0.025);
+  },
+  true,
+);
+document.addEventListener("change", (e) => {
+  if (e.target.matches?.("select, input[type='range']")) tone(420, 0.04, "triangle", 0.018);
+});
 $("#soundToggle").onclick = () => {
   soundOn = !soundOn;
   $("#soundToggle").textContent = soundOn ? "♫" : "♪";
@@ -1427,83 +1445,61 @@ const keyLabel = (code) =>
   ({ Space: "SPACE", ShiftLeft: "SHIFT", ShiftRight: "SHIFT PHẢI", ControlLeft: "CTRL", ControlRight: "CTRL PHẢI", AltLeft: "ALT", Tab: "TAB", CapsLock: "CAPS", Backquote: "`" })[code] ||
   code.replace(/^Key/, "").replace(/^Digit/, "").replace(/^Numpad/, "NUM ").replace(/^ArrowUp$/, "↑ LÊN").replace(/^ArrowDown$/, "↓ XUỐNG").replace(/^ArrowLeft$/, "← TRÁI").replace(/^ArrowRight$/, "→ PHẢI").toUpperCase();
 let keybindCapture = null;
-function openKeybindPanel() {
-  let panel = document.getElementById("keybindPanel");
-  if (!panel) {
-    panel = document.createElement("div");
-    panel.id = "keybindPanel";
-    panel.innerHTML = `<div class="kb-card"><div class="kb-head"><b>PHÍM ĐIỀU KHIỂN</b><small>BẤM VÀO Ô RỒI NHẤN PHÍM MỚI · ESC ĐỂ HUỶ</small></div><div class="kb-list"></div><div class="kb-foot"><button type="button" class="secondary" data-kb-reset>KHÔI PHỤC MẶC ĐỊNH</button><button type="button" class="primary" data-kb-close>XONG</button></div></div>`;
-    document.body.append(panel);
-    panel.addEventListener("click", (e) => {
-      const row = e.target.closest("[data-kb]");
-      if (row) {
-        keybindCapture = row.dataset.kb;
-        renderKeybindPanel();
-        return;
-      }
-      if (e.target.closest("[data-kb-reset]")) {
-        keyBinds = {};
-        localStorage.setItem("ld-keybinds", "{}");
-        rebuildKeyRemap();
-        keybindCapture = null;
-        renderKeybindPanel();
-      }
-      if (e.target.closest("[data-kb-close]") || e.target === panel) closeKeybindPanel();
-    });
-    // Bắt phím ở pha capture để game không xử lý phím đang gán.
-    window.addEventListener(
-      "keydown",
-      (e) => {
-        if (!document.getElementById("keybindPanel")?.classList.contains("open")) return;
-        if (!keybindCapture) {
-          // Bảng đang mở: ESC đóng bảng (không mở / đóng menu tạm dừng phía sau).
-          if (e.code === "Escape") {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            closeKeybindPanel();
-          }
-          return;
-        }
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        if (e.code === "Escape") {
-          keybindCapture = null;
-          renderKeybindPanel();
-          return;
-        }
-        const codeOf = (id) => keyBinds[id] || KEY_ACTIONS.find((a) => a[0] === id)[2];
-        // Phím đã dùng cho hành động khác → đổi chỗ cho nhau.
-        const other = KEY_ACTIONS.find(([id]) => id !== keybindCapture && codeOf(id) === e.code);
-        if (other) keyBinds[other[0]] = codeOf(keybindCapture);
-        keyBinds[keybindCapture] = e.code;
-        for (const [id, , def] of KEY_ACTIONS) if (keyBinds[id] === def) delete keyBinds[id];
-        localStorage.setItem("ld-keybinds", JSON.stringify(keyBinds));
-        rebuildKeyRemap();
-        keybindCapture = null;
-        renderKeybindPanel();
-      },
-      true,
-    );
-  }
-  panel.classList.add("open");
-  renderKeybindPanel();
-}
-function closeKeybindPanel() {
-  keybindCapture = null;
-  document.getElementById("keybindPanel")?.classList.remove("open");
-}
+// Danh sách phím nằm ngay trong tab BÀN PHÍM (Cài đặt ở Home và trong trận).
 function renderKeybindPanel() {
-  const list = document.querySelector("#keybindPanel .kb-list");
-  if (!list) return;
-  list.innerHTML = KEY_ACTIONS.map(([id, name, def]) => {
+  const html = KEY_ACTIONS.map(([id, name, def]) => {
     const code = keyBinds[id] || def;
     const waiting = keybindCapture === id;
     return `<button type="button" class="kb-row${waiting ? " waiting" : ""}${code !== def ? " changed" : ""}" data-kb="${id}"><span>${name}</span><kbd>${waiting ? "NHẤN PHÍM..." : keyLabel(code)}</kbd></button>`;
   }).join("");
+  document.querySelectorAll(".kb-list").forEach((list) => {
+    if (list.dataset.html !== html) {
+      list.innerHTML = html;
+      list.dataset.html = html;
+    }
+  });
 }
 document.addEventListener("click", (e) => {
-  if (e.target.closest("[data-open-keybinds]")) openKeybindPanel();
+  const row = e.target.closest?.("[data-kb]");
+  if (row) {
+    keybindCapture = keybindCapture === row.dataset.kb ? null : row.dataset.kb;
+    renderKeybindPanel();
+    return;
+  }
+  if (e.target.closest?.("[data-kb-reset]")) {
+    keyBinds = {};
+    localStorage.setItem("ld-keybinds", "{}");
+    rebuildKeyRemap();
+    keybindCapture = null;
+    renderKeybindPanel();
+  }
 });
+// Đang chờ phím mới: bắt phím ở pha capture để game không xử lý phím đó.
+window.addEventListener(
+  "keydown",
+  (e) => {
+    if (!keybindCapture) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.code === "Escape") {
+      keybindCapture = null;
+      renderKeybindPanel();
+      return;
+    }
+    const codeOf = (id) => keyBinds[id] || KEY_ACTIONS.find((a) => a[0] === id)[2];
+    // Phím đã dùng cho hành động khác → đổi chỗ cho nhau.
+    const other = KEY_ACTIONS.find(([id]) => id !== keybindCapture && codeOf(id) === e.code);
+    if (other) keyBinds[other[0]] = codeOf(keybindCapture);
+    keyBinds[keybindCapture] = e.code;
+    for (const [id, , def] of KEY_ACTIONS) if (keyBinds[id] === def) delete keyBinds[id];
+    localStorage.setItem("ld-keybinds", JSON.stringify(keyBinds));
+    rebuildKeyRemap();
+    keybindCapture = null;
+    renderKeybindPanel();
+  },
+  true,
+);
+renderKeybindPanel();
 function syncSettingControl(key, value) {
   const binding = settingsBindings[key];
   if (!binding) return;
@@ -5945,7 +5941,7 @@ function installLootUi() {
     const style = document.createElement("style");
     style.id = "lootStyles";
     style.textContent = `
-#backpack{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(760px,94vw);max-height:88vh;overflow:auto;pointer-events:auto;background:#171a14ed;border:1px solid #555b48;box-shadow:0 15px 60px #0009;padding:22px;color:#f3f3ed;font-family:'DM Mono',monospace;z-index:5}
+#backpack{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(760px,94vw);max-height:88vh;overflow:auto;pointer-events:auto;background:#171a14ed;border:1px solid #555b48;box-shadow:0 15px 60px #0009;padding:22px;color:#f3f3ed;font-family:'JetBrains Mono',monospace;z-index:5}
 #backpack .bp-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px}
 #backpack .bp-head span{font:900 26px 'Barlow Condensed',Arial,sans-serif;letter-spacing:3px;color:#d6ff45}
 #backpack .bp-head small,#backpack .bp-foot{font-size:9px;letter-spacing:1px;color:#85897d}
@@ -5963,13 +5959,13 @@ function installLootUi() {
 #backpack .bp-usable.empty:hover{border-color:#373b31;background:none}
 #backpack .bp-row{flex-wrap:wrap}
 #backpack .bp-actions{display:flex;align-items:center;gap:6px;margin-left:auto}
-#backpack .bp-actions input{width:72px;padding:7px;background:#252920;border:1px solid #454b3d;color:#fff;font:12px 'DM Mono',monospace}
-#backpack .bp-actions button{padding:8px 10px;background:#d6ff45;color:#14170f;font:bold 10px 'DM Mono',monospace}
+#backpack .bp-actions input{width:72px;padding:7px;background:#252920;border:1px solid #454b3d;color:#fff;font:12px 'JetBrains Mono',monospace}
+#backpack .bp-actions button{padding:8px 10px;background:#d6ff45;color:#14170f;font:bold 10px 'JetBrains Mono',monospace}
 #backpack .bp-actions button.secondary-action{background:#30352b;color:#f2f2e9;border:1px solid #555b48}
 #backpack .bp-actions button:disabled{opacity:.4;cursor:not-allowed}
 #backpack .bp-section{margin-top:16px;padding-top:12px;border-top:1px solid #454b3d}
 #backpack .bp-section h3{margin:0 0 8px;color:#ff922f;font:900 20px 'Barlow Condensed',Arial,sans-serif;letter-spacing:2px}
-#lootHud{position:absolute;left:50%;bottom:118px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;font-family:'DM Mono',monospace;text-shadow:0 1px 4px #000;z-index:4}
+#lootHud{position:absolute;left:50%;bottom:118px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;font-family:'JetBrains Mono',monospace;text-shadow:0 1px 4px #000;z-index:4}
 #lootHud .lh-prompt{background:#111c;border:1px solid #d6ff4599;padding:8px 14px;font-size:12px;letter-spacing:1px;color:#fff}
 #lootHud .lh-prompt b{color:#d6ff45;margin-right:8px}
 #lootHud .lh-heal{width:260px;text-align:center;font-size:11px;letter-spacing:1px;color:#fff}
@@ -6845,7 +6841,7 @@ function installReloadHud() {
     gap: "8px",
     margin: "4px 0 2px",
     color: "#d6ff45",
-    font: "bold 11px 'DM Mono', monospace",
+    font: "bold 11px 'JetBrains Mono', monospace",
     letterSpacing: "1px",
     textShadow: "0 1px 4px #000",
   });
@@ -6878,7 +6874,7 @@ function installZoneHud() {
     // borderRadius: "8px",
     // background: "rgba(10,14,10,.55)",
     color: "#8fd4ff",
-    font: "bold 13px 'DM Mono', monospace",
+    font: "bold 13px 'JetBrains Mono', monospace",
     letterSpacing: ".5px",
     textShadow: "0 1px 4px #000",
     textAlign: "center",
@@ -9663,7 +9659,7 @@ function drawBigMap(force = false) {
   ctx.strokeStyle = "rgba(255,255,255,.16)";
   ctx.lineWidth = 1;
   ctx.fillStyle = "rgba(255,255,255,.75)";
-  ctx.font = `${Math.round(11 * dpr)}px 'DM Mono', monospace`;
+  ctx.font = `${Math.round(11 * dpr)}px 'JetBrains Mono', monospace`;
   const cells = Math.round((MAP_HALF * 2) / cell);
   for (let i = 0; i <= cells; i++) {
     const v = -MAP_HALF + i * cell;
@@ -11564,3 +11560,36 @@ $("#trophyHomeBtn").onclick = () => show("menu");
 
 // Đang chạy trong app Windows (.exe): ẩn nút tải bản Windows.
 if (window.lastDrop?.isDesktop) document.getElementById("downloadExe")?.remove();
+
+// Cài đặt (Home + trong trận): chuyển tab ĐỒ HỌA / ÂM THANH / TRÒ CHƠI / BÀN PHÍM.
+document.addEventListener("click", (e) => {
+  const tab = e.target.closest?.("[data-ps-tab]");
+  if (!tab) return;
+  const box = tab.closest("[data-tabs]");
+  if (!box) return;
+  if (keybindCapture) {
+    keybindCapture = null;
+    renderKeybindPanel();
+  }
+  box.querySelectorAll("[data-ps-tab]").forEach((b) => b.classList.toggle("active", b === tab));
+  box.querySelectorAll("[data-ps-page]").forEach((p) => p.classList.toggle("hidden", p.dataset.psPage !== tab.dataset.psTab));
+});
+
+// THOÁT TRÒ CHƠI (nút ⏻ góc phải header): hỏi xác nhận trước. App Windows đóng
+// hẳn cửa sổ; trên web trình duyệt không cho trang tự đóng tab → nhắc tự đóng.
+const quitConfirm = document.getElementById("quitConfirm");
+document.getElementById("quitGameBtn")?.addEventListener("click", () => quitConfirm?.classList.remove("hidden"));
+document.getElementById("quitCancelBtn")?.addEventListener("click", () => quitConfirm?.classList.add("hidden"));
+quitConfirm?.addEventListener("click", (e) => {
+  if (e.target === quitConfirm) quitConfirm.classList.add("hidden"); // bấm ra ngoài = ở lại
+});
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Escape" && quitConfirm && !quitConfirm.classList.contains("hidden")) quitConfirm.classList.add("hidden");
+});
+document.getElementById("quitOkBtn")?.addEventListener("click", () => {
+  window.close();
+  setTimeout(() => {
+    quitConfirm?.classList.add("hidden");
+    if (!window.closed) alert("Trình duyệt không cho trang web tự đóng — hãy đóng tab này (Ctrl+W). Bản Windows (.exe) sẽ thoát hẳn.");
+  }, 250);
+});

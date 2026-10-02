@@ -1035,8 +1035,9 @@ function createObstacles(seed, mapId) {
       }
     }
   } else if (forest) {
-    // Rừng gom cụm: nhiều cây cao thấp khác nhau đứng dày.
-    const groves = 14;
+    // Rừng gom cụm: nhiều cây cao thấp khác nhau đứng dày (rừng rậm hơn: nhiều cụm
+    // hơn, mỗi cụm dày hơn; cây vẫn gộp chung vài lần vẽ nên không nặng thêm).
+    const groves = 26;
     for (let g = 0; g < groves; g++) {
       let cx = 0,
         cz = 0,
@@ -1047,8 +1048,8 @@ function createObstacles(seed, mapId) {
         ok = Math.hypot(cx, cz) > 50 && T1.heightAt(cx, cz) < 26 && !nearWater(cx, cz, 6) && villages.every((v) => Math.hypot(v.x - cx, v.z - cz) > v.R + 12);
       }
       if (!ok) continue;
-      const R = rand(22, 42);
-      for (let n = 0; n < R * 2.4; n++) {
+      const R = rand(24, 46);
+      for (let n = 0; n < R * 3.6; n++) {
         const a = rand(0, Math.PI * 2),
           d = Math.sqrt(random()) * R;
         const x = cx + Math.cos(a) * d,
@@ -1060,7 +1061,7 @@ function createObstacles(seed, mapId) {
       }
     }
     // Cây lẻ rải khắp map và trên sườn núi thấp.
-    for (let n = 0, tries = 0; n < 260 && tries < 3000; tries++) {
+    for (let n = 0, tries = 0; n < 480 && tries < 6000; tries++) {
       const x = rand(-MAP_HALF, MAP_HALF),
         z = rand(-MAP_HALF, MAP_HALF);
       const w = rand(0.7, 1.2),
