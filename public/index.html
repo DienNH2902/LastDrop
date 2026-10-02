@@ -17,18 +17,41 @@
 </head>
 
 <body>
+  <!-- Xác nhận thoát trò chơi (nút ⏻ trên header) -->
+  <div id="quitConfirm" class="leave-confirm hidden" role="dialog" aria-modal="true">
+    <div class="leave-card">
+      <div class="eyebrow">XÁC NHẬN</div>
+      <h3>Bạn muốn <em>thoát trò chơi</em>?</h3>
+      <p>Cửa sổ game sẽ đóng lại.</p>
+      <div class="leave-actions"><button type="button" id="quitCancelBtn" class="secondary">Ở LẠI</button><button type="button" id="quitOkBtn" class="primary danger">THOÁT</button></div>
+    </div>
+  </div>
+  <!-- Màn 0: khởi động — nền đen, logo game + nền tảng / công cụ (~5 s) -->
+  <div id="bootSplash" class="ld-boot">
+    <img class="ld-boot-logo" src="/logo.svg" alt="">
+    <div class="ld-boot-title">LAST DROP</div>
+    <div class="ld-boot-sub">DÀNH CHO WINDOWS</div>
+    <div class="ld-boot-made">PHÁT TRIỂN CÙNG</div>
+    <ul class="ld-boot-logos">
+      <li><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4cc2ff" d="M2 4.3 10 3.2v7.7H2zm9-1.2L22 1.5v9.4H11zM2 12h8v7.8l-8-1.1zm9 0h11v10.5l-11-1.6z"/></svg><span>Windows</span></li>
+      <li><b class="ld-boot-mark">&gt;_</b><span>Codex</span></li>
+      <li><b class="ld-boot-mark ld-mark-claude">✳</b><span>Claude</span></li>
+      <li><b class="ld-boot-mark">◎</b><span>ChatGPT</span></li>
+      <li><b class="ld-boot-mark ld-mark-gemini">✦</b><span>Gemini</span></li>
+    </ul>
+  </div>
   <!-- Màn 1: giới thiệu nhà phát triển & studio -->
-  <div id="companySplash" class="ld-splash">
+  <div id="companySplash" class="ld-splash hidden">
     <div class="ld-splash-glow" aria-hidden="true"></div>
     <small class="ld-splash-kicker">TRÂN TRỌNG GIỚI THIỆU</small>
     <div class="ld-splash-row">
       <figure class="ld-splash-card">
-        <div class="ld-splash-photo"><img src="/dien.jpg" alt="Nhà phát triển Nguyễn Hoàng Điền"></div>
+        <div class="ld-splash-photo ld-splash-dev"><img src="/dev.webp" width="303" height="360" alt="Nhà phát triển Nguyễn Hoàng Điền"></div>
         <figcaption><small>NHÀ PHÁT TRIỂN</small><strong>Nguyễn Hoàng Điền</strong><span>Thiết kế · Lập trình</span></figcaption>
       </figure>
       <div class="ld-splash-x" aria-hidden="true">×</div>
       <figure class="ld-splash-card">
-        <div class="ld-splash-photo ld-splash-logo"><img src="/catgrenade.png" alt="Logo studio D.I.E.N"></div>
+        <div class="ld-splash-photo ld-splash-logo"><img src="/studio.webp" width="320" height="320" alt="Logo studio D.I.E.N"></div>
         <figcaption><small>STUDIO</small><strong class="ld-studio">D.I.E.N</strong><span>STUDIO: DEBUG IT EVERY NIGHT</span></figcaption>
       </figure>
     </div>
@@ -54,6 +77,7 @@
       <div id="status" class="status">● ONLINE</div>
       <button class="icon-btn header-settings" data-screen="settings" aria-label="Cài đặt" title="Cài đặt">⚙</button>
       <button class="icon-btn" id="soundToggle" aria-label="Bật/tắt âm thanh" title="Bật/tắt âm thanh">♫</button>
+      <button class="icon-btn header-quit" id="quitGameBtn" aria-label="Thoát trò chơi" title="Thoát trò chơi">⏻</button>
     </header>
     <main>
       <section id="menu" class="screen active ld-home">
@@ -68,12 +92,12 @@
             <div class="ld-field"><span>2 · CHỌN BẢN ĐỒ <b id="mapCount">01 / 02</b></span>
               <div class="map-art ld-map-art" id="mapArt"><span class="map-label" id="mapName">VERDANT WILDS</span></div>
               <div class="ld-map-desc" id="mapDescription">CỎ XANH · HỒ · SÔNG · ĐỒI</div>
-              <div class="map-select"><button type="button" data-map-choice="forest">RỪNG</button><button type="button" data-map-choice="desert">SA MẠC</button><button type="button" data-map-choice="jungle">THÀNH CỔ</button></div>
+              <div class="map-select"><button type="button" data-map-choice="forest">RỪNG RẬM</button><button type="button" data-map-choice="desert">SA MẠC</button><button type="button" data-map-choice="jungle">THÀNH CỔ</button></div>
             </div>
             <div class="ld-field"><span>3 · VÀO TRẬN</span>
               <div class="ld-start-row">
                 <button class="primary ld-play" id="playBtn" title="Vào ngay phòng chung đang chờ — không cần mã phòng">CHƠI <b>▶</b></button>
-                <button class="primary ld-create" id="createBtn">TẠO PHÒNG MỚI <b>→</b></button>
+                <button class="primary ld-create" id="createBtn">TẠO PHÒNG <b>→</b></button>
               </div>
               <div class="ld-or">hoặc vào phòng của bạn bè</div>
               <div class="join ld-join"><input id="codeInput" maxlength="6" inputmode="numeric" placeholder="MÃ PHÒNG 6 SỐ"><button id="joinBtn">THAM GIA</button></div>
@@ -98,67 +122,34 @@
           <div class="eyebrow">TÙY CHỈNH</div>
 
           <h2>CÀI <em>ĐẶT</em></h2>
-
-          <label>
-            ĐỘ NHẠY CHUỘT
-            <span id="sensVal">50</span>
-            <input id="sensitivity" type="range" min="10" max="100" value="50">
-          </label>
-
-          <label>
-            ÂM LƯỢNG TỔNG
-            <span id="masterVal">30%</span>
-            <input id="masterVolume" type="range" min="0" max="100" value="30">
-          </label>
-
-          <label>
-            ÂM LƯỢNG HIỆU ỨNG
-            <span id="sfxVal">30%</span>
-            <input id="sfx" type="range" min="0" max="100" value="30">
-          </label>
-
-          <label>
-            ÂM LƯỢNG NHẠC NỀN
-            <span id="musicVal">10%</span>
-            <input id="music" type="range" min="0" max="100" value="10">
-          </label>
-
-          <label>
-            CHẤT LƯỢNG ĐỒ HỌA
-            <select id="quality">
-              <option value="Performance">Performance</option>
-              <option value="Balanced">Balanced</option>
-              <option value="High">High</option>
-            </select>
-          </label>
-
-          <label>
-            NGỒI (C)
-            <select id="crouchMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select>
-          </label>
-
-          <label>
-            NẰM (Z)
-            <select id="proneMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select>
-          </label>
-
-          <label>
-            NGẮM (CHUỘT PHẢI)
-            <select id="aimMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ CHUỘT PHẢI</option></select>
-          </label>
-
-          <label>
-            PHÍM ĐIỀU KHIỂN
-            <button type="button" class="secondary" data-open-keybinds>ĐỔI PHÍM...</button>
-          </label>
-
-                    <label>
-            CHẾ ĐỘ HIỂN THỊ
-            <select id="displayMode">
-              <option value="windowed">Windowed (cửa sổ)</option>
-              <option value="fullscreen">Fullscreen (toàn màn hình)</option>
-            </select>
-          </label>
+          <div class="settings-tabs" data-tabs>
+                <div class="ps-tabs" role="tablist">
+                  <button type="button" class="active" data-ps-tab="display">ĐỒ HỌA</button>
+                  <button type="button" data-ps-tab="audio">ÂM THANH</button>
+                  <button type="button" data-ps-tab="game">TRÒ CHƠI</button>
+                  <button type="button" data-ps-tab="keys">BÀN PHÍM</button>
+                </div>
+                <div class="ps-page" data-ps-page="display">
+                  <label>CHẾ ĐỘ HIỂN THỊ<select id="displayMode"><option value="windowed">Windowed (cửa sổ)</option><option value="fullscreen">Fullscreen (toàn màn hình)</option></select></label>
+                  <label>CHẤT LƯỢNG ĐỒ HỌA<select id="quality"><option value="Performance">Performance</option><option value="Balanced">Balanced</option><option value="High">High</option></select></label>
+                </div>
+                <div class="ps-page hidden" data-ps-page="audio">
+                  <label>ÂM LƯỢNG TỔNG <span id="masterVal">30%</span><input id="masterVolume" type="range" min="0" max="100" value="30"></label>
+                  <label>ÂM LƯỢNG HIỆU ỨNG <span id="sfxVal">30%</span><input id="sfx" type="range" min="0" max="100" value="30"></label>
+                  <label>ÂM LƯỢNG NHẠC NỀN <span id="musicVal">10%</span><input id="music" type="range" min="0" max="100" value="10"></label>
+                </div>
+                <div class="ps-page hidden" data-ps-page="game">
+                  <label>ĐỘ NHẠY CHUỘT <span id="sensVal">50</span><input id="sensitivity" type="range" min="10" max="100" value="50"></label>
+                  <label>NGỒI (C)<select id="crouchMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select></label>
+                  <label>NẰM (Z)<select id="proneMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select></label>
+                  <label>NGẮM (CHUỘT PHẢI)<select id="aimMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ CHUỘT PHẢI</option></select></label>
+                </div>
+                <div class="ps-page hidden" data-ps-page="keys">
+                  <small class="kb-hint">BẤM VÀO Ô RỒI NHẤN PHÍM MỚI · ESC ĐỂ HUỶ</small>
+                  <div class="kb-list"></div>
+                  <button type="button" class="secondary kb-reset" data-kb-reset>KHÔI PHỤC MẶC ĐỊNH</button>
+                </div>
+          </div>
 
           <button class="primary back">
             LƯU & QUAY LẠI
@@ -237,20 +228,36 @@
               </div>
               <div id="pauseSettings" class="pause-settings hidden">
                 <div class="eyebrow">TÙY CHỈNH TRONG TRẬN</div>
-                <h2>CÀI <em>ĐẶT</em></h2><label>ĐỘ NHẠY CHUỘT <span id="pauseSensVal">50</span><input
-                    id="pauseSensitivity" type="range" min="10" max="100" value="50"></label><label>ÂM LƯỢNG TỔNG <span
-                    id="pauseMasterVal">100%</span><input id="pauseMasterVolume" type="range" min="0" max="100"
-                    value="100"></label><label>ÂM LƯỢNG HIỆU ỨNG <span id="pauseSfxVal">65%</span><input id="pauseSfx"
-                    type="range" min="0" max="100" value="65"></label><label>ÂM LƯỢNG NHẠC NỀN <span
-                    id="pauseMusicVal">25%</span><input id="pauseMusic" type="range" min="0" max="100"
-                    value="25"></label><label>CHẤT LƯỢNG ĐỒ HỌA<select id="pauseQuality">
-                    <option>Performance</option>
-                    <option>Balanced</option>
-                    <option>High</option>
-                                    </select></label><label>NGỒI (C)<select id="pauseCrouchMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select></label><label>NẰM (Z)<select id="pauseProneMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select></label><label>NGẮM (CHUỘT PHẢI)<select id="pauseAimMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ CHUỘT PHẢI</option></select></label><label>PHÍM ĐIỀU KHIỂN<button type="button" class="secondary" data-open-keybinds>ĐỔI PHÍM...</button></label><label>CHẾ ĐỘ HIỂN THỊ<select id="pauseFullscreen">
-                    <option value="off">Windowed</option>
-                    <option value="on">Fullscreen</option>
-                  </select></label><button id="closePauseSettings" class="secondary">QUAY LẠI ESC</button>
+                <h2>CÀI <em>ĐẶT</em></h2>
+                <div class="settings-tabs" data-tabs>
+                <div class="ps-tabs" role="tablist">
+                  <button type="button" class="active" data-ps-tab="display">ĐỒ HỌA</button>
+                  <button type="button" data-ps-tab="audio">ÂM THANH</button>
+                  <button type="button" data-ps-tab="game">TRÒ CHƠI</button>
+                  <button type="button" data-ps-tab="keys">BÀN PHÍM</button>
+                </div>
+                <div class="ps-page" data-ps-page="display">
+                  <label>CHẾ ĐỘ HIỂN THỊ<select id="pauseFullscreen"><option value="off">Windowed</option><option value="on">Fullscreen</option></select></label>
+                  <label>CHẤT LƯỢNG ĐỒ HỌA<select id="pauseQuality"><option>Performance</option><option>Balanced</option><option>High</option></select></label>
+                </div>
+                <div class="ps-page hidden" data-ps-page="audio">
+                  <label>ÂM LƯỢNG TỔNG <span id="pauseMasterVal">100%</span><input id="pauseMasterVolume" type="range" min="0" max="100" value="100"></label>
+                  <label>ÂM LƯỢNG HIỆU ỨNG <span id="pauseSfxVal">65%</span><input id="pauseSfx" type="range" min="0" max="100" value="65"></label>
+                  <label>ÂM LƯỢNG NHẠC NỀN <span id="pauseMusicVal">25%</span><input id="pauseMusic" type="range" min="0" max="100" value="25"></label>
+                </div>
+                <div class="ps-page hidden" data-ps-page="game">
+                  <label>ĐỘ NHẠY CHUỘT <span id="pauseSensVal">50</span><input id="pauseSensitivity" type="range" min="10" max="100" value="50"></label>
+                  <label>NGỒI (C)<select id="pauseCrouchMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select></label>
+                  <label>NẰM (Z)<select id="pauseProneMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select></label>
+                  <label>NGẮM (CHUỘT PHẢI)<select id="pauseAimMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ CHUỘT PHẢI</option></select></label>
+                </div>
+                <div class="ps-page hidden" data-ps-page="keys">
+                  <small class="kb-hint">BẤM VÀO Ô RỒI NHẤN PHÍM MỚI · ESC ĐỂ HUỶ</small>
+                  <div class="kb-list"></div>
+                  <button type="button" class="secondary kb-reset" data-kb-reset>KHÔI PHỤC MẶC ĐỊNH</button>
+                </div>
+                </div>
+                <button id="closePauseSettings" class="secondary">QUAY LẠI ESC</button>
               </div>
             </div>
           </div>

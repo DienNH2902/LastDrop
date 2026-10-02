@@ -1,4 +1,5 @@
-@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800;900&family=DM+Mono:wght@400;500&display=swap");
+/* Font có ĐỦ bộ chữ tiếng Việt (JetBrains Mono cũ thiếu dấu tiếng Việt → chữ có dấu bị vỡ / lẫn font). */
+@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap&subset=vietnamese");
 :root {
   --acid: #d6ff45;
   --ink: #11130f;
@@ -63,7 +64,7 @@ footer,
 .gear > span,
 .weapon small,
 .controls {
-  font-family: "DM Mono", monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 10px;
   letter-spacing: 1px;
 }
@@ -114,7 +115,7 @@ header {
 }
 .brand small {
   display: block;
-  font: 9px "DM Mono";
+  font: 9px "JetBrains Mono";
   color: #8f9386;
   letter-spacing: 1.4px;
   margin-top: 2px;
@@ -214,7 +215,7 @@ h2 em {
   color: white;
   padding: 0 15px;
   border-left: 1px solid #4b5044;
-  font: 10px "DM Mono";
+  font: 10px "JetBrains Mono";
 }
 .stats {
   display: flex;
@@ -288,7 +289,7 @@ h2 em {
   position: absolute;
   bottom: 18px;
   left: 17px;
-  font: 10px "DM Mono";
+  font: 10px "JetBrains Mono";
   letter-spacing: 2px;
 }
 .map-info {
@@ -368,7 +369,7 @@ h2 {
   margin-left: auto;
   background: none;
   color: var(--acid);
-  font: 10px "DM Mono";
+  font: 10px "JetBrains Mono";
 }
 .slots {
   display: grid;
@@ -474,7 +475,7 @@ h2 {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  font-family: "DM Mono", monospace;
+  font-family: "JetBrains Mono", monospace;
 }
 .hud-top {
   display: flex;
@@ -648,7 +649,7 @@ h2 {
 }
 .result-stats small {
   color: #9a9d91;
-  font: 9px "DM Mono";
+  font: 9px "JetBrains Mono";
 }
 .result-panel p {
   color: #aaa;
@@ -669,7 +670,7 @@ h2 {
 }
 .pause-card p {
   color: #aaa;
-  font: 11px "DM Mono";
+  font: 11px "JetBrains Mono";
   margin: 0 0 20px;
 }
 .pause-card .primary,
@@ -704,13 +705,13 @@ h2 {
   /* Nằm giữa thanh HUD dưới (~25–80px) và ô "F NHẶT ĐỒ" (từ 118px) — không bị đè. */
   bottom: 90px;
   color: #d6ff45;
-  font: 9px "DM Mono";
+  font: 9px "JetBrains Mono";
   letter-spacing: 1px;
 }
 .scope-reticle {
   z-index: 1;
   color: #eaffbe;
-  font: 32px "DM Mono";
+  font: 32px "JetBrains Mono";
   text-shadow: 0 0 5px #000;
 }
 .scope-overlay.hidden {
@@ -782,7 +783,7 @@ h2 {
 .company-splash small,
 .company-splash span {
   font:
-    10px "DM Mono",
+    10px "JetBrains Mono",
     monospace;
   letter-spacing: 2px;
   color: #d6ff45;
@@ -851,7 +852,7 @@ h2 {
 }
 .company-role {
   font:
-    10px "DM Mono",
+    10px "JetBrains Mono",
     monospace;
   letter-spacing: 3px;
   color: #d6ff45;
@@ -896,7 +897,7 @@ h2 {
 }
 .studio-card p {
   font:
-    clamp(8px, 1vw, 11px) "DM Mono",
+    clamp(8px, 1vw, 11px) "JetBrains Mono",
     monospace;
   letter-spacing: 0.07em;
   line-height: 1.8;
@@ -962,7 +963,7 @@ h2 {
   border: 1px solid #3a4033;
   color: #9da392;
   font:
-    10px "DM Mono",
+    10px "JetBrains Mono",
     monospace;
   letter-spacing: 1px;
 }
@@ -1023,7 +1024,7 @@ h2 {
   border: 1px solid #72d6dd;
   color: #d9ffff;
   font:
-    9px "DM Mono",
+    9px "JetBrains Mono",
     monospace;
   letter-spacing: 1px;
   text-shadow: 0 1px 4px #000;
@@ -1075,7 +1076,7 @@ h2 {
 }
 .phase-overlay small {
   font:
-    11px "DM Mono",
+    11px "JetBrains Mono",
     monospace;
   letter-spacing: 3px;
   color: var(--acid);
@@ -1090,7 +1091,7 @@ h2 {
 }
 .phase-overlay p {
   font:
-    11px "DM Mono",
+    11px "JetBrains Mono",
     monospace;
   letter-spacing: 1px;
   color: #eef2df;
@@ -1113,7 +1114,7 @@ h2 {
 }
 .flight-info {
   font:
-    10px "DM Mono",
+    10px "JetBrains Mono",
     monospace;
   letter-spacing: 1px;
   text-shadow: 0 1px 4px #000;
@@ -1153,7 +1154,7 @@ h2 {
   margin-top: 24px;
   color: #a5a89c;
   font:
-    10px DM Mono,
+    10px JetBrains Mono,
     monospace;
   letter-spacing: 1px;
 }
@@ -1184,7 +1185,7 @@ h2 {
   display: block;
   color: #c5c8bb;
   font:
-    10px DM Mono,
+    10px JetBrains Mono,
     monospace;
   letter-spacing: 0.7px;
   padding: 8px 0;
@@ -1289,7 +1290,7 @@ h2 {
   align-items: flex-end;
   max-width: min(360px, 45vw);
   font:
-    11px "DM Mono",
+    11px "JetBrains Mono",
     monospace;
   text-shadow: 0 1px 4px #000;
   pointer-events: none;
@@ -1342,7 +1343,7 @@ h2 {
   margin: 0 0 4px;
   color: #e5efc6;
   font:
-    8px "DM Mono",
+    8px "JetBrains Mono",
     monospace;
   letter-spacing: 1.3px;
 }
@@ -1636,7 +1637,7 @@ body:has(#game.active) #game {
   text-align: left;
   color: #d6ff45;
   font:
-    9px "DM Mono",
+    9px "JetBrains Mono",
     monospace;
   letter-spacing: 1px;
 }
@@ -1644,7 +1645,7 @@ body:has(#game.active) #game {
   grid-column: 2;
   grid-row: 1/3;
   font:
-    700 32px "DM Mono",
+    700 32px "JetBrains Mono",
     monospace;
   color: #fff;
 }
@@ -1652,7 +1653,7 @@ body:has(#game.active) #game {
   display: block;
   color: #aeb49f;
   font:
-    8px "DM Mono",
+    8px "JetBrains Mono",
     monospace;
 }
 .vehicle-hud > em {
@@ -1660,7 +1661,7 @@ body:has(#game.active) #game {
   margin-top: 5px;
   color: #c8cbbb;
   font:
-    7px "DM Mono",
+    7px "JetBrains Mono",
     monospace;
   font-style: normal;
   letter-spacing: 0.4px;
@@ -1688,7 +1689,7 @@ body:has(#game.active) #game {
   text-align: left;
   color: #d3d8c8;
   font:
-    8px "DM Mono",
+    8px "JetBrains Mono",
     monospace;
 }
 .vehicle-hud.vehicle-damaged #vehicleHP {
@@ -1720,7 +1721,7 @@ body:has(#game.active) #game {
 }
 .death-view-overlay small {
   font:
-    10px "DM Mono",
+    10px "JetBrains Mono",
     monospace;
   letter-spacing: 2px;
   color: #ddd;
@@ -1839,12 +1840,12 @@ body:has(#game.active) #game {
 }
 .trophy-total small {
   color: #9a9d91;
-  font: 10px "DM Mono";
+  font: 10px "JetBrains Mono";
   letter-spacing: 1px;
 }
 .trophy-sub {
   color: #aeb1a5;
-  font: 11px "DM Mono";
+  font: 11px "JetBrains Mono";
   letter-spacing: 1px;
   margin-bottom: 14px;
 }
@@ -1868,13 +1869,13 @@ body:has(#game.active) #game {
 .trophy-list li i {
   font-style: normal;
   color: #6f7466;
-  font: 11px "DM Mono";
+  font: 11px "JetBrains Mono";
 }
 .trophy-list li strong {
   font-size: 17px;
 }
 .trophy-list li span {
-  font: 10px "DM Mono";
+  font: 10px "JetBrains Mono";
   letter-spacing: 1px;
   color: #1b1d17;
   background: var(--acid);
@@ -1887,7 +1888,7 @@ body:has(#game.active) #game {
 .trophy-list li small {
   display: block;
   color: #8e9285;
-  font: 10px "DM Mono";
+  font: 10px "JetBrains Mono";
   margin-top: 3px;
 }
 .trophy-empty {
@@ -1939,7 +1940,7 @@ body:has(#game.active) #game {
 .ld-splash-kicker {
   position: relative;
   font:
-    20px "DM Mono",
+    20px "JetBrains Mono",
     monospace;
   letter-spacing: 6px;
   color: #d6ff45;
@@ -1999,7 +2000,7 @@ body:has(#game.active) #game {
 }
 .ld-splash-card small {
   font:
-    10px "DM Mono",
+    10px "JetBrains Mono",
     monospace;
   letter-spacing: 4px;
   color: #9ea492;
@@ -2017,7 +2018,7 @@ body:has(#game.active) #game {
 }
 .ld-splash-card span {
   font:
-    11px "DM Mono",
+    11px "JetBrains Mono",
     monospace;
   color: #c7cabd;
   letter-spacing: 1px;
@@ -2100,7 +2101,7 @@ body:has(#game.active) #game {
 .ld-loader-sub {
   margin-top: 12px;
   font:
-    12px "DM Mono",
+    12px "JetBrains Mono",
     monospace;
   letter-spacing: 6px;
   color: #d6ff45;
@@ -2114,7 +2115,7 @@ body:has(#game.active) #game {
   display: flex;
   justify-content: space-between;
   font:
-    12px "DM Mono",
+    12px "JetBrains Mono",
     monospace;
   letter-spacing: 1px;
   color: #dfe2d6;
@@ -2218,7 +2219,7 @@ body:has(#game.active) #game {
 }
 .ld-eyebrow {
   font:
-    11px "DM Mono",
+    11px "JetBrains Mono",
     monospace;
   letter-spacing: 4px;
   color: #d6ff45;
@@ -2254,7 +2255,7 @@ body:has(#game.active) #game {
   background: #171a14cc;
   padding: 8px 12px;
   font:
-    11px "DM Mono",
+    11px "JetBrains Mono",
     monospace;
   letter-spacing: 1px;
   color: #d9dccf;
@@ -2271,7 +2272,7 @@ body:has(#game.active) #game {
   margin-top: 28px;
   color: #9ea293;
   font:
-    11px "DM Mono",
+    11px "JetBrains Mono",
     monospace;
 }
 .ld-controls kbd {
@@ -2299,7 +2300,7 @@ body:has(#game.active) #game {
   display: flex;
   justify-content: space-between;
   font:
-    12px "DM Mono",
+    12px "JetBrains Mono",
     monospace;
   letter-spacing: 2px;
   color: #a4a899;
@@ -2325,7 +2326,7 @@ body:has(#game.active) #game {
 }
 .ld-map-desc {
   font:
-    10px "DM Mono",
+    10px "JetBrains Mono",
     monospace;
   letter-spacing: 1px;
   color: #c9ccbf;
@@ -2345,7 +2346,7 @@ body:has(#game.active) #game {
   text-align: center;
   color: #80857a;
   font:
-    10px "DM Mono",
+    10px "JetBrains Mono",
     monospace;
   letter-spacing: 1px;
 }
@@ -2494,7 +2495,7 @@ body:has(#game.active) #game {
 }
 .victory-overlay small {
   font:
-    12px "DM Mono",
+    12px "JetBrains Mono",
     monospace;
   letter-spacing: 6px;
   color: #ffe9a3;
@@ -2545,7 +2546,7 @@ body:has(#game.active) #game {
   align-items: center;
   gap: 6px;
   pointer-events: none;
-  font-family: "DM Mono", monospace;
+  font-family: "JetBrains Mono", monospace;
   z-index: 5;
 }
 #cookHud.hidden {
@@ -2602,7 +2603,7 @@ body:has(#game.active) #game {
   justify-items: center;
   gap: 2px;
   pointer-events: none;
-  font-family: "DM Mono", monospace;
+  font-family: "JetBrains Mono", monospace;
   z-index: 5;
   text-shadow: 0 1px 4px #000;
 }
@@ -2665,7 +2666,7 @@ body:has(#game.active) #game {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  font-family: "DM Mono", monospace;
+  font-family: "JetBrains Mono", monospace;
   color: #f3f3ed;
 }
 #bigMap .bm-bar button {
@@ -2812,7 +2813,7 @@ body:has(#game.active) #game {
   padding: 1px 3px;
   background: #d6ff45;
   color: #14170f;
-  font: bold 10px "DM Mono", monospace;
+  font: bold 10px "JetBrains Mono", monospace;
   text-align: center;
   z-index: 1;
 }
@@ -2825,7 +2826,7 @@ body:has(#game.active) #game {
   z-index: 50;
   opacity: 0.92;
   box-shadow: 0 8px 24px #000a;
-  font-family: "DM Mono", monospace;
+  font-family: "JetBrains Mono", monospace;
 }
 #backpack.is-dragging.from-ground .inv-col[data-zone="pack"],
 #backpack.is-dragging.from-ground .inv-col[data-zone="equip"],
@@ -3063,7 +3064,7 @@ body:has(#game.active) #game {
   background: #171a14;
   border: 1px solid #555b48;
   color: #f3f3ed;
-  font-family: "DM Mono", monospace;
+  font-family: "JetBrains Mono", monospace;
 }
 #keybindPanel .kb-head b {
   display: block;
@@ -3091,7 +3092,7 @@ body:has(#game.active) #game {
   background: #1f231b;
   border: 1px solid #3b4033;
   color: inherit;
-  font: 11px "DM Mono", monospace;
+  font: 11px "JetBrains Mono", monospace;
   letter-spacing: 1px;
   cursor: pointer;
   text-align: left;
@@ -3105,7 +3106,7 @@ body:has(#game.active) #game {
   background: #2c3226;
   border: 1px solid #555b48;
   color: #d6ff45;
-  font: bold 11px "DM Mono", monospace;
+  font: bold 11px "JetBrains Mono", monospace;
   text-align: center;
 }
 #keybindPanel .kb-row.changed kbd {
@@ -3197,7 +3198,7 @@ textarea,
   background: #171a14e6;
   border: 1px solid #d6ff4599;
   color: #d6ff45;
-  font: bold 11px "DM Mono", monospace;
+  font: bold 11px "JetBrains Mono", monospace;
   letter-spacing: 2px;
   cursor: pointer;
 }
@@ -3216,7 +3217,7 @@ textarea,
   background: #121510f2;
   border: 1px solid #555b48;
   box-shadow: 0 10px 30px #000a;
-  font-family: "DM Mono", monospace;
+  font-family: "JetBrains Mono", monospace;
 }
 .ld-skin-panel.hidden {
   display: none;
@@ -3241,7 +3242,7 @@ textarea,
   background: #1c2018;
   border: 1px solid #3b4033;
   color: #c8ccbf;
-  font: 8px "DM Mono", monospace;
+  font: 8px "JetBrains Mono", monospace;
   cursor: pointer;
 }
 .ld-skin-list button i {
@@ -3302,7 +3303,7 @@ textarea,
   padding: 11px 14px;
   border: 1px dashed #d6ff4580;
   color: #d6ff45;
-  font: bold 12px "DM Mono", monospace;
+  font: bold 12px "JetBrains Mono", monospace;
   letter-spacing: 1px;
   text-align: center;
   text-decoration: none;
@@ -3315,4 +3316,231 @@ textarea,
   font-weight: normal;
   font-size: 9px;
   color: #8c9083;
+}
+
+/* ===== Màn khởi động (trước màn giới thiệu) ===== */
+.ld-boot {
+  position: fixed;
+  inset: 0;
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #000;
+  color: #f3f3ed;
+  animation: ldBootIn 0.9s ease-out both;
+}
+.ld-boot.hidden {
+  display: none;
+}
+.ld-boot-logo {
+  width: 96px;
+  height: 96px;
+  filter: drop-shadow(0 0 18px #d6ff4566);
+  animation: ldBootPulse 2.4s ease-in-out infinite;
+}
+.ld-boot-title {
+  font: 900 46px "Barlow Condensed", Arial, sans-serif;
+  letter-spacing: 10px;
+  color: #d6ff45;
+}
+.ld-boot-sub {
+  font: 11px "JetBrains Mono", monospace;
+  letter-spacing: 5px;
+  color: #8c9083;
+}
+.ld-boot-made {
+  margin-top: 46px;
+  font: 10px "JetBrains Mono", monospace;
+  letter-spacing: 4px;
+  color: #5f6358;
+  opacity: 0;
+  animation: ldBootFade 0.8s 1s ease-out forwards;
+}
+.ld-boot-logos {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: clamp(18px, 4vw, 44px);
+  margin: 8px 0 0;
+  padding: 0 20px;
+  list-style: none;
+}
+.ld-boot-logos li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font: 600 17px "Segoe UI", system-ui, sans-serif;
+  color: #d9dcd3;
+  opacity: 0;
+  animation: ldBootFade 0.7s ease-out forwards;
+}
+.ld-boot-logos li:nth-child(1) { animation-delay: 1.3s; }
+.ld-boot-logos li:nth-child(2) { animation-delay: 1.55s; }
+.ld-boot-logos li:nth-child(3) { animation-delay: 1.8s; }
+.ld-boot-logos li:nth-child(4) { animation-delay: 2.05s; }
+.ld-boot-logos li:nth-child(5) { animation-delay: 2.3s; }
+.ld-boot-logos svg {
+  width: 22px;
+  height: 22px;
+}
+.ld-boot-mark {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  font: 700 13px "JetBrains Mono", monospace;
+  color: #fff;
+}
+.ld-mark-claude { color: #d97757; font-size: 20px; }
+.ld-mark-gemini { color: #8ab4f8; font-size: 18px; }
+@keyframes ldBootIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ldBootFade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes ldBootPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+
+/* ===== Màn giới thiệu: ảnh nhà phát triển trọn khung hình; logo studio zoom to ===== */
+.ld-splash-photo.ld-splash-dev {
+  width: 172px;
+  aspect-ratio: 303 / 360; /* đúng tỉ lệ ảnh: thấy trọn mặt + tóc, không cắt */
+}
+.ld-splash-photo.ld-splash-dev img {
+  object-fit: cover;
+  object-position: center;
+}
+.ld-splash-logo img {
+  padding: 3%;
+}
+
+/* ===== Menu ESC → Cài đặt: chia mục ===== */
+.ps-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin: 4px 0 14px;
+}
+.ps-tabs button {
+  padding: 9px 6px;
+  background: #1c2018;
+  border: 1px solid #3b4033;
+  color: #9aa08e;
+  font: bold 11px "JetBrains Mono", monospace;
+  letter-spacing: 2px;
+  cursor: pointer;
+}
+.ps-tabs button:hover {
+  border-color: #d6ff4588;
+  color: #e6ead9;
+}
+.ps-tabs button.active {
+  background: #d6ff45;
+  border-color: #d6ff45;
+  color: #14170f;
+}
+.ps-page {
+  display: grid;
+  gap: 2px;
+  min-height: 210px;
+  align-content: start;
+}
+.ps-page.hidden {
+  display: none;
+}
+
+/* Ô nhập / nút / ô chọn dùng cùng font tiếng Việt (trước đây theo font mặc định của trình duyệt) */
+input,
+select,
+button,
+textarea {
+  font-family: "JetBrains Mono", "Segoe UI", system-ui, sans-serif;
+}
+/* Cài đặt chia tab (Home + trong trận) */
+.settings-tabs .ps-tabs {
+  grid-template-columns: repeat(4, 1fr);
+}
+.settings-tabs .ps-page {
+  min-height: 240px;
+}
+.settings-tabs .kb-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.settings-tabs .kb-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  background: #1f231b;
+  border: 1px solid #3b4033;
+  color: #e6ead9;
+  font: 10px "JetBrains Mono", monospace;
+  letter-spacing: 0.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-tabs .kb-row:hover {
+  border-color: #d6ff45;
+}
+.settings-tabs .kb-row kbd {
+  min-width: 40px;
+  padding: 2px 6px;
+  background: #2c3226;
+  border: 1px solid #555b48;
+  color: #d6ff45;
+  font: bold 10px "JetBrains Mono", monospace;
+  text-align: center;
+}
+.settings-tabs .kb-row.changed kbd {
+  color: #ffd27a;
+}
+.settings-tabs .kb-row.waiting {
+  border-color: #ff922f;
+  background: #2b2416;
+}
+.settings-tabs .kb-row.waiting kbd {
+  color: #ff922f;
+}
+.settings-tabs .kb-hint {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: #8c9083;
+}
+.settings-tabs .kb-reset {
+  margin-top: 8px;
+}
+@media (max-width: 520px) {
+  .settings-tabs .kb-list {
+    grid-template-columns: 1fr;
+  }
+}
+/* Nút thoát game (trang chủ) */
+.ld-quit {
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px;
+  background: transparent;
+  border: 1px solid #ff6a5a88;
+  color: #ff8a7a;
+  font: bold 12px "JetBrains Mono", monospace;
+  letter-spacing: 2px;
+  cursor: pointer;
+}
+.ld-quit:hover {
+  background: #ff6a5a1f;
+  border-color: #ff6a5a;
+}
+
+/* Nút thoát trò chơi ở góc phải header */
+.header-quit {
+  color: #ff8a7a;
+}
+.header-quit:hover {
+  color: #ff5a3c;
 }
