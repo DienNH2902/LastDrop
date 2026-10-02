@@ -13,7 +13,7 @@ import {
   bakeAttachment,
   bakedWeaponMat,
 } from "./weapons.js";
-import { buildAvatar, poseAvatar, HAND_OFFSET } from "./avatar.js";
+import { buildAvatar, poseAvatar, HAND_OFFSET, SKINS, skinPalette } from "./avatar.js";
 
 // querySelector được gọi hàng chục lần MỖI khung hình (HUD, vòng bo, loot...).
 // Nhớ lại phần tử đã tìm; nếu phần tử đó bị gỡ khỏi trang thì tìm lại.
@@ -357,6 +357,7 @@ $("#masterVolume").value = saved.masterVolume ?? 30;
 $("#quality").value = saved.quality || "Performance";
 $("#crouchMode").value = saved.crouchMode === "hold" ? "hold" : "toggle";
 $("#proneMode").value = saved.proneMode === "hold" ? "hold" : "toggle";
+$("#aimMode").value = saved.aimMode === "hold" ? "hold" : "toggle";
 delete saved.name; // nickname is kept separately from graphics/audio settings
 localStorage.setItem(
   "ld-settings",
@@ -462,6 +463,18 @@ function distanceGain(distance, ref, max) {
 }
 // position = null nghĩa là âm thanh của chính người chơi (không pan, không giảm).
 // Trả về null nếu tắt tiếng hoặc nguồn âm quá xa (không tạo node nào cả).
+let remoteVoiceWindow = 0,
+  remoteVoiceCount = 0;
+// Trình duyệt có thể tạm dừng âm thanh (đổi tab, máy khựng, tai nghe đổi...):
+// mỗi lần người chơi bấm phím / chuột thì đánh thức lại ngay.
+for (const ev of ["keydown", "mousedown", "pointerdown"])
+  window.addEventListener(
+    ev,
+    () => {
+      if (audioCtx && audioCtx.state !== "running" && audioCtx.state !== "closed") audioCtx.resume().catch(() => {});
+    },
+    true,
+  );
 function spatialAudio(
   position,
   { volume = 1, ref = 2, max = 20, delay = 0 } = {},
@@ -469,9 +482,17 @@ function spatialAudio(
   if (!soundOn) return null;
   const sfx = Number($("#sfx").value) / 100;
   if (!(sfx > 0)) return null;
-  audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
-  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  if (!audioCtx || audioCtx.state === "closed") audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state !== "running") audioCtx.resume().catch(() => {});
   const now = audioCtx.currentTime;
+  if (position) {
+    // Mỗi 250 ms tối đa 40 âm thanh của người khác / môi trường; quá thì bỏ bớt âm xa.
+    if (now - remoteVoiceWindow > 0.25) {
+      remoteVoiceWindow = now;
+      remoteVoiceCount = 0;
+    }
+    if (++remoteVoiceCount > 40) return null;
+  }
   const listenerPosition = updateAudioListener(now);
   let attenuation = 1;
   let farness = 0; // 0 = sát, 1 = ở mép tầm nghe
@@ -863,9 +884,9 @@ function playSpatialGunshot(
     // Giảm thanh: nhỏ hơn hẳn, nghe ở tầm gần (~30% tầm), tiếng "phụt" trầm đục
     // thay cho tiếng nổ chát — mỗi súng một chất giọng riêng.
     const a = spatialAudio(position, {
-      volume: volume * (isSniper ? 0.75 : 0.6),
+      volume: volume * (isSniper ? 1.15 : 1.0),
       ...AUDIO_RANGE.gunshot,
-      max: AUDIO_RANGE.gunshot.max * 0.3,
+      max: AUDIO_RANGE.gunshot.max * 0.55,
       delay,
     });
     if (a) playSuppressedShot(a, weapon);
@@ -895,9 +916,10 @@ function playSpatialGunshot(
 }
 function playSuppressedShot(a, weapon) {
   const f = weapon === "sniper" ? 0.62 : weapon === "beryl" ? 0.8 : 1;
-  noiseBurst(a, { duration: 0.05 / f, filter: "bandpass", freq: 1500 * f, q: 1.1, gain: 1.0 }); // "phụt" khí qua vách ngăn
-  noiseBurst(a, { at: 0.003, duration: 0.09 / f, filter: "lowpass", freq: 520 * f, gain: 0.8 }); // thân tiếng đục
-  toneBurst(a, { duration: 0.06 / f, from: 210 * f, to: 85 * f, gain: 0.55 }); // cú đẩy nhẹ
+  noiseBurst(a, { duration: 0.05 / f, filter: "bandpass", freq: 1500 * f, q: 1.1, gain: 1.6 }); // "phụt" khí qua vách ngăn
+  noiseBurst(a, { at: 0.003, duration: 0.09 / f, filter: "lowpass", freq: 520 * f, gain: 1.3 }); // thân tiếng đục
+  toneBurst(a, { duration: 0.06 / f, from: 210 * f, to: 85 * f, gain: 0.9 }); // cú đẩy nhẹ
+  noiseBurst(a, { at: 0.002, duration: 0.012, filter: "highpass", freq: 3200, gain: 0.7 }); // tiếng "tách" đạn siêu thanh (nghe rõ ở gần)
   toneBurst(a, { at: 0.004, duration: 0.025, type: "triangle", from: 3200 * f, to: 2400 * f, gain: 0.07 }); // tiếng cơ khí khóa nòng
   noiseBurst(a, { at: 0.01, duration: 0.02, filter: "highpass", freq: 4500, gain: 0.25 }); // vỏ đạn văng
   if (weapon === "sniper") noiseBurst(a, { at: 0.12, duration: 0.18, filter: "bandpass", freq: 420, q: 0.7, gain: 0.18 }); // dội nhẹ
@@ -1072,7 +1094,7 @@ function playSpatialFootstep(x, y, z, intensity = 1, ownPlayer = false) {
   const max = AUDIO_RANGE.footstep.max * intensity;
   const ref = Math.min(AUDIO_RANGE.footstep.ref, max * 0.3);
   const a = spatialAudio(
-    { x, y, z },
+    ownPlayer ? null : { x, y, z }, // bước chân CỦA MÌNH: luôn phát, không phụ thuộc vị trí tai nghe
     { volume: (ownPlayer ? 0.3 : 0.72) * (0.5 + 0.5 * intensity), ref, max }, // to hơn trước (0.22 / 0.6)
   );
   if (!a) return;
@@ -1333,8 +1355,155 @@ const settingsBindings = {
   // Ngồi (C) / Nằm (Z): "toggle" = bấm để bật/tắt, "hold" = giữ phím (thả là đứng dậy).
   crouchMode: { main: "crouchMode", pause: "pauseCrouchMode" },
   proneMode: { main: "proneMode", pause: "pauseProneMode" },
+  // Ngắm (chuột phải): "toggle" = bấm để bật/tắt, "hold" = giữ chuột phải, thả là thôi ngắm.
+  aimMode: { main: "aimMode", pause: "pauseAimMode" },
 };
 const isHoldMode = (key) => document.getElementById(key)?.value === "hold";
+// ---- Gán phím điều khiển (người chơi tự đổi trong Cài đặt) ----
+// Game xử lý theo phím MẶC ĐỊNH; phím người chơi bấm được đổi sang phím mặc
+// định của hành động tương ứng trước khi vào onKeyDown / onKeyUp.
+const KEY_ACTIONS = [
+  ["forward", "ĐI TỚI", "KeyW"],
+  ["backward", "ĐI LÙI", "KeyS"],
+  ["left", "SANG TRÁI", "KeyA"],
+  ["right", "SANG PHẢI", "KeyD"],
+  ["jump", "NHẢY / BƠI LÊN", "Space"],
+  ["sprint", "CHẠY NHANH", "ShiftLeft"],
+  ["slow", "ĐI CHẬM", "ControlLeft"],
+  ["crouch", "NGỒI / LẶN", "KeyC"],
+  ["prone", "NẰM", "KeyZ"],
+  ["peekLeft", "NGHIÊNG TRÁI", "KeyQ"],
+  ["peekRight", "NGHIÊNG PHẢI", "KeyE"],
+  ["interact", "NHẶT ĐỒ / LÊN XE", "KeyF"],
+  ["reload", "NẠP ĐẠN / RÚT CHỐT", "KeyR"],
+  ["primary", "CẦM SÚNG CHÍNH", "Digit1"],
+  ["frag", "LỰU ĐẠN NỔ", "Digit4"],
+  ["flash", "LỰU ĐẠN CHOÁNG", "Digit5"],
+  ["drop", "BỎ SÚNG", "KeyG"],
+  ["backpack", "BALO", "Tab"],
+  ["map", "BẢN ĐỒ", "KeyM"],
+];
+let keyBinds = {};
+try {
+  keyBinds = JSON.parse(localStorage.getItem("ld-keybinds") || "{}") || {};
+} catch {
+  keyBinds = {};
+}
+let keyRemap = new Map(); // phím người chơi → phím mặc định của hành động
+let keyFreed = new Set(); // phím mặc định đã chuyển cho hành động khác (bấm vào thì bỏ qua)
+function rebuildKeyRemap() {
+  keyRemap = new Map();
+  keyFreed = new Set();
+  for (const [id, , def] of KEY_ACTIONS) {
+    const code = keyBinds[id] || def;
+    keyRemap.set(code, def);
+    if (code !== def) keyFreed.add(def);
+  }
+  // Shift / Ctrl phải dùng như trái nếu người chơi không đổi.
+  if (!keyBinds.sprint) keyRemap.set("ShiftRight", "ShiftRight");
+  if (!keyBinds.slow) keyRemap.set("ControlRight", "ControlRight");
+}
+rebuildKeyRemap();
+function mapKeyEvent(e) {
+  let code = e.code;
+  if (keyRemap.has(code)) code = keyRemap.get(code);
+  else if (keyFreed.has(code)) code = "";
+  return {
+    code,
+    key: e.key,
+    repeat: e.repeat,
+    ctrlKey: e.ctrlKey,
+    metaKey: e.metaKey,
+    altKey: e.altKey,
+    shiftKey: e.shiftKey,
+    target: e.target,
+    preventDefault: () => e.preventDefault(),
+    stopPropagation: () => e.stopPropagation(),
+  };
+}
+const onKeyDownMapped = (e) => onKeyDown(mapKeyEvent(e));
+const onKeyUpMapped = (e) => onKeyUp(mapKeyEvent(e));
+const keyLabel = (code) =>
+  ({ Space: "SPACE", ShiftLeft: "SHIFT", ShiftRight: "SHIFT PHẢI", ControlLeft: "CTRL", ControlRight: "CTRL PHẢI", AltLeft: "ALT", Tab: "TAB", CapsLock: "CAPS", Backquote: "`" })[code] ||
+  code.replace(/^Key/, "").replace(/^Digit/, "").replace(/^Numpad/, "NUM ").replace(/^ArrowUp$/, "↑ LÊN").replace(/^ArrowDown$/, "↓ XUỐNG").replace(/^ArrowLeft$/, "← TRÁI").replace(/^ArrowRight$/, "→ PHẢI").toUpperCase();
+let keybindCapture = null;
+function openKeybindPanel() {
+  let panel = document.getElementById("keybindPanel");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "keybindPanel";
+    panel.innerHTML = `<div class="kb-card"><div class="kb-head"><b>PHÍM ĐIỀU KHIỂN</b><small>BẤM VÀO Ô RỒI NHẤN PHÍM MỚI · ESC ĐỂ HUỶ</small></div><div class="kb-list"></div><div class="kb-foot"><button type="button" class="secondary" data-kb-reset>KHÔI PHỤC MẶC ĐỊNH</button><button type="button" class="primary" data-kb-close>XONG</button></div></div>`;
+    document.body.append(panel);
+    panel.addEventListener("click", (e) => {
+      const row = e.target.closest("[data-kb]");
+      if (row) {
+        keybindCapture = row.dataset.kb;
+        renderKeybindPanel();
+        return;
+      }
+      if (e.target.closest("[data-kb-reset]")) {
+        keyBinds = {};
+        localStorage.setItem("ld-keybinds", "{}");
+        rebuildKeyRemap();
+        keybindCapture = null;
+        renderKeybindPanel();
+      }
+      if (e.target.closest("[data-kb-close]") || e.target === panel) closeKeybindPanel();
+    });
+    // Bắt phím ở pha capture để game không xử lý phím đang gán.
+    window.addEventListener(
+      "keydown",
+      (e) => {
+        if (!document.getElementById("keybindPanel")?.classList.contains("open")) return;
+        if (!keybindCapture) {
+          // Bảng đang mở: ESC đóng bảng (không mở / đóng menu tạm dừng phía sau).
+          if (e.code === "Escape") {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            closeKeybindPanel();
+          }
+          return;
+        }
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (e.code === "Escape") {
+          keybindCapture = null;
+          renderKeybindPanel();
+          return;
+        }
+        const codeOf = (id) => keyBinds[id] || KEY_ACTIONS.find((a) => a[0] === id)[2];
+        // Phím đã dùng cho hành động khác → đổi chỗ cho nhau.
+        const other = KEY_ACTIONS.find(([id]) => id !== keybindCapture && codeOf(id) === e.code);
+        if (other) keyBinds[other[0]] = codeOf(keybindCapture);
+        keyBinds[keybindCapture] = e.code;
+        for (const [id, , def] of KEY_ACTIONS) if (keyBinds[id] === def) delete keyBinds[id];
+        localStorage.setItem("ld-keybinds", JSON.stringify(keyBinds));
+        rebuildKeyRemap();
+        keybindCapture = null;
+        renderKeybindPanel();
+      },
+      true,
+    );
+  }
+  panel.classList.add("open");
+  renderKeybindPanel();
+}
+function closeKeybindPanel() {
+  keybindCapture = null;
+  document.getElementById("keybindPanel")?.classList.remove("open");
+}
+function renderKeybindPanel() {
+  const list = document.querySelector("#keybindPanel .kb-list");
+  if (!list) return;
+  list.innerHTML = KEY_ACTIONS.map(([id, name, def]) => {
+    const code = keyBinds[id] || def;
+    const waiting = keybindCapture === id;
+    return `<button type="button" class="kb-row${waiting ? " waiting" : ""}${code !== def ? " changed" : ""}" data-kb="${id}"><span>${name}</span><kbd>${waiting ? "NHẤN PHÍM..." : keyLabel(code)}</kbd></button>`;
+  }).join("");
+}
+document.addEventListener("click", (e) => {
+  if (e.target.closest("[data-open-keybinds]")) openKeybindPanel();
+});
 function syncSettingControl(key, value) {
   const binding = settingsBindings[key];
   if (!binding) return;
@@ -1437,6 +1606,7 @@ function saveSettings() {
       quality: $("#quality").value,
       crouchMode: $("#crouchMode").value,
       proneMode: $("#proneMode").value,
+      aimMode: $("#aimMode").value,
     }),
   );
 }
@@ -1522,6 +1692,11 @@ $("#createBtn").onclick = () => {
   if (!requireHomePlayerName()) return;
   connect({ type: "create", mapId: selectedMap });
 };
+// CHƠI: vào thẳng phòng chung đang chờ (bạn bè cùng bấm CHƠI là chung phòng).
+$("#playBtn").onclick = () => {
+  if (!requireHomePlayerName()) return;
+  connect({ type: "play", mapId: selectedMap });
+};
 $("#joinBtn").onclick = () => {
   if (!requireHomePlayerName()) return;
   const code = $("#codeInput").value.trim();
@@ -1548,7 +1723,7 @@ function connect(message) {
   $("#status").textContent = "● CONNECTING";
   socket.onopen = () => {
     socket.send(
-      JSON.stringify({ ...message, name: $("#nameInput").value || "Rookie" }),
+      JSON.stringify({ ...message, name: $("#nameInput").value || "Rookie", skin: mySkin }),
     );
     startPingLoop();
   };
@@ -1672,7 +1847,8 @@ function connect(message) {
       ) {
         if (!inMatch) beginGame();
         renderPlayers(m);
-        if (local.hp <= 0) beginDeathView(local);
+        if (deathView) announceMatchOverWhileSpectating();
+        else if (local.hp <= 0) beginDeathView(local);
         else if ((Number(m.total) || 0) > 1) showVictory();
         else showResult();
       }
@@ -2008,6 +2184,18 @@ function isOnBridgeAt(x, z, clearance = 0) {
 // Nhà sàn + thành chính (Thành Cổ): hình học dùng chung với server.
 const Structures = window.LDStructures;
 const Attach = window.LDAttach; // phụ kiện súng (dùng chung với server)
+// Màu nhân vật đã chọn ở trang chủ (gửi lên server khi vào phòng).
+let mySkin = "green";
+try {
+  mySkin = localStorage.getItem("ld-skin") || "green";
+} catch {}
+if (!SKINS[mySkin]) mySkin = "green";
+// Tay áo góc nhìn thứ nhất (súng / nắm đấm / lựu đạn / vô lăng) theo màu đã chọn.
+let sleeveMaterial = null;
+function mySleeveMat() {
+  sleeveMaterial ||= new THREE.MeshLambertMaterial({ color: skinPalette(mySkin).shirt });
+  return sleeveMaterial;
+}
 const STILT_RAMP = Structures.STILT_RAMP;
 function raisedSurfacesAt(x, z) {
   const out = [];
@@ -2015,6 +2203,11 @@ function raisedSurfacesAt(x, z) {
     if (o.type === "keep") {
       const [lx, lz] = Structures.toLocal(o, x, z);
       Structures.keepSurfaces(o, groundHeightAt(o.x, o.z), lx, lz, out);
+      continue;
+    }
+    if (o.type === "stonewall" || o.type === "tower" || o.type === "fortramp") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      Structures.fortSurfaces(o, groundHeightAt(o.x, o.z), lx, lz, out, groundHeightAt);
       continue;
     }
     if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
@@ -2857,20 +3050,62 @@ function drawMapObject(o, forest) {
       break;
     }
     case "stonewall": {
-      // Tường thành đá dày + lỗ châu mai trên đỉnh.
+      // Tường thành đá dày, KÍN TỚI ĐẤT: chân tường cắm xuống dưới điểm đất thấp
+      // nhất dọc tường (đất dốc không còn hở gầm). Đỉnh là lối đi; răng cưa
+      // châu mai chỉ ở 2 mép để giữa đi lại được.
       const stone = "#8a8676",
         dark = "#6f6c5e";
       const len = o.length || w;
-      bucketAdd(stone, stone, new THREE.BoxGeometry(w, o.h, len), (t) => {
-        t.position.set(o.x, baseY + o.h / 2 - 0.4, o.z);
+      const sy = Math.sin(o.yaw || 0),
+        cy = Math.cos(o.yaw || 0);
+      let low = baseY;
+      for (let k = 0; k <= 10; k++) {
+        const a = (k / 10 - 0.5) * len;
+        for (const side of [-1, 1]) low = Math.min(low, groundHeightAt(o.x + sy * a + cy * side * w / 2, o.z + cy * a - sy * side * w / 2));
+      }
+      const top = baseY + Structures.WALL_TOP(o);
+      const bottom = low - 0.6;
+      bucketAdd(stone, stone, new THREE.BoxGeometry(w, top - bottom, len), (t) => {
+        t.position.set(o.x, (top + bottom) / 2, o.z);
         t.rotation.y = o.yaw || 0;
       });
       const merlons = Math.max(1, Math.floor(len / 1.6));
-      for (let i = 0; i < merlons; i++) {
+      for (let i = 0; i < merlons; i += 2) {
         const along = -len / 2 + (i + 0.5) * (len / merlons);
-        if (i % 2) continue;
-        bucketAdd(dark, dark, new THREE.BoxGeometry(w + 0.1, 0.7, len / merlons), (t) => {
-          t.position.set(o.x + Math.sin(o.yaw || 0) * along, baseY + o.h - 0.4 + 0.35, o.z + Math.cos(o.yaw || 0) * along);
+        for (const side of [-1, 1])
+          bucketAdd(dark, dark, new THREE.BoxGeometry(0.32, 0.75, len / merlons), (t) => {
+            t.position.set(o.x + sy * along + cy * side * (w / 2 - 0.16), top + 0.37, o.z + cy * along - sy * side * (w / 2 - 0.16));
+            t.rotation.y = o.yaw || 0;
+          });
+      }
+      break;
+    }
+    case "fortramp": {
+      // Cầu thang đá lên tháp canh: khối nêm đặc + bậc thang, đỉnh khớp sàn tháp.
+      const stone = "#7f7b6b",
+        step = "#615e52";
+      const topRel = Structures.rampTopRel(o, groundHeightAt);
+      const L = o.length;
+      // Mặt trên của khối đá TRÙNG đúng mặt đi (0 ở chân → topRel ở đỉnh) để bậc
+      // thang nằm sát mặt đá; phần dưới cắm sâu xuống đất 1.2 m (đất dốc không hở).
+      const pts = [
+        [-L / 2, -1.2],
+        [L / 2, -1.2],
+        [L / 2, topRel],
+        [-L / 2, 0],
+      ];
+      const geo = prismGeometry(pts, o.w).rotateY(-Math.PI / 2);
+      bucketAdd(stone, stone, geo, (t) => {
+        t.position.set(o.x, baseY, o.z);
+        t.rotation.y = o.yaw || 0; // sau rotateY(-90°): trục dọc thang = +z cục bộ
+      });
+      const steps = Math.round(L / 0.45);
+      const sy = Math.sin(o.yaw || 0),
+        cy = Math.cos(o.yaw || 0);
+      for (let i = 1; i < steps; i++) {
+        const lz = -L / 2 + (L * i) / steps;
+        bucketAdd(step, step, new THREE.BoxGeometry(o.w, 0.06, 0.14), (t) => {
+          t.position.set(o.x + sy * lz, baseY + Structures.rampRise(o, lz, topRel) + 0.03, o.z + cy * lz);
           t.rotation.y = o.yaw || 0;
         });
       }
@@ -2880,7 +3115,11 @@ function drawMapObject(o, forest) {
       // Tháp canh vuông ở góc thành: thân đá, gờ nhô, lan can răng cưa.
       const stone = "#8a8676",
         dark = "#6f6c5e";
-      bucketAdd(stone, stone, new THREE.BoxGeometry(w, o.h, w), (t) => t.position.set(o.x, baseY + o.h / 2 - 0.5, o.z));
+      // Thân tháp kín tới đất (cắm xuống dưới góc đất thấp nhất).
+      let low = baseY;
+      for (const [cx, cz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) low = Math.min(low, groundHeightAt(o.x + (cx * w) / 2, o.z + (cz * w) / 2));
+      const towerTop = baseY + o.h - 0.5;
+      bucketAdd(stone, stone, new THREE.BoxGeometry(w, towerTop - (low - 0.6), w), (t) => t.position.set(o.x, (towerTop + low - 0.6) / 2, o.z));
       bucketAdd(dark, dark, new THREE.BoxGeometry(w + 0.6, 0.5, w + 0.6), (t) => t.position.set(o.x, baseY + o.h - 0.5, o.z));
       for (const [mx, mz] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]])
         bucketAdd(dark, dark, new THREE.BoxGeometry(0.9, 0.8, 0.9), (t) =>
@@ -3311,6 +3550,11 @@ function isBlockedAt(x, z, radiusOverride = null) {
       if (Structures.keepBlocked(o, lx, lz, obstacleRadius, local.groundY - groundHeightAt(o.x, o.z))) return true;
       continue;
     }
+    if (o.type === "stonewall" || o.type === "tower" || o.type === "fortramp") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Structures.fortBlocked(o, lx, lz, obstacleRadius, local.groundY - groundHeightAt(o.x, o.z), groundHeightAt)) return true;
+      continue;
+    }
     if (o.type === "fence" || o.type === "stonewall") {
       const dx = x - o.x,
         dz = z - o.z;
@@ -3459,7 +3703,7 @@ function buildCarMesh(vehicle, forest) {
   // (cố định, phía dưới – sau vô lăng, về phía người lái) tới đúng găng tay.
   const driverHands = new THREE.Group();
   const gloveMat = makeMat("#26261f");
-  const sleeveMat = makeMat("#5a5f48");
+  const sleeveMat = mySleeveMat();
   const gloves = [],
     forearms = [];
   for (const side of [-1, 1]) {
@@ -3767,6 +4011,11 @@ function carPointBlocked(ownId, x, z) {
       if (Structures.keepBlocked(o, lx, lz, r, null)) return true;
       continue;
     }
+    if (o.type === "fortramp" || o.type === "tower") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Structures.fortBlocked(o, lx, lz, r, null, groundHeightAt)) return true;
+      continue;
+    }
     const footprint = obstacleFootprintRadius(o);
     if (footprint !== null) {
       if (Math.hypot(x - o.x, z - o.z) < footprint + r) return true;
@@ -3859,6 +4108,21 @@ function moveCarStep(state, stepX, stepZ, current) {
       state.z = pz;
       current.count = info.count;
       alignCarToFence(state, next.fences[0], current, Math.hypot(stepX, stepZ));
+      return "slid";
+    }
+  }
+  // Đâm chéo vào đá / gốc cây / góc tường: thử lệch hướng nhẹ (±20°, ±40°) để
+  // xe trượt dần ra thay vì đứng khựng (cùng luật ở client và server).
+  for (const ang of [0.35, -0.35, 0.7, -0.7]) {
+    const c = Math.cos(ang),
+      sn = Math.sin(ang);
+    const tx = (stepX * c - stepZ * sn) * c * 0.85,
+      tz = (stepX * sn + stepZ * c) * c * 0.85;
+    const info = ((x, z) => carBlockInfo(state.id, x, z, state.yaw))(state.x + tx, state.z + tz);
+    if (info.count === 0 || info.count < current.count) {
+      state.x += tx;
+      state.z += tz;
+      current.count = info.count;
       return "slid";
     }
   }
@@ -4248,7 +4512,7 @@ function initWorld() {
   // Tay không: hai nắm tay đeo găng + cẳng tay, thế thủ ở hai góc dưới màn hình.
   const fists = new THREE.Group();
   const gloveMat = makeMat("#26261f"),
-    sleeveMat = makeMat("#5a5f48");
+    sleeveMat = mySleeveMat();
   fists.userData.hands = [-1, 1].map((side) => {
     const hand = new THREE.Group();
     const fist = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.08, 0.1), gloveMat);
@@ -4310,7 +4574,7 @@ function initWorld() {
     const hand = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.08, 0.1), makeMat("#26261f"));
     hand.position.set(0.01, -0.05, 0.02);
     g.add(hand);
-    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.3, 4, 8).rotateX(Math.PI / 2), makeMat("#5a5f48"));
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.3, 4, 8).rotateX(Math.PI / 2), mySleeveMat());
     arm.position.set(0.02, -0.08, 0.22);
     g.add(arm);
     g.position.set(0.22, -0.2, -0.42);
@@ -4609,6 +4873,37 @@ function placeRemote(mesh, p) {
   // Khom người là tư thế (gập gối, cúi thân) do poseAvatar dựng, không bóp dẹt mô hình.
   mesh.scale.set(1, 1, 1);
 }
+// Trận kết thúc khi đang xem người khác: hiện "TRẬN ĐẤU ĐÃ KẾT THÚC", đếm ngược
+// 15 s rồi tự thoát về trang chủ (ENTER để xem kết quả ngay).
+let matchOverTimer = null;
+function announceMatchOverWhileSpectating() {
+  if (matchOverTimer || !deathView) return;
+  if (deathResultTimer) clearTimeout(deathResultTimer);
+  deathResultTimer = null;
+  const box = $("#deathViewOverlay");
+  const endsAt = performance.now() + 15000;
+  deathView.matchOver = true;
+  const tick = () => {
+    if (!deathView || $("#result")?.classList.contains("active")) {
+      clearInterval(matchOverTimer);
+      matchOverTimer = null;
+      return;
+    }
+    const left = Math.max(0, Math.ceil((endsAt - performance.now()) / 1000));
+    box?.classList.remove("hidden");
+    box?.classList.add("spectating", "match-over");
+    setText(box?.querySelector("b"), "TRẬN ĐẤU ĐÃ KẾT THÚC");
+    setText(box?.querySelector("small"), `TỰ THOÁT VỀ TRANG CHỦ SAU ${left} GIÂY · ENTER XEM KẾT QUẢ`);
+    if (left <= 0) {
+      clearInterval(matchOverTimer);
+      matchOverTimer = null;
+      showResult();
+      setTimeout(() => $("#trophyHomeBtn")?.click(), 30);
+    }
+  };
+  tick();
+  matchOverTimer = setInterval(tick, 250);
+}
 // ================= XEM TRỰC TIẾP (sau khi bị hạ) =================
 function spectateCandidates() {
   return (gameState?.players || []).filter((p) => p.alive && p.id !== playerId && p.state !== "lobby");
@@ -4632,7 +4927,7 @@ function startSpectating(dir = 1) {
 }
 function updateSpectateHud() {
   const box = $("#deathViewOverlay");
-  if (!box || !deathView) return;
+  if (!box || !deathView || deathView.matchOver) return;
   const p = (gameState?.players || []).find((q) => q.id === deathView.spectateId);
   const n = spectateCandidates().length;
   setText(box.querySelector("b"), deathView.mode === "pov" && p ? `ĐANG XEM: ${p.name || "NGƯỜI CHƠI"}` : "BẠN ĐÃ BỊ HẠ");
@@ -4683,6 +4978,12 @@ function updateSpectateCamera(dt) {
     for (const [kind, model] of Object.entries(gun.userData.models)) model.visible = kind === key;
     gun.position.set(0, 0, 0);
     gun.rotation.set(0, 0, 0);
+    const model = gun.userData.models[key];
+    const G = FP_GRIP[key];
+    if (model?.userData.arms && G) {
+      setFpArm(model.userData.arms.right, fpH.fromArray(G.right), fpE.fromArray(G.rElbow));
+      setFpArm(model.userData.arms.left, fpH.fromArray(G.left), fpE.fromArray(G.lElbow));
+    }
   }
   if (performance.now() - spectateHudAt > 250) {
     spectateHudAt = performance.now();
@@ -4709,13 +5010,13 @@ function beginDeathView(position = local) {
   renderer.domElement.style.filter = "grayscale(1)";
   $("#deathViewOverlay")?.classList.remove("hidden");
   if (deathResultTimer) clearTimeout(deathResultTimer);
-  // 3 s nhìn chỗ mình ngã từ trên cao, rồi XEM TRỰC TIẾP góc nhìn người còn sống
+  // 15 s nhìn chỗ mình ngã từ trên cao, rồi XEM TRỰC TIẾP góc nhìn người còn sống
   // (PAGE UP / PAGE DOWN đổi người, ENTER xem kết quả). Không còn ai để xem thì
   // hiện kết quả như cũ.
   deathResultTimer = setTimeout(() => {
     deathResultTimer = null;
     if (!startSpectating(1)) showResult();
-  }, 3000);
+  }, 15000);
 }
 
 function renderPlayers(state) {
@@ -4816,6 +5117,26 @@ function renderPlayers(state) {
         // Ra khỏi xe: camera thẳng lại (bỏ độ nghiêng của khung xe).
         if (camera) camera.rotation.set(0, local.yaw, 0, "YXZ");
       }
+      // Đồng bộ lại khi lệch với server (mất gói / server chặn bước đi khác client):
+      if (local.state === "ground" && (p.state === "freefall" || p.state === "parachute")) {
+        if (performance.now() - (local.landRetryAt || 0) > 600) {
+          local.landRetryAt = performance.now();
+          send({ type: "land", x: local.x, y: local.groundY, z: local.z });
+        }
+      } else if (local.state === "ground" && p.state === "ground" && !local.vehicleId && !p.vehicleId && !local.swimming) {
+        const off = Math.hypot((p.x || 0) - local.x, (p.z || 0) - local.z);
+        if (off > 2.5) {
+          local.desyncSince ||= performance.now();
+          if (performance.now() - local.desyncSince > 700) {
+            // Lệch > 2.5 m liên tục 0.7 s: về đúng chỗ server (nơi tính bắn / nhặt / bo).
+            local.x = p.x;
+            local.z = p.z;
+            local.groundY = Number(p.groundY) || local.groundY;
+            local.desyncSince = 0;
+            lastMove = 0;
+          }
+        } else local.desyncSince = 0;
+      }
       const serverReloading = Boolean(p.reloading);
       ammo = Math.max(0, Number(p.ammo) || 0);
       local.reserveAmmo = p.reserveAmmo;
@@ -4856,7 +5177,7 @@ function renderPlayers(state) {
     if (!mesh) {
       // Nhân vật có khớp (avatar.js): đầu mèo + nón + giáp, súng AUG / Kar98k
       // trên tay với tia lửa đầu nòng dựng sẵn (chỉ bật/tắt khi bắn).
-      const { root, rig } = buildAvatar(catHeadMaterials, catEarMat);
+      const { root, rig } = buildAvatar(catHeadMaterials, catEarMat, SKINS[p.skin] ? p.skin : "green");
       mesh = root;
       const weapon = buildBakedWeapon("ranger", mergeGeometries);
       const sniperWeapon = buildBakedWeapon("sniper", mergeGeometries);
@@ -5787,11 +6108,23 @@ function renderBackpack() {
   const panel = $("#backpack");
   if (!panel || panel.classList.contains("hidden") || invDrag) return;
   const crate = crateOpenId ? lootCrates.get(crateOpenId) : null;
-  setText($("#bpTitle"), crate ? "BALO / HÒM TIẾP TẾ" : "BALO");
+  setText($("#bpTitle"), crate ? `BALO / HÒM CỦA ${crate.owner || "NGƯỜI CHƠI"}` : "BALO");
   // XUNG QUANH
   const ground = groundEntries();
+  // Hòm xác: tiêu đề "HÒM CỦA <tên người chết>" ngay trên đồ trong hòm.
+  const crateNear = (crateOpenId && lootCrates.get(crateOpenId)) || nearestCrate();
+  let crateHeaderDone = false;
   const groundHtml = ground.length
-    ? ground.map((e) => invItemHtml(e, "ground", e.src === "crate" ? '<small>TRONG HÒM</small>' : "")).join("")
+    ? ground
+        .map((e) => {
+          let head = "";
+          if (e.src === "crate" && !crateHeaderDone) {
+            crateHeaderDone = true;
+            head = `<h5 class="inv-sub crate-owner">☠ HÒM CỦA ${escapeHtml(crateNear?.owner || "NGƯỜI CHƠI")}</h5>`;
+          }
+          return head + invItemHtml(e, "ground", e.src === "crate" ? "<small>TRONG HÒM</small>" : "");
+        })
+        .join("")
     : '<p class="inv-empty">KHÔNG CÓ ĐỒ GẦN ĐÂY</p>';
   // KHO ĐỒ
   const pack = [
@@ -6159,7 +6492,7 @@ const fpH = new THREE.Vector3(),
   fpDir = new THREE.Vector3();
 let fpArmMats = null;
 function makeFpArm() {
-  fpArmMats ||= { glove: makeMat("#26261f"), sleeve: makeMat("#5a5f48"), cuff: makeMat("#3b3f30") };
+  fpArmMats ||= { glove: makeMat("#26261f"), sleeve: mySleeveMat(), cuff: makeMat("#3b3f30") };
   const g = new THREE.Group();
   const hand = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.085, 0.1), fpArmMats.glove);
   const thumb = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.03, 0.05), fpArmMats.glove);
@@ -6383,9 +6716,9 @@ function beginGame() {
   document.addEventListener("mouseup", onMouseUp);
   window.addEventListener("blur", onGameWindowBlur);
   document.addEventListener("contextmenu", blockContextMenu);
-  document.addEventListener("keydown", onKeyDown);
+  document.addEventListener("keydown", onKeyDownMapped);
   document.addEventListener("keydown", blockBrowserShortcuts, true);
-  document.addEventListener("keyup", onKeyUp);
+  document.addEventListener("keyup", onKeyUpMapped);
   installReloadHud();
   installLootUi();
   installZoneHud();
@@ -6697,12 +7030,14 @@ function onKeyDown(e) {
     "MetaLeft",
     "MetaRight",
   ].includes(e.code);
+  // Giữ Ctrl (đi chậm) vẫn dùng được MỌI phím điều khiển game: đi 4 hướng,
+  // nghiêng, nhảy, ngồi, nằm, chạy... (shortcut trình duyệt vẫn bị chặn mặc định).
   const ctrlWalkKey =
     e.ctrlKey &&
     !e.metaKey &&
     !e.altKey &&
-    !e.shiftKey &&
-    ["KeyW", "KeyS"].includes(e.code);
+    ["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "Space", "KeyC", "KeyZ", "ShiftLeft", "ShiftRight"].includes(e.code);
+  if (ctrlWalkKey) e.preventDefault();
   if (!modifierKey && !ctrlWalkKey && (e.ctrlKey || e.metaKey || e.altKey)) {
     // Ctrl+R, Ctrl+T, Alt+Left... không được kích hoạt thao tác game.
     e.preventDefault();
@@ -6813,6 +7148,12 @@ function onKeyDown(e) {
     return;
   }
 
+  if (e.code === "Digit1" && !e.repeat && !paused && $("#game").classList.contains("active")) {
+    // Phím 1: cất lựu đạn, cầm lại súng chính (đã rút chốt thì phải ném trước).
+    e.preventDefault();
+    if (local.throwable && !local.cookAt) setThrowable(null);
+    return;
+  }
   if (
     (e.code === "Digit4" || e.code === "Digit5") &&
     !e.repeat &&
@@ -7044,9 +7385,9 @@ function cleanupGame() {
   stopFiring();
   document.removeEventListener("pointerlockchange", onPointerLockChange);
   document.removeEventListener("contextmenu", blockContextMenu);
-  document.removeEventListener("keydown", onKeyDown);
+  document.removeEventListener("keydown", onKeyDownMapped);
   document.removeEventListener("keydown", blockBrowserShortcuts, true);
-  document.removeEventListener("keyup", onKeyUp);
+  document.removeEventListener("keyup", onKeyUpMapped);
   closeBackpack(false);
   for (const item of lootItems.values()) disposeLootMesh(item);
   lootItems.clear();
@@ -7171,6 +7512,8 @@ function onFire(e) {
   const wasSprinting =
     (e.button === 0 || e.button === 2) &&
     !local.vehicleId &&
+    !(e.button === 0 && weaponKey(local.weapon) === "none" && !local.throwable) && // đấm khi đang chạy: giữ nguyên tốc độ
+
     document.pointerLockElement === renderer?.domElement &&
     cancelSprint();
   if (wasSprinting) sprintShotAt = performance.now() + SPRINT_RECOVER_MS;
@@ -7197,7 +7540,7 @@ function onFire(e) {
       weaponKey(local.weapon) !== "none" && // tay không thì không có gì để ngắm
       document.pointerLockElement === renderer?.domElement
     )
-      setScope(!scoped);
+      setScope(isHoldMode("aimMode") ? true : !scoped);
     return;
   }
   if (e.button === 0 && local.vehicleId) {
@@ -7241,6 +7584,7 @@ function onFire(e) {
 }
 function onMouseUp(e) {
   if (e.button === 0) stopFiring();
+  if (e.button === 2 && scoped && isHoldMode("aimMode")) setScope(false); // chế độ giữ: thả chuột phải là thôi ngắm
   if (e.button === 0 && local.throwAimAt) {
     // Click nhanh = ném ngay; giữ rồi nhả = ném theo đường bay đang hiện.
     local.throwAimAt = 0;
@@ -7312,6 +7656,11 @@ function solidPointClient(x, y, z) {
     }
     if (o.type === "tower") {
       if (y < base + o.h && Math.abs(x - o.x) < o.w / 2 && Math.abs(z - o.z) < o.w / 2) return true;
+      continue;
+    }
+    if (o.type === "fortramp") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Structures.fortRampSolid(o, lx, y - base, lz, groundHeightAt)) return true;
       continue;
     }
     const d = Math.hypot(x - o.x, z - o.z);
@@ -7525,8 +7874,8 @@ function shootOnce() {
     stopFiring(); // dưới nước không dùng được súng
     return;
   }
-  // Đang chạy / súng chưa nâng xong sau khi dừng chạy: không nổ.
-  if (local.sprinting || performance.now() < sprintShotAt) return;
+  // Đang chạy / súng chưa nâng xong sau khi dừng chạy: không nổ (tay không thì vẫn đấm được).
+  if (weaponKey(local.weapon) !== "none" && (local.sprinting || performance.now() < sprintShotAt)) return;
   const now = Date.now();
   if (
     local.weapon === "sniper" &&
@@ -9931,8 +10280,8 @@ function addSafeZoneWall() {
 // Tiếng máy bay và tiếng gió là âm lặp liên tục (loop) nên tạo bằng node riêng,
 // âm lượng bám theo thanh "Âm lượng hiệu ứng". Bung dù / tiếp đất dùng lại spatialAudio.
 function ensureAudio() {
-  audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
-  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  if (!audioCtx || audioCtx.state === "closed") audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state !== "running") audioCtx.resume().catch(() => {});
   return audioCtx;
 }
 function playCarHorn(position = null) {
@@ -10636,8 +10985,22 @@ function frame() {
       fz = -Math.cos(local.yaw),
       rx = Math.cos(local.yaw),
       rz = -Math.sin(local.yaw);
-    const moveX = ((fx * dz + rx * dx) / len) * speed;
-    const moveZ = ((fz * dz + rz * dx) / len) * speed;
+    let moveX = ((fx * dz + rx * dx) / len) * speed;
+    let moveZ = ((fz * dz + rz * dx) / len) * speed;
+    // LEO DỐC: tốc độ giảm theo độ dốc thật của sườn núi (đi chéo / leo thẳng
+    // đều phải đi đủ quãng đường dốc) — trước đây đi ngang tốc độ như đất bằng
+    // nên vài bước đã lên đỉnh. Xuống dốc giữ nguyên.
+    if ((moveX || moveZ) && !currentlyInWater) {
+      const ml = Math.hypot(moveX, moveZ);
+      const ax = local.x + (moveX / ml) * 0.6,
+        az = local.z + (moveZ / ml) * 0.6;
+      const grade = (groundHeightAt(ax, az) - groundHeightAt(local.x, local.z)) / 0.6;
+      if (grade > 0.08) {
+        const k = Math.max(0.28, 1 / (1 + 1.7 * (grade - 0.08)));
+        moveX *= k;
+        moveZ *= k;
+      }
+    }
     // Resolve axes separately so the player slides along walls instead of sticking.
     const stayInWaterWhileSubmerged =
       currentlyInWater && (local.swimDepth || 0) > 0.12;
@@ -10648,8 +11011,30 @@ function frame() {
     const canMoveTo = (x, z) =>
       !isBlockedAt(x, z, stuck ? 0.05 : null) &&
       (!stayInWaterWhileSubmerged || waterAt(x, z) || isOnBridgeAt(x, z, 0.8));
-    if (canMoveTo(local.x + moveX, local.z)) local.x += moveX;
-    if (canMoveTo(local.x, local.z + moveZ)) local.z += moveZ;
+    if (canMoveTo(local.x + moveX, local.z + moveZ)) {
+      local.x += moveX;
+      local.z += moveZ;
+    } else {
+      // Bị chặn: thử lệch hướng dần (±20°, ±40°, ±60°) → trượt vòng quanh đá /
+      // gốc cây / góc rào nghiêng thay vì đứng khựng; hết cách mới trượt theo trục.
+      let slid = false;
+      for (const ang of [0.35, -0.35, 0.7, -0.7, 1.05, -1.05]) {
+        const c = Math.cos(ang),
+          sn = Math.sin(ang);
+        const tx = (moveX * c - moveZ * sn) * c,
+          tz = (moveX * sn + moveZ * c) * c;
+        if (canMoveTo(local.x + tx, local.z + tz)) {
+          local.x += tx;
+          local.z += tz;
+          slid = true;
+          break;
+        }
+      }
+      if (!slid) {
+        if (canMoveTo(local.x + moveX, local.z)) local.x += moveX;
+        if (canMoveTo(local.x, local.z + moveZ)) local.z += moveZ;
+      }
+    }
     const traveled = Math.hypot(local.x - previousX, local.z - previousZ);
     const isMoving = traveled > 0.0005;
     const crouchWalking = isCrouching;
@@ -10930,8 +11315,10 @@ function showResult() {
     if (id === "damageDirection") overlay.classList.add("hidden");
   }
   $("#deathViewOverlay")?.classList.add("hidden");
-  $("#deathViewOverlay")?.classList.remove("spectating");
+  $("#deathViewOverlay")?.classList.remove("spectating", "match-over");
   $("#game")?.classList.remove("spectating");
+  if (matchOverTimer) clearInterval(matchOverTimer);
+  matchOverTimer = null;
   closeBackpack(false);
   // Tắt scope và đóng menu ESC ngay khi trận kết thúc — không mang trạng thái
   // này sang trận sau.
@@ -11022,3 +11409,158 @@ function returnHome(target = "menu") {
 }
 $("#returnBtn").onclick = showTrophies;
 $("#trophyHomeBtn").onclick = () => show("menu");
+
+// ================= TRANG CHỦ: NHÂN VẬT 3D NHÌN THEO CHUỘT =================
+// Đúng nhân vật trong game (đầu mèo + nón + giáp, cầm Beryl). Đầu / thân xoay
+// theo con trỏ chuột. Chỉ vẽ khi trang chủ đang hiện (không tốn tài nguyên trong trận).
+(function homeAvatar() {
+  const host = document.getElementById("homeAvatar");
+  if (!host) return;
+  let homeGrass = null;
+  let renderer3 = null,
+    scene3,
+    cam3,
+    avatar,
+    pose = {},
+    lastT = performance.now();
+  const mouse = { x: 0, y: 0 },
+    look = { yaw: 0, pitch: 0 };
+  window.addEventListener("pointermove", (e) => {
+    const r = host.getBoundingClientRect();
+    if (!r.width) return;
+    // Hướng từ ngực nhân vật tới con trỏ (chuẩn hoá theo kích thước khung).
+    mouse.x = Math.max(-1.6, Math.min(1.6, (e.clientX - (r.left + r.width / 2)) / (r.width * 0.55)));
+    mouse.y = Math.max(-1.2, Math.min(1.2, (e.clientY - (r.top + r.height * 0.32)) / (r.height * 0.6)));
+  });
+  function init() {
+    try {
+      renderer3 = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    } catch {
+      return false;
+    }
+    renderer3.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    host.append(renderer3.domElement);
+    scene3 = new THREE.Scene();
+    scene3.add(new THREE.HemisphereLight(0xeaf5df, 0x2e3a28, 2.3));
+    const key = new THREE.DirectionalLight(0xfff0d6, 1.6);
+    key.position.set(2, 4, 3);
+    scene3.add(key);
+    const rim = new THREE.DirectionalLight(0xd6ff45, 0.9);
+    rim.position.set(-3, 2, -2);
+    scene3.add(rim);
+    cam3 = new THREE.PerspectiveCamera(30, 1, 0.1, 50);
+    cam3.position.set(0, 1.25, 5.2);
+    cam3.lookAt(0, 1.05, 0);
+    const built = buildAvatar(catHeadMaterials, catEarMat, mySkin);
+    avatar = built;
+    built.root.add(new THREE.Mesh(new THREE.CircleGeometry(0.7, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })));
+    const gunModel = buildBakedWeapon("beryl", mergeGeometries);
+    built.rig.weaponMount.add(gunModel);
+    scene3.add(built.root);
+    // Vài khóm cỏ lác đác quanh chân (không nền đất; bóng nhân vật giữ nguyên).
+    const blade = new THREE.ConeGeometry(0.035, 1, 3).translate(0, 0.5, 0);
+    const grassMat = new THREE.MeshLambertMaterial({ color: 0x6f9a43 });
+    const N = 26;
+    const blades = new THREE.InstancedMesh(blade, grassMat, N);
+    const m4 = new THREE.Matrix4(),
+      q = new THREE.Quaternion(),
+      sc = new THREE.Vector3(),
+      pos = new THREE.Vector3(),
+      eu = new THREE.Euler();
+    const col = new THREE.Color();
+    for (let i = 0; i < N; i++) {
+      const r = 0.3 + Math.random() * 0.55,
+        a = Math.random() * Math.PI * 2;
+      pos.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+      eu.set((Math.random() - 0.5) * 0.5, Math.random() * Math.PI, (Math.random() - 0.5) * 0.5);
+      q.setFromEuler(eu);
+      const h = 0.1 + Math.random() * 0.16;
+      sc.set(1, h, 1);
+      blades.setMatrixAt(i, m4.compose(pos, q, sc));
+      blades.setColorAt(i, col.setHSL(0.24 + Math.random() * 0.05, 0.45, 0.32 + Math.random() * 0.16));
+    }
+    scene3.add(blades);
+    homeGrass = blades;
+    return true;
+  }
+  function resize() {
+    const w = host.clientWidth,
+      h = host.clientHeight;
+    if (!w || !h) return;
+    const cw = Math.round(w),
+      ch = Math.round(h);
+    if (renderer3.domElement.width !== cw * renderer3.getPixelRatio()) {
+      renderer3.setSize(cw, ch, false);
+      cam3.aspect = cw / ch;
+      cam3.updateProjectionMatrix();
+    }
+  }
+  function frame() {
+    requestAnimationFrame(frame);
+    const visible = document.getElementById("menu")?.classList.contains("active") && host.offsetParent !== null && !document.hidden;
+    if (!visible) return;
+    if (!renderer3 && !init()) return;
+    resize();
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - lastT) / 1000);
+    lastT = now;
+    // Nhìn theo chuột: thân xoay ít, đầu xoay nhiều (mượt).
+    look.yaw += (mouse.x * 0.9 - look.yaw) * Math.min(1, 6 * dt);
+    look.pitch += (mouse.y * 0.45 - look.pitch) * Math.min(1, 6 * dt);
+    const { rig, root } = avatar;
+    poseAvatar(rig, pose, { stance: "stand", speed: 0, weaponGrip: WEAPON_GRIPS.beryl }, dt);
+    root.rotation.y = Math.PI + look.yaw * 0.45 + Math.sin(now / 2600) * 0.03; // quay mặt ra người chơi
+    rig.torso.rotation.y += look.yaw * 0.25;
+    rig.head.rotation.y = look.yaw * 0.5;
+    rig.head.rotation.x = -look.pitch; // chuột ở dưới thì cúi xuống
+    root.position.y = Math.sin(now / 900) * 0.008; // thở nhẹ
+    if (homeGrass) homeGrass.rotation.y = Math.sin(now / 3200) * 0.015; // cỏ đung đưa nhẹ
+    renderer3.render(scene3, cam3);
+  }
+  requestAnimationFrame(frame);
+  // Đổi màu: dựng lại nhân vật (giữ súng, bóng, cỏ).
+  window.__ldRebuildHomeAvatar = () => {
+    if (!scene3 || !avatar) return;
+    const old = avatar.root;
+    const built = buildAvatar(catHeadMaterials, catEarMat, mySkin);
+    for (const child of [...old.children]) if (!child.userData?.isAvatarPart && child.isMesh && child.geometry?.type === "CircleGeometry") built.root.add(child);
+    built.rig.weaponMount.add(buildBakedWeapon("beryl", mergeGeometries));
+    scene3.remove(old);
+    scene3.add(built.root);
+    avatar = built;
+    pose = {};
+  };
+  // Nút CHỈNH SỬA → bảng màu
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.className = "ld-skin-btn";
+  edit.textContent = "✎ CHỈNH SỬA";
+  const pal = document.createElement("div");
+  pal.className = "ld-skin-panel hidden";
+  pal.innerHTML =
+    '<b>MÀU NHÂN VẬT</b><div class="ld-skin-list">' +
+    Object.entries(SKINS)
+      .map(([id, s]) => `<button type="button" data-skin="${id}" title="${s.name}"><i style="background:${s.color}"></i><span>${s.name}</span></button>`)
+      .join("") +
+    "</div>";
+  host.append(edit, pal);
+  const mark = () => pal.querySelectorAll("[data-skin]").forEach((b) => b.classList.toggle("active", b.dataset.skin === mySkin));
+  mark();
+  edit.addEventListener("click", () => pal.classList.toggle("hidden"));
+  pal.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-skin]");
+    if (!b) return;
+    mySkin = b.dataset.skin;
+    try {
+      localStorage.setItem("ld-skin", mySkin);
+    } catch {}
+    sleeveMaterial?.color.set(skinPalette(mySkin).shirt); // tay áo khi vào trận
+    mark();
+    window.__ldRebuildHomeAvatar();
+    pal.classList.add("hidden");
+  });
+})();
+
+
+// Đang chạy trong app Windows (.exe): ẩn nút tải bản Windows.
+if (window.lastDrop?.isDesktop) document.getElementById("downloadExe")?.remove();

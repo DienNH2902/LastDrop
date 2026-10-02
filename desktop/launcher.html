@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Last Drop</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at 30% 20%, #1d2417, #0d100b 70%);
+      color: #f3f3ed;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      user-select: none;
+    }
+    .card {
+      width: min(460px, 92vw);
+      padding: 28px;
+      background: #171a14;
+      border: 1px solid #555b48;
+      box-shadow: 0 20px 60px #000a;
+    }
+    h1 { margin: 0 0 4px; font-size: 30px; letter-spacing: 4px; color: #d6ff45; }
+    p { margin: 0 0 18px; color: #9aa08e; font-size: 13px; line-height: 1.5; }
+    label { display: block; font-size: 11px; letter-spacing: 2px; color: #c8ccbf; margin-bottom: 6px; }
+    input {
+      width: 100%;
+      padding: 12px;
+      background: #0f120d;
+      border: 1px solid #454b3d;
+      color: #fff;
+      font-size: 15px;
+      user-select: text;
+    }
+    input:focus { outline: none; border-color: #d6ff45; }
+    button {
+      width: 100%;
+      margin-top: 14px;
+      padding: 13px;
+      background: #d6ff45;
+      color: #14170f;
+      border: 0;
+      font-weight: 800;
+      font-size: 15px;
+      letter-spacing: 2px;
+      cursor: pointer;
+    }
+    button:hover { background: #e4ff7a; }
+    .error { min-height: 18px; margin-top: 10px; color: #ff7a5c; font-size: 12px; }
+    .hint { margin-top: 16px; font-size: 11px; color: #6f7368; }
+  </style>
+</head>
+<body>
+  <form class="card" id="form">
+    <h1>LAST DROP</h1>
+    <p>Nhập địa chỉ máy chủ để vào game. Địa chỉ được lưu lại, lần sau mở là vào thẳng.</p>
+    <label for="url">ĐỊA CHỈ MÁY CHỦ</label>
+    <input id="url" placeholder="vd: last-drop.onrender.com" autocomplete="off" spellcheck="false" autofocus>
+    <button type="submit">VÀO GAME →</button>
+    <div class="error" id="error"></div>
+    <div class="hint">F11: toàn màn hình · Ctrl+Shift+S: đổi máy chủ</div>
+  </form>
+  <script>
+    const params = new URLSearchParams(location.search);
+    document.getElementById("url").value = params.get("url") || "";
+    document.getElementById("error").textContent = params.get("error") || "";
+    document.getElementById("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const res = await window.lastDrop.connect(document.getElementById("url").value);
+      if (!res.ok) document.getElementById("error").textContent = res.error;
+    });
+  </script>
+</body>
+</html>

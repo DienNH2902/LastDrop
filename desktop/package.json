@@ -1,0 +1,29 @@
+{
+  "name": "last-drop-desktop",
+  "productName": "Last Drop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Last Drop Arena — bản cài cho Windows (mở game từ máy chủ online)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.dienstudio.lastdrop",
+    "productName": "Last Drop",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "preload.js", "launcher.html", "config.default.json", "icon.png"],
+    "win": {
+      "target": "portable",
+      "icon": "icon.png"
+    },
+    "portable": {
+      "artifactName": "LastDrop.exe"
+    }
+  }
+}

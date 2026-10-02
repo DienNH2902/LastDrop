@@ -60,15 +60,7 @@
         <div class="ld-home-bg" aria-hidden="true"><img src="/forest-home-hero.svg" alt=""></div>
         <div class="ld-home-grid">
           <div class="ld-home-hero">
-            <div class="ld-eyebrow">MÙA 01 · ĐẤU TRƯỜNG SINH TỒN</div>
-            <h1>Đấu trường<br><em>Sống sót đến cuối.</em></h1>
-            <p>Mỗi trận tối đa 5 người trên hai bản đồ rộng 400 × 400 m: rừng núi có sông, cầu, đầm lầy và sa mạc đá đỏ. Chọn điểm nhảy, lục soát từng khu nhà tìm AUG, Kar98k, đạn và túi máu, lái xe băng qua đèo — rồi trụ lại đến khi vòng bo khép chặt.</p>
-            <ul class="ld-chips">
-              <li><b>5</b> người / trận</li>
-              <li><b>2</b> bản đồ</li>
-              <li><b>FPP</b> góc nhìn thứ nhất</li>
-              <li>Xe · Vòng bo · Nhảy dù</li>
-            </ul>
+            <div id="homeAvatar" class="ld-home-avatar" aria-label="Nhân vật của bạn"></div>
             <div class="ld-controls"><span><kbd>W A S D</kbd> di chuyển</span><span><kbd>Chuột</kbd> ngắm / bắn</span><span><kbd>F</kbd> nhặt đồ · lên xe</span><span><kbd>Tab</kbd> balo</span></div>
           </div>
           <div class="ld-home-panel">
@@ -79,9 +71,13 @@
               <div class="map-select"><button type="button" data-map-choice="forest">RỪNG</button><button type="button" data-map-choice="desert">SA MẠC</button><button type="button" data-map-choice="jungle">THÀNH CỔ</button></div>
             </div>
             <div class="ld-field"><span>3 · VÀO TRẬN</span>
-              <button class="primary ld-create" id="createBtn">TẠO PHÒNG MỚI <b>→</b></button>
+              <div class="ld-start-row">
+                <button class="primary ld-play" id="playBtn" title="Vào ngay phòng chung đang chờ — không cần mã phòng">CHƠI <b>▶</b></button>
+                <button class="primary ld-create" id="createBtn">TẠO PHÒNG MỚI <b>→</b></button>
+              </div>
               <div class="ld-or">hoặc vào phòng của bạn bè</div>
               <div class="join ld-join"><input id="codeInput" maxlength="6" inputmode="numeric" placeholder="MÃ PHÒNG 6 SỐ"><button id="joinBtn">THAM GIA</button></div>
+              <a class="ld-download" id="downloadExe" href="https://github.com/DienNH2902/LastDrop/releases/latest/download/LastDrop.exe" download>⬇ TẢI BẢN WINDOWS (.EXE)<small>Chạy mượt hơn bản web · không bị tắt nhầm bằng Ctrl+W · mở là vào thẳng</small></a>
             </div>
           </div>
         </div>
@@ -144,6 +140,16 @@
           <label>
             NẰM (Z)
             <select id="proneMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select>
+          </label>
+
+          <label>
+            NGẮM (CHUỘT PHẢI)
+            <select id="aimMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ CHUỘT PHẢI</option></select>
+          </label>
+
+          <label>
+            PHÍM ĐIỀU KHIỂN
+            <button type="button" class="secondary" data-open-keybinds>ĐỔI PHÍM...</button>
           </label>
 
                     <label>
@@ -241,7 +247,7 @@
                     <option>Performance</option>
                     <option>Balanced</option>
                     <option>High</option>
-                                    </select></label><label>NGỒI (C)<select id="pauseCrouchMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select></label><label>NẰM (Z)<select id="pauseProneMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select></label><label>CHẾ ĐỘ HIỂN THỊ<select id="pauseFullscreen">
+                                    </select></label><label>NGỒI (C)<select id="pauseCrouchMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select></label><label>NẰM (Z)<select id="pauseProneMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ PHÍM</option></select></label><label>NGẮM (CHUỘT PHẢI)<select id="pauseAimMode"><option value="toggle">BẤM ĐỂ BẬT/TẮT</option><option value="hold">GIỮ CHUỘT PHẢI</option></select></label><label>PHÍM ĐIỀU KHIỂN<button type="button" class="secondary" data-open-keybinds>ĐỔI PHÍM...</button></label><label>CHẾ ĐỘ HIỂN THỊ<select id="pauseFullscreen">
                     <option value="off">Windowed</option>
                     <option value="on">Fullscreen</option>
                   </select></label><button id="closePauseSettings" class="secondary">QUAY LẠI ESC</button>

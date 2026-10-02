@@ -328,6 +328,7 @@ const snapshot = (room) => ({
   players: [...room.players.values()].map((p) => ({
     id: p.id,
     name: p.name,
+    skin: p.skin || "green",
     x: r2(p.x),
     z: r2(p.z),
     groundY: r2(p.groundY || 0),
@@ -494,6 +495,15 @@ function createVehicles(obstacles) {
           pz = z - sn * lx + c * lz;
         if (blockedPosition(spawnProbeRoom, px, pz, null, null, true, 0.25)) return false;
       }
+    // Phía trước / sau đầu xe phải trống ~9 m (lên xe là chạy được ngay, không
+    // đâm cây / đá ngay trước mũi).
+    for (const dir of [-1, 1])
+      for (let d = 3; d <= 9.01; d += 1)
+        for (const lx of [-0.9, 0, 0.9]) {
+          const px = x + c * lx + sn * dir * d,
+            pz = z - sn * lx + c * dir * d;
+          if (blockedPosition(spawnProbeRoom, px, pz, null, null, true, 0.25)) return false;
+        }
     // Không đặt xe sát các điểm bắt đầu ở khu chờ.
     if (
       [
@@ -896,6 +906,11 @@ function raisedSurfacesAt(room, x, z) {
       Structures.keepSurfaces(o, obstacleBaseY(room, o), lx, lz, out);
       continue;
     }
+    if (o.type === "stonewall" || o.type === "tower" || o.type === "fortramp") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      Structures.fortSurfaces(o, obstacleBaseY(room, o), lx, lz, out, (gx, gz) => groundHeightAt(room, gx, gz));
+      continue;
+    }
     if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
     if (o.type === "house" || o.type === "hut") {
       const dx = x - o.x,
@@ -1063,7 +1078,14 @@ function blockedPosition(
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
       continue;
     }
-    if (o.type === "fence" || o.type === "stonewall") {
+    if (o.type === "stonewall" || o.type === "tower" || o.type === "fortramp") {
+      // Đứng trên đỉnh tường / tháp / cầu thang thì đi lại được; thấp hơn thì chặn.
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      const rel = mover ? mover.groundY - obstacleBaseY(room, o) : null;
+      if (Structures.fortBlocked(o, lx, lz, obstacleRadius, rel, (gx, gz) => groundHeightAt(room, gx, gz))) return true;
+      continue;
+    }
+    if (o.type === "fence") {
       if (blockedByFence(o, x, z, obstacleRadius)) return true;
       continue;
     }
@@ -1466,6 +1488,7 @@ function dropDeathLoot(room, victim) {
       x: Math.round(spot.x * 100) / 100,
       z: Math.round(spot.z * 100) / 100,
       contents: { ammo: crateAmmo, medkit, frag: victim.frags || 0, flash: victim.flashes || 0 },
+      owner: victim.name || "NGƯỜI CHƠI", // tên người chết — hiện khi loot hòm
     });
   if (weapon) {
     // Ngay cạnh hòm (bên phải theo hướng nhìn của người chết), không chồng lên hòm.
@@ -1650,6 +1673,21 @@ function moveVehicleStep(room, vehicle, stepX, stepZ, current) {
       vehicle.z = pz;
       current.count = info.count;
       alignVehicleToFence(room, vehicle, next.fences[0], current, Math.hypot(stepX, stepZ));
+      return "slid";
+    }
+  }
+  // Đâm chéo vào đá / gốc cây / góc tường: thử lệch hướng nhẹ (±20°, ±40°) để
+  // xe trượt dần ra thay vì đứng khựng (cùng luật ở client và server).
+  for (const ang of [0.35, -0.35, 0.7, -0.7]) {
+    const c = Math.cos(ang),
+      sn = Math.sin(ang);
+    const tx = (stepX * c - stepZ * sn) * c * 0.85,
+      tz = (stepX * sn + stepZ * c) * c * 0.85;
+    const info = ((x, z) => vehicleBlockInfo(room, vehicle, x, z, vehicle.yaw))(vehicle.x + tx, vehicle.z + tz);
+    if (info.count === 0 || info.count < current.count) {
+      vehicle.x += tx;
+      vehicle.z += tz;
+      current.count = info.count;
       return "slid";
     }
   }
@@ -1894,6 +1932,11 @@ function solidPoint(room, x, y, z, skipGround = false) {
     }
     if (o.type === "tower") {
       if (y < base + o.h && Math.abs(x - o.x) < o.w / 2 && Math.abs(z - o.z) < o.w / 2) return true;
+      continue;
+    }
+    if (o.type === "fortramp") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Structures.fortRampSolid(o, lx, y - base, lz, (gx, gz) => groundHeightAt(room, gx, gz))) return true;
       continue;
     }
     const d = Math.hypot(x - o.x, z - o.z);
@@ -2175,9 +2218,15 @@ wss.on("connection", (ws) => {
     if (!m || typeof m !== "object") return;
     // Đo độ trễ khứ hồi: client dùng để dự đoán xe và hiển thị ping.
     if (m.type === "ping") return send(ws, { type: "pong", t: m.t, lag: serverLagMs });
-    if (m.type === "create" || m.type === "join") {
+    if (m.type === "create" || m.type === "join" || m.type === "play") {
       if (room) return;
-      const code = m.type === "create" ? roomCode() : String(m.code || "");
+      // "play" (nút CHƠI): vào phòng CHUNG đang chờ còn chỗ — không cần mã phòng;
+      // chưa có (hoặc phòng chung đang đánh / đã đủ người) thì mở phòng chung mới.
+      let code = m.type === "create" ? roomCode() : String(m.code || "");
+      if (m.type === "play") {
+        const open = [...rooms.values()].find((r) => r.isPublic && r.phase === "waiting" && r.players.size < 5);
+        code = open ? open.code : roomCode();
+      }
       room = rooms.get(code);
       if (m.type === "join" && !room)
         return send(ws, { type: "error", message: "Không tìm thấy phòng." });
@@ -2198,6 +2247,7 @@ wss.on("connection", (ws) => {
           nextCrateId: 1,
           nextLootId: 1,
         };
+        if (m.type === "play") room.isPublic = true;
         rooms.set(code, room);
         // Vòng lặp gửi state phải chạy NGAY từ lúc tạo phòng — không đợi tới
         // lúc bấm Start — nếu không thì mọi broadcast() lúc đang chờ trong
@@ -2222,6 +2272,7 @@ wss.on("connection", (ws) => {
         id,
         ws,
         name: String(m.name || "Player").slice(0, 18),
+        skin: /^[a-z]{2,12}$/.test(String(m.skin || "")) ? String(m.skin) : "green", // màu nhân vật
         x: ((room.players.size % 3) - 1) * 3,
         z: room.players.size > 2 ? -8 : 8,
         groundY: 0,
@@ -2368,7 +2419,9 @@ wss.on("connection", (ws) => {
       (room.phase === "plane" || room.phase === "playing") &&
       (p.state === "freefall" || p.state === "parachute")
     ) {
-      if (p.y - groundHeightAt(room, p.x, p.z) > AIR.maxLandingHeight) return;
+      // Độ cao server ghi nhận có thể trễ hơn client (giới hạn tốc độ rơi): vẫn cho
+      // tiếp đất, chỉ chặn trường hợp vô lý (còn quá cao).
+      if (p.y - groundHeightAt(room, p.x, p.z) > AIR.maxLandingHeight * 4) return;
       const reportedLandingY = Number(m.y);
       const landingY =
         Number.isFinite(reportedLandingY) &&
@@ -2608,7 +2661,32 @@ wss.on("connection", (ws) => {
       // chơi lọt vào vật rắn → bước ra được, vẫn không đi xuyên tường.
       const stuck = blockedPosition(room, p.x, p.z, p.id);
       const blockedStep = (x, z) => blockedPosition(room, x, z, p.id, null, false, stuck ? 0.05 : null);
+      const waterOk = (x, z) =>
+        !stayInWaterWhileSubmerged || waterAt(room, x, z) || isOnBridge(room.obstacles, x, z, 0.8);
       for (let i = 0; i < steps; i++) {
+        // Bước CHÉO đầy đủ trước (đi sát lan can / tường nằm xéo: tách trục X, Z
+        // thì cả hai đều chạm nhưng bước chéo vẫn đi được → trước đây kẹt cứng
+        // và lệch với client). Bị chặn thì thử lệch hướng nhẹ (trượt quanh đá /
+        // gốc cây như client), cuối cùng mới tách trục.
+        if (!blockedStep(p.x + stepX, p.z + stepZ) && waterOk(p.x + stepX, p.z + stepZ)) {
+          p.x += stepX;
+          p.z += stepZ;
+          continue;
+        }
+        let slid = false;
+        for (const ang of [0.35, -0.35, 0.7, -0.7, 1.05, -1.05]) {
+          const c = Math.cos(ang),
+            sn = Math.sin(ang);
+          const tx = (stepX * c - stepZ * sn) * c,
+            tz = (stepX * sn + stepZ * c) * c;
+          if (!blockedStep(p.x + tx, p.z + tz) && waterOk(p.x + tx, p.z + tz)) {
+            p.x += tx;
+            p.z += tz;
+            slid = true;
+            break;
+          }
+        }
+        if (slid) continue;
         const nextX = p.x + stepX;
         if (
           !blockedStep(nextX, p.z) &&
@@ -3073,7 +3151,7 @@ wss.on("connection", (ws) => {
       const stats = weaponStats(p);
       const melee = stats === WEAPON_STATS.none;
       if (
-        p.sprinting || // đang chạy nhanh thì không bắn/đấm được (client dừng chạy trước khi bắn)
+        (p.sprinting && !melee) || // đang chạy nhanh thì không bắn được (đấm thì vẫn được)
         p.swimming || // dưới nước không dùng được súng
         p.state !== "ground" ||
         p.healingUntil > shotTime ||
@@ -3555,5 +3633,7 @@ server.listen(PORT, () => {
   console.log(`Last Drop Arena listening on http://localhost:${PORT}`);
   scheduleMapRefill(300); // sinh sẵn map rừng + sa mạc ngay khi server rảnh
 });
+
+
 
 

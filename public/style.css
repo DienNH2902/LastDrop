@@ -3024,3 +3024,295 @@ body:has(#game.active) #game {
 #game.spectating .bottom-hud {
   display: none !important;
 }
+
+/* Trong trận: không bôi đen / chọn chữ (kéo đồ trong balo hay làm bôi đen giao diện) */
+#game,
+#game *,
+#keybindPanel,
+#keybindPanel * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+#game input,
+#game textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+#game ::selection {
+  background: transparent;
+}
+/* Bảng gán phím */
+#keybindPanel {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: none;
+  place-items: center;
+  background: #050605cc;
+}
+#keybindPanel.open {
+  display: grid;
+}
+#keybindPanel .kb-card {
+  width: min(560px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  background: #171a14;
+  border: 1px solid #555b48;
+  color: #f3f3ed;
+  font-family: "DM Mono", monospace;
+}
+#keybindPanel .kb-head b {
+  display: block;
+  font: 900 24px "Barlow Condensed", Arial, sans-serif;
+  letter-spacing: 3px;
+  color: #d6ff45;
+}
+#keybindPanel .kb-head small {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: #8c9083;
+}
+#keybindPanel .kb-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  overflow-y: auto;
+}
+#keybindPanel .kb-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #1f231b;
+  border: 1px solid #3b4033;
+  color: inherit;
+  font: 11px "DM Mono", monospace;
+  letter-spacing: 1px;
+  cursor: pointer;
+  text-align: left;
+}
+#keybindPanel .kb-row:hover {
+  border-color: #d6ff45;
+}
+#keybindPanel .kb-row kbd {
+  min-width: 46px;
+  padding: 3px 7px;
+  background: #2c3226;
+  border: 1px solid #555b48;
+  color: #d6ff45;
+  font: bold 11px "DM Mono", monospace;
+  text-align: center;
+}
+#keybindPanel .kb-row.changed kbd {
+  color: #ffd27a;
+}
+#keybindPanel .kb-row.waiting {
+  border-color: #ff922f;
+  background: #2b2416;
+}
+#keybindPanel .kb-row.waiting kbd {
+  color: #ff922f;
+}
+#keybindPanel .kb-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+@media (max-width: 520px) {
+  #keybindPanel .kb-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Trang chủ: nhân vật 3D thay cho khối giới thiệu */
+.ld-home-avatar {
+  position: relative;
+  width: 100%;
+  height: min(62vh, 560px);
+  min-height: 300px;
+}
+.ld-home-avatar canvas {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+/* Trận kết thúc khi đang quan sát */
+.death-view-overlay.match-over {
+  top: 38%;
+  padding: 18px 28px;
+  border-color: #ff922f99;
+}
+.death-view-overlay.match-over b {
+  font-size: 34px;
+  color: #ff922f;
+}
+
+/* Trang chủ: không bôi đen chữ (ô nhập vẫn chọn / gõ được) */
+body,
+.ld-home,
+.ld-home * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+/* Nút CHƠI cạnh TẠO PHÒNG MỚI */
+.ld-start-row {
+  display: grid;
+  grid-template-columns: 0.8fr 1.2fr;
+  gap: 8px;
+}
+.ld-play {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 56px;
+  font-size: 16px;
+  background: #ff922f;
+  border-color: #ff922f;
+}
+.ld-play:hover {
+  background: #ffa955;
+}
+
+/* Trang chủ: chỉnh màu nhân vật */
+.ld-skin-btn {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  z-index: 2;
+  padding: 8px 16px;
+  background: #171a14e6;
+  border: 1px solid #d6ff4599;
+  color: #d6ff45;
+  font: bold 11px "DM Mono", monospace;
+  letter-spacing: 2px;
+  cursor: pointer;
+}
+.ld-skin-btn:hover {
+  background: #d6ff45;
+  color: #14170f;
+}
+.ld-skin-panel {
+  position: absolute;
+  left: 50%;
+  bottom: 52px;
+  transform: translateX(-50%);
+  z-index: 3;
+  width: min(360px, 92%);
+  padding: 12px;
+  background: #121510f2;
+  border: 1px solid #555b48;
+  box-shadow: 0 10px 30px #000a;
+  font-family: "DM Mono", monospace;
+}
+.ld-skin-panel.hidden {
+  display: none;
+}
+.ld-skin-panel > b {
+  display: block;
+  margin-bottom: 8px;
+  font: 900 15px "Barlow Condensed", Arial, sans-serif;
+  letter-spacing: 2px;
+  color: #d6ff45;
+}
+.ld-skin-list {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+.ld-skin-list button {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 6px 2px;
+  background: #1c2018;
+  border: 1px solid #3b4033;
+  color: #c8ccbf;
+  font: 8px "DM Mono", monospace;
+  cursor: pointer;
+}
+.ld-skin-list button i {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid #0008;
+}
+.ld-skin-list button:hover,
+.ld-skin-list button.active {
+  border-color: #d6ff45;
+  color: #d6ff45;
+}
+/* Balo: tên chủ hòm xác */
+.inv-sub.crate-owner {
+  color: #ff922f;
+  margin-top: 6px;
+}
+
+/* Trang chủ: cột nhân vật cao bằng cột bảng bên phải */
+@media (min-width: 901px) {
+  .ld-home-grid {
+    align-items: stretch;
+  }
+  .ld-home-hero {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 14px;
+    min-height: 100%;
+  }
+  .ld-home-hero .ld-home-avatar {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 420px;
+  }
+}
+
+/* Nút CHỈNH SỬA: góc trên bên trái khung nhân vật; bảng màu mở ngay bên dưới nút */
+.ld-skin-btn {
+  left: 10px;
+  top: 10px;
+  bottom: auto;
+  transform: none;
+}
+.ld-skin-panel {
+  left: 10px;
+  top: 50px;
+  bottom: auto;
+  transform: none;
+}
+
+/* Nút tải bản Windows (.exe) */
+.ld-download {
+  display: grid;
+  gap: 3px;
+  margin-top: 12px;
+  padding: 11px 14px;
+  border: 1px dashed #d6ff4580;
+  color: #d6ff45;
+  font: bold 12px "DM Mono", monospace;
+  letter-spacing: 1px;
+  text-align: center;
+  text-decoration: none;
+}
+.ld-download:hover {
+  background: #d6ff4514;
+  border-style: solid;
+}
+.ld-download small {
+  font-weight: normal;
+  font-size: 9px;
+  color: #8c9083;
+}
