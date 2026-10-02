@@ -3544,3 +3544,40 @@ textarea {
 .header-quit:hover {
   color: #ff5a3c;
 }
+
+/* Menu ESC → Cài đặt: khung CỐ ĐỊNH chiều cao, canh giữa màn hình (không phình lên
+   che đồng hồ trận); nội dung từng tab cuộn bên trong (tab Bàn phím dài). */
+.game-message:has(#pauseSettings:not(.hidden)) {
+  top: 50%;
+}
+.pause-card:has(#pauseSettings:not(.hidden)) {
+  max-height: min(640px, calc(100vh - 140px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#pauseSettings:not(.hidden) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+#pauseSettings .settings-tabs {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+#pauseSettings .settings-tabs .ps-page {
+  height: min(300px, calc(100vh - 380px));
+  min-height: 140px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+#pauseSettings .settings-tabs .ps-page.hidden {
+  display: none;
+}
+#pauseSettings .settings-tabs .kb-list {
+  max-height: none;
+  overflow: visible;
+}
