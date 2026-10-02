@@ -13,7 +13,7 @@ import {
   bakeAttachment,
   bakedWeaponMat,
 } from "./weapons.js";
-import { buildAvatar, poseAvatar, HAND_OFFSET } from "./avatar.js";
+import { buildAvatar, poseAvatar, HAND_OFFSET, SKINS, skinPalette } from "./avatar.js";
 
 // querySelector được gọi hàng chục lần MỖI khung hình (HUD, vòng bo, loot...).
 // Nhớ lại phần tử đã tìm; nếu phần tử đó bị gỡ khỏi trang thì tìm lại.
@@ -1723,7 +1723,7 @@ function connect(message) {
   $("#status").textContent = "● CONNECTING";
   socket.onopen = () => {
     socket.send(
-      JSON.stringify({ ...message, name: $("#nameInput").value || "Rookie" }),
+      JSON.stringify({ ...message, name: $("#nameInput").value || "Rookie", skin: mySkin }),
     );
     startPingLoop();
   };
@@ -2184,6 +2184,18 @@ function isOnBridgeAt(x, z, clearance = 0) {
 // Nhà sàn + thành chính (Thành Cổ): hình học dùng chung với server.
 const Structures = window.LDStructures;
 const Attach = window.LDAttach; // phụ kiện súng (dùng chung với server)
+// Màu nhân vật đã chọn ở trang chủ (gửi lên server khi vào phòng).
+let mySkin = "green";
+try {
+  mySkin = localStorage.getItem("ld-skin") || "green";
+} catch {}
+if (!SKINS[mySkin]) mySkin = "green";
+// Tay áo góc nhìn thứ nhất (súng / nắm đấm / lựu đạn / vô lăng) theo màu đã chọn.
+let sleeveMaterial = null;
+function mySleeveMat() {
+  sleeveMaterial ||= new THREE.MeshLambertMaterial({ color: skinPalette(mySkin).shirt });
+  return sleeveMaterial;
+}
 const STILT_RAMP = Structures.STILT_RAMP;
 function raisedSurfacesAt(x, z) {
   const out = [];
@@ -3688,7 +3700,7 @@ function buildCarMesh(vehicle, forest) {
   // (cố định, phía dưới – sau vô lăng, về phía người lái) tới đúng găng tay.
   const driverHands = new THREE.Group();
   const gloveMat = makeMat("#26261f");
-  const sleeveMat = makeMat("#5a5f48");
+  const sleeveMat = mySleeveMat();
   const gloves = [],
     forearms = [];
   for (const side of [-1, 1]) {
@@ -4497,7 +4509,7 @@ function initWorld() {
   // Tay không: hai nắm tay đeo găng + cẳng tay, thế thủ ở hai góc dưới màn hình.
   const fists = new THREE.Group();
   const gloveMat = makeMat("#26261f"),
-    sleeveMat = makeMat("#5a5f48");
+    sleeveMat = mySleeveMat();
   fists.userData.hands = [-1, 1].map((side) => {
     const hand = new THREE.Group();
     const fist = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.08, 0.1), gloveMat);
@@ -4559,7 +4571,7 @@ function initWorld() {
     const hand = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.08, 0.1), makeMat("#26261f"));
     hand.position.set(0.01, -0.05, 0.02);
     g.add(hand);
-    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.3, 4, 8).rotateX(Math.PI / 2), makeMat("#5a5f48"));
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.3, 4, 8).rotateX(Math.PI / 2), mySleeveMat());
     arm.position.set(0.02, -0.08, 0.22);
     g.add(arm);
     g.position.set(0.22, -0.2, -0.42);
@@ -5162,7 +5174,7 @@ function renderPlayers(state) {
     if (!mesh) {
       // Nhân vật có khớp (avatar.js): đầu mèo + nón + giáp, súng AUG / Kar98k
       // trên tay với tia lửa đầu nòng dựng sẵn (chỉ bật/tắt khi bắn).
-      const { root, rig } = buildAvatar(catHeadMaterials, catEarMat);
+      const { root, rig } = buildAvatar(catHeadMaterials, catEarMat, SKINS[p.skin] ? p.skin : "green");
       mesh = root;
       const weapon = buildBakedWeapon("ranger", mergeGeometries);
       const sniperWeapon = buildBakedWeapon("sniper", mergeGeometries);
@@ -6093,11 +6105,23 @@ function renderBackpack() {
   const panel = $("#backpack");
   if (!panel || panel.classList.contains("hidden") || invDrag) return;
   const crate = crateOpenId ? lootCrates.get(crateOpenId) : null;
-  setText($("#bpTitle"), crate ? "BALO / HÒM TIẾP TẾ" : "BALO");
+  setText($("#bpTitle"), crate ? `BALO / HÒM CỦA ${crate.owner || "NGƯỜI CHƠI"}` : "BALO");
   // XUNG QUANH
   const ground = groundEntries();
+  // Hòm xác: tiêu đề "HÒM CỦA <tên người chết>" ngay trên đồ trong hòm.
+  const crateNear = (crateOpenId && lootCrates.get(crateOpenId)) || nearestCrate();
+  let crateHeaderDone = false;
   const groundHtml = ground.length
-    ? ground.map((e) => invItemHtml(e, "ground", e.src === "crate" ? '<small>TRONG HÒM</small>' : "")).join("")
+    ? ground
+        .map((e) => {
+          let head = "";
+          if (e.src === "crate" && !crateHeaderDone) {
+            crateHeaderDone = true;
+            head = `<h5 class="inv-sub crate-owner">☠ HÒM CỦA ${escapeHtml(crateNear?.owner || "NGƯỜI CHƠI")}</h5>`;
+          }
+          return head + invItemHtml(e, "ground", e.src === "crate" ? "<small>TRONG HÒM</small>" : "");
+        })
+        .join("")
     : '<p class="inv-empty">KHÔNG CÓ ĐỒ GẦN ĐÂY</p>';
   // KHO ĐỒ
   const pack = [
@@ -6465,7 +6489,7 @@ const fpH = new THREE.Vector3(),
   fpDir = new THREE.Vector3();
 let fpArmMats = null;
 function makeFpArm() {
-  fpArmMats ||= { glove: makeMat("#26261f"), sleeve: makeMat("#5a5f48"), cuff: makeMat("#3b3f30") };
+  fpArmMats ||= { glove: makeMat("#26261f"), sleeve: mySleeveMat(), cuff: makeMat("#3b3f30") };
   const g = new THREE.Group();
   const hand = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.085, 0.1), fpArmMats.glove);
   const thumb = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.03, 0.05), fpArmMats.glove);
@@ -11424,7 +11448,7 @@ $("#trophyHomeBtn").onclick = () => show("menu");
     cam3 = new THREE.PerspectiveCamera(30, 1, 0.1, 50);
     cam3.position.set(0, 1.25, 5.2);
     cam3.lookAt(0, 1.05, 0);
-    const built = buildAvatar(catHeadMaterials, catEarMat);
+    const built = buildAvatar(catHeadMaterials, catEarMat, mySkin);
     avatar = built;
     built.root.add(new THREE.Mesh(new THREE.CircleGeometry(0.7, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })));
     const gunModel = buildBakedWeapon("beryl", mergeGeometries);
@@ -11491,4 +11515,45 @@ $("#trophyHomeBtn").onclick = () => show("menu");
     renderer3.render(scene3, cam3);
   }
   requestAnimationFrame(frame);
+  // Đổi màu: dựng lại nhân vật (giữ súng, bóng, cỏ).
+  window.__ldRebuildHomeAvatar = () => {
+    if (!scene3 || !avatar) return;
+    const old = avatar.root;
+    const built = buildAvatar(catHeadMaterials, catEarMat, mySkin);
+    for (const child of [...old.children]) if (!child.userData?.isAvatarPart && child.isMesh && child.geometry?.type === "CircleGeometry") built.root.add(child);
+    built.rig.weaponMount.add(buildBakedWeapon("beryl", mergeGeometries));
+    scene3.remove(old);
+    scene3.add(built.root);
+    avatar = built;
+    pose = {};
+  };
+  // Nút CHỈNH SỬA → bảng màu
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.className = "ld-skin-btn";
+  edit.textContent = "✎ CHỈNH SỬA";
+  const pal = document.createElement("div");
+  pal.className = "ld-skin-panel hidden";
+  pal.innerHTML =
+    '<b>MÀU NHÂN VẬT</b><div class="ld-skin-list">' +
+    Object.entries(SKINS)
+      .map(([id, s]) => `<button type="button" data-skin="${id}" title="${s.name}"><i style="background:${s.color}"></i><span>${s.name}</span></button>`)
+      .join("") +
+    "</div>";
+  host.append(edit, pal);
+  const mark = () => pal.querySelectorAll("[data-skin]").forEach((b) => b.classList.toggle("active", b.dataset.skin === mySkin));
+  mark();
+  edit.addEventListener("click", () => pal.classList.toggle("hidden"));
+  pal.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-skin]");
+    if (!b) return;
+    mySkin = b.dataset.skin;
+    try {
+      localStorage.setItem("ld-skin", mySkin);
+    } catch {}
+    sleeveMaterial?.color.set(skinPalette(mySkin).shirt); // tay áo khi vào trận
+    mark();
+    window.__ldRebuildHomeAvatar();
+    pal.classList.add("hidden");
+  });
 })();

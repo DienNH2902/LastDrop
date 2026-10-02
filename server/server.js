@@ -328,6 +328,7 @@ const snapshot = (room) => ({
   players: [...room.players.values()].map((p) => ({
     id: p.id,
     name: p.name,
+    skin: p.skin || "green",
     x: r2(p.x),
     z: r2(p.z),
     groundY: r2(p.groundY || 0),
@@ -1478,6 +1479,7 @@ function dropDeathLoot(room, victim) {
       x: Math.round(spot.x * 100) / 100,
       z: Math.round(spot.z * 100) / 100,
       contents: { ammo: crateAmmo, medkit, frag: victim.frags || 0, flash: victim.flashes || 0 },
+      owner: victim.name || "NGƯỜI CHƠI", // tên người chết — hiện khi loot hòm
     });
   if (weapon) {
     // Ngay cạnh hòm (bên phải theo hướng nhìn của người chết), không chồng lên hòm.
@@ -2261,6 +2263,7 @@ wss.on("connection", (ws) => {
         id,
         ws,
         name: String(m.name || "Player").slice(0, 18),
+        skin: /^[a-z]{2,12}$/.test(String(m.skin || "")) ? String(m.skin) : "green", // màu nhân vật
         x: ((room.players.size % 3) - 1) * 3,
         z: room.players.size > 2 ? -8 : 8,
         groundY: 0,

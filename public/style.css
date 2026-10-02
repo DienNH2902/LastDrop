@@ -3185,3 +3185,111 @@ textarea,
 .ld-play:hover {
   background: #ffa955;
 }
+
+/* Trang chủ: chỉnh màu nhân vật */
+.ld-skin-btn {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  z-index: 2;
+  padding: 8px 16px;
+  background: #171a14e6;
+  border: 1px solid #d6ff4599;
+  color: #d6ff45;
+  font: bold 11px "DM Mono", monospace;
+  letter-spacing: 2px;
+  cursor: pointer;
+}
+.ld-skin-btn:hover {
+  background: #d6ff45;
+  color: #14170f;
+}
+.ld-skin-panel {
+  position: absolute;
+  left: 50%;
+  bottom: 52px;
+  transform: translateX(-50%);
+  z-index: 3;
+  width: min(360px, 92%);
+  padding: 12px;
+  background: #121510f2;
+  border: 1px solid #555b48;
+  box-shadow: 0 10px 30px #000a;
+  font-family: "DM Mono", monospace;
+}
+.ld-skin-panel.hidden {
+  display: none;
+}
+.ld-skin-panel > b {
+  display: block;
+  margin-bottom: 8px;
+  font: 900 15px "Barlow Condensed", Arial, sans-serif;
+  letter-spacing: 2px;
+  color: #d6ff45;
+}
+.ld-skin-list {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+.ld-skin-list button {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 6px 2px;
+  background: #1c2018;
+  border: 1px solid #3b4033;
+  color: #c8ccbf;
+  font: 8px "DM Mono", monospace;
+  cursor: pointer;
+}
+.ld-skin-list button i {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid #0008;
+}
+.ld-skin-list button:hover,
+.ld-skin-list button.active {
+  border-color: #d6ff45;
+  color: #d6ff45;
+}
+/* Balo: tên chủ hòm xác */
+.inv-sub.crate-owner {
+  color: #ff922f;
+  margin-top: 6px;
+}
+
+/* Trang chủ: cột nhân vật cao bằng cột bảng bên phải */
+@media (min-width: 901px) {
+  .ld-home-grid {
+    align-items: stretch;
+  }
+  .ld-home-hero {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 14px;
+    min-height: 100%;
+  }
+  .ld-home-hero .ld-home-avatar {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 420px;
+  }
+}
+
+/* Nút CHỈNH SỬA: góc trên bên trái khung nhân vật; bảng màu mở ngay bên dưới nút */
+.ld-skin-btn {
+  left: 10px;
+  top: 10px;
+  bottom: auto;
+  transform: none;
+}
+.ld-skin-panel {
+  left: 10px;
+  top: 50px;
+  bottom: auto;
+  transform: none;
+}

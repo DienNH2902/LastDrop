@@ -68,7 +68,7 @@ function bake(specs) {
 const capsule = (r, len) => new THREE.CapsuleGeometry(r, len, 4, 10);
 const box = (x, y, z) => new THREE.BoxGeometry(x, y, z);
 
-const C = {
+const DEFAULT_C = {
   pants: "#3b4232",
   shirt: "#5a5f48",
   vest: "#3a4838",
@@ -79,6 +79,40 @@ const C = {
   helmet: "#5f6c46",
   brim: "#4a5537",
 };
+let C = DEFAULT_C;
+// Màu nhân vật người chơi chọn ở trang chủ (khoá → màu chủ đạo). "green" = bộ
+// quân phục gốc. Các màu khác: suy ra cả bộ (nón, giáp, áo, quần, túi) từ màu chủ đạo.
+export const SKINS = {
+  green: { name: "XANH LÁ", color: "#5f6c46" },
+  red: { name: "ĐỎ", color: "#9a2f26" },
+  blue: { name: "XANH DƯƠNG", color: "#2f5590" },
+  sand: { name: "CÁT", color: "#a8915c" },
+  black: { name: "ĐEN", color: "#2b2b2d" },
+  white: { name: "TRẮNG TUYẾT", color: "#d9ddd8" },
+  purple: { name: "TÍM", color: "#5e3d84" },
+  orange: { name: "CAM", color: "#c06a28" },
+  pink: { name: "HỒNG", color: "#c2618f" },
+  navy: { name: "XANH NAVY", color: "#26304a" },
+};
+const _hsl = { h: 0, s: 0, l: 0 };
+export function skinPalette(skin) {
+  if (!SKINS[skin] || skin === "green") return DEFAULT_C;
+  const base = new THREE.Color(SKINS[skin].color);
+  base.getHSL(_hsl);
+  const tone = (ds, dl) =>
+    "#" + new THREE.Color().setHSL(_hsl.h, Math.max(0, Math.min(1, _hsl.s * ds)), Math.max(0.04, Math.min(0.92, _hsl.l + dl))).getHexString();
+  return {
+    pants: tone(0.75, -0.1),
+    shirt: tone(0.8, 0.02),
+    vest: tone(0.9, -0.07),
+    pouch: tone(0.7, -0.02),
+    glove: "#26261f",
+    boot: "#2a2420",
+    strap: tone(0.5, -0.16),
+    helmet: SKINS[skin].color,
+    brim: tone(0.9, -0.1),
+  };
+}
 
 // Đầu mèo: 6 mặt hộp đọc từ MỘT texture atlas 3×2 (xem game.js): ô = chỉ số mặt
 // BoxGeometry (+x, -x, +y, -y, +z, -z), hàng 0 nằm trên cùng của ảnh.
@@ -122,9 +156,13 @@ function atlasHeadGeometry() {
   return g;
 }
 
+const assetsBySkin = new Map();
 let assets = null;
-function getAssets(earColor) {
-  if (assets) return assets;
+function getAssets(earColor, skin = "green") {
+  const key = SKINS[skin] ? skin : "green";
+  if (assetsBySkin.has(key)) return assetsBySkin.get(key);
+  C = skinPalette(key); // các bake() bên dưới đọc màu từ C
+  assets = null;
   const thighGeo = (side) =>
     bake([
       { g: capsule(0.078, THIGH - 0.12), c: C.pants, p: [0, -THIGH / 2, 0] },
@@ -234,6 +272,8 @@ function getAssets(earColor) {
     hitGeo,
     hitMat: new THREE.MeshBasicMaterial({ visible: false }),
   };
+  assetsBySkin.set(key, assets);
+  C = DEFAULT_C;
   return assets;
 }
 
@@ -251,8 +291,8 @@ function mesh(parent, geometry, material) {
 
 // headMaterial: MỘT material dùng atlas đầu mèo (game.js: catHeadMaterials);
 // earMat: vật liệu tai (chỉ lấy màu để nướng vào mesh nón).
-export function buildAvatar(headMaterial, earMat) {
-  const A = getAssets(earMat.color);
+export function buildAvatar(headMaterial, earMat, skin = "green") {
+  const A = getAssets(earMat.color, skin);
   const root = new THREE.Group();
   const hips = limb(root, 0, STAND_HIP, 0);
   mesh(hips, A.hips, bakedMat);
