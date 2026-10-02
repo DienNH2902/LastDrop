@@ -3293,3 +3293,26 @@ textarea,
   bottom: auto;
   transform: none;
 }
+
+/* Nút tải bản Windows (.exe) */
+.ld-download {
+  display: grid;
+  gap: 3px;
+  margin-top: 12px;
+  padding: 11px 14px;
+  border: 1px dashed #d6ff4580;
+  color: #d6ff45;
+  font: bold 12px "DM Mono", monospace;
+  letter-spacing: 1px;
+  text-align: center;
+  text-decoration: none;
+}
+.ld-download:hover {
+  background: #d6ff4514;
+  border-style: solid;
+}
+.ld-download small {
+  font-weight: normal;
+  font-size: 9px;
+  color: #8c9083;
+}

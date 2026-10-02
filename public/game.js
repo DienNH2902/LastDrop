@@ -11561,3 +11561,6 @@ $("#trophyHomeBtn").onclick = () => show("menu");
   });
 })();
 
+
+// Đang chạy trong app Windows (.exe): ẩn nút tải bản Windows.
+if (window.lastDrop?.isDesktop) document.getElementById("downloadExe")?.remove();
