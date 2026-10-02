@@ -495,6 +495,15 @@ function createVehicles(obstacles) {
           pz = z - sn * lx + c * lz;
         if (blockedPosition(spawnProbeRoom, px, pz, null, null, true, 0.25)) return false;
       }
+    // Phía trước / sau đầu xe phải trống ~9 m (lên xe là chạy được ngay, không
+    // đâm cây / đá ngay trước mũi).
+    for (const dir of [-1, 1])
+      for (let d = 3; d <= 9.01; d += 1)
+        for (const lx of [-0.9, 0, 0.9]) {
+          const px = x + c * lx + sn * dir * d,
+            pz = z - sn * lx + c * dir * d;
+          if (blockedPosition(spawnProbeRoom, px, pz, null, null, true, 0.25)) return false;
+        }
     // Không đặt xe sát các điểm bắt đầu ở khu chờ.
     if (
       [
@@ -2652,7 +2661,32 @@ wss.on("connection", (ws) => {
       // chơi lọt vào vật rắn → bước ra được, vẫn không đi xuyên tường.
       const stuck = blockedPosition(room, p.x, p.z, p.id);
       const blockedStep = (x, z) => blockedPosition(room, x, z, p.id, null, false, stuck ? 0.05 : null);
+      const waterOk = (x, z) =>
+        !stayInWaterWhileSubmerged || waterAt(room, x, z) || isOnBridge(room.obstacles, x, z, 0.8);
       for (let i = 0; i < steps; i++) {
+        // Bước CHÉO đầy đủ trước (đi sát lan can / tường nằm xéo: tách trục X, Z
+        // thì cả hai đều chạm nhưng bước chéo vẫn đi được → trước đây kẹt cứng
+        // và lệch với client). Bị chặn thì thử lệch hướng nhẹ (trượt quanh đá /
+        // gốc cây như client), cuối cùng mới tách trục.
+        if (!blockedStep(p.x + stepX, p.z + stepZ) && waterOk(p.x + stepX, p.z + stepZ)) {
+          p.x += stepX;
+          p.z += stepZ;
+          continue;
+        }
+        let slid = false;
+        for (const ang of [0.35, -0.35, 0.7, -0.7, 1.05, -1.05]) {
+          const c = Math.cos(ang),
+            sn = Math.sin(ang);
+          const tx = (stepX * c - stepZ * sn) * c,
+            tz = (stepX * sn + stepZ * c) * c;
+          if (!blockedStep(p.x + tx, p.z + tz) && waterOk(p.x + tx, p.z + tz)) {
+            p.x += tx;
+            p.z += tz;
+            slid = true;
+            break;
+          }
+        }
+        if (slid) continue;
         const nextX = p.x + stepX;
         if (
           !blockedStep(nextX, p.z) &&
@@ -3599,6 +3633,7 @@ server.listen(PORT, () => {
   console.log(`Last Drop Arena listening on http://localhost:${PORT}`);
   scheduleMapRefill(300); // sinh sẵn map rừng + sa mạc ngay khi server rảnh
 });
+
 
 
 

@@ -3086,10 +3086,13 @@ function drawMapObject(o, forest) {
         step = "#615e52";
       const topRel = Structures.rampTopRel(o, groundHeightAt);
       const L = o.length;
+      // Mặt trên của khối đá TRÙNG đúng mặt đi (0 ở chân → topRel ở đỉnh) để bậc
+      // thang nằm sát mặt đá; phần dưới cắm sâu xuống đất 1.2 m (đất dốc không hở).
       const pts = [
         [-L / 2, -1.2],
         [L / 2, -1.2],
         [L / 2, topRel],
+        [-L / 2, 0],
       ];
       const geo = prismGeometry(pts, o.w).rotateY(-Math.PI / 2);
       bucketAdd(stone, stone, geo, (t) => {
@@ -11557,3 +11560,4 @@ $("#trophyHomeBtn").onclick = () => show("menu");
     pal.classList.add("hidden");
   });
 })();
+
