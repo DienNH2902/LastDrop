@@ -265,7 +265,62 @@
     return slots;
   }
 
+  // ======================= TƯỜNG THÀNH / THÁP / CẦU THANG THÁP (Thành Cổ) =======================
+  // Đỉnh tường là lối đi (chân đứng được, đi dọc được), đỉnh tháp là sàn quan sát,
+  // mỗi tháp có cầu thang đá (nêm đặc có bậc) từ sân lên thẳng sàn tháp.
+  // rel = độ cao chân so với nền vật thể (null = xe → luôn chặn).
+  const WALL_TOP = (o) => o.h - 0.4; // mặt lối đi trên tường (so với nền)
+  const TOWER_TOP = (o) => o.h - 0.25; // mặt sàn đỉnh tháp
+  // Độ cao cầu thang tại lz (dọc thang, +lz đi lên), topRel = đỉnh so với nền thang.
+  const rampRise = (o, lz, topRel) => topRel * Math.max(0, Math.min(1, (lz + o.length / 2) / o.length));
+  // Đỉnh cầu thang (so với nền thang) = sàn tháp nó dẫn lên.
+  const rampTopRel = (o, groundAt) => groundAt(o.tx, o.tz) + o.towerH - groundAt(o.x, o.z);
+  function fortSurfaces(o, ground, lx, lz, out, groundAt) {
+    if (o.type === "stonewall") {
+      if (Math.abs(lx) <= o.w / 2 && Math.abs(lz) <= o.length / 2)
+        out.push({ height: ground + WALL_TOP(o), base: ground + WALL_TOP(o) - 1, type: "wallTop", obstacle: o });
+    } else if (o.type === "tower") {
+      if (Math.abs(lx) <= o.w / 2 + 0.3 && Math.abs(lz) <= o.w / 2 + 0.3)
+        out.push({ height: ground + TOWER_TOP(o), base: ground + TOWER_TOP(o) - 1, type: "towerTop", obstacle: o });
+    } else if (o.type === "fortramp") {
+      if (Math.abs(lx) <= o.w / 2 && Math.abs(lz) <= o.length / 2 + 0.05) {
+        const h = ground + rampRise(o, lz, rampTopRel(o, groundAt));
+        out.push({ height: h, base: h - 1, type: "ramp", obstacle: o });
+      }
+    }
+  }
+  // true = chặn · false = không chặn · (chỉ gọi cho 3 loại trên)
+  function fortBlocked(o, lx, lz, r, rel, groundAt) {
+    if (o.type === "stonewall") {
+      if (Math.abs(lx) >= o.w / 2 + r || Math.abs(lz) >= o.length / 2 + r) return false;
+      return rel === null || rel < WALL_TOP(o) - 0.45; // đã đứng trên đỉnh tường thì đi lại tự do
+    }
+    if (o.type === "tower") {
+      if (Math.abs(lx) >= o.w / 2 + r || Math.abs(lz) >= o.w / 2 + r) return false;
+      return rel === null || rel < TOWER_TOP(o) - 0.45;
+    }
+    if (o.type === "fortramp") {
+      if (Math.abs(lx) >= o.w / 2 + r || Math.abs(lz) >= o.length / 2 + r) return false;
+      if (rel === null) return true;
+      const surf = rampRise(o, Math.max(-o.length / 2, Math.min(o.length / 2, lz)), rampTopRel(o, groundAt));
+      return rel < surf - 0.45; // khối thang đặc: chỉ lên từ chân thang
+    }
+    return false;
+  }
+  // Điểm có nằm trong khối cầu thang đặc không (đạn / lựu đạn).
+  function fortRampSolid(o, lx, ry, lz, groundAt) {
+    if (Math.abs(lx) > o.w / 2 || Math.abs(lz) > o.length / 2) return false;
+    return ry >= -0.2 && ry < rampRise(o, lz, rampTopRel(o, groundAt)) - 0.02;
+  }
+
   const api = {
+    fortSurfaces,
+    fortBlocked,
+    fortRampSolid,
+    rampRise,
+    rampTopRel,
+    WALL_TOP,
+    TOWER_TOP,
     toLocal,
     toWorld,
     STILT_RAMP,

@@ -891,6 +891,26 @@ function createObstacles(seed, mapId) {
     for (const [lx, lz] of [[-HALF, -HALF], [HALF, -HALF], [-HALF, HALF], [HALF, HALF]]) {
       const p = W(lx, lz);
       obstacles.push({ type: "tower", x: p.x, z: p.z, w: 6, h: 9.5, yaw: 0, solid: true });
+      // Cầu thang đá trong sân, áp sát mặt trong tường trước / sau, đi lên thẳng
+      // tới sàn đỉnh tháp (mặt trong tháp ở |x| = HALF - 3).
+      const sx = Math.sign(lx),
+        sz = Math.sign(lz);
+      const RAMP_LEN = 13;
+      const center = W(sx * (HALF - 3 - RAMP_LEN / 2), sz * (HALF - 1.6));
+      obstacles.push({
+        type: "fortramp",
+        x: center.x,
+        z: center.z,
+        // +lz cục bộ của thang = hướng đi lên (về phía tháp, +sx trong hệ thành).
+        yaw: Math.atan2(c * sx, -sn * sx),
+        length: RAMP_LEN,
+        w: 1.7,
+        h: 9.25,
+        tx: p.x, // tháp mà thang dẫn lên: đỉnh thang = sàn tháp
+        tz: p.z,
+        towerH: 9.25,
+        solid: true,
+      });
     }
     // THÀNH CHÍNH (keep): pháo đài đá 2 tầng + sân thượng giữa sân, lùi về
     // phía sau để trước cửa có sân rộng; cửa chính quay ra cổng thành.

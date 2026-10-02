@@ -896,6 +896,11 @@ function raisedSurfacesAt(room, x, z) {
       Structures.keepSurfaces(o, obstacleBaseY(room, o), lx, lz, out);
       continue;
     }
+    if (o.type === "stonewall" || o.type === "tower" || o.type === "fortramp") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      Structures.fortSurfaces(o, obstacleBaseY(room, o), lx, lz, out, (gx, gz) => groundHeightAt(room, gx, gz));
+      continue;
+    }
     if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
     if (o.type === "house" || o.type === "hut") {
       const dx = x - o.x,
@@ -1063,7 +1068,14 @@ function blockedPosition(
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
       continue;
     }
-    if (o.type === "fence" || o.type === "stonewall") {
+    if (o.type === "stonewall" || o.type === "tower" || o.type === "fortramp") {
+      // Đứng trên đỉnh tường / tháp / cầu thang thì đi lại được; thấp hơn thì chặn.
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      const rel = mover ? mover.groundY - obstacleBaseY(room, o) : null;
+      if (Structures.fortBlocked(o, lx, lz, obstacleRadius, rel, (gx, gz) => groundHeightAt(room, gx, gz))) return true;
+      continue;
+    }
+    if (o.type === "fence") {
       if (blockedByFence(o, x, z, obstacleRadius)) return true;
       continue;
     }
@@ -1653,6 +1665,21 @@ function moveVehicleStep(room, vehicle, stepX, stepZ, current) {
       return "slid";
     }
   }
+  // Đâm chéo vào đá / gốc cây / góc tường: thử lệch hướng nhẹ (±20°, ±40°) để
+  // xe trượt dần ra thay vì đứng khựng (cùng luật ở client và server).
+  for (const ang of [0.35, -0.35, 0.7, -0.7]) {
+    const c = Math.cos(ang),
+      sn = Math.sin(ang);
+    const tx = (stepX * c - stepZ * sn) * c * 0.85,
+      tz = (stepX * sn + stepZ * c) * c * 0.85;
+    const info = ((x, z) => vehicleBlockInfo(room, vehicle, x, z, vehicle.yaw))(vehicle.x + tx, vehicle.z + tz);
+    if (info.count === 0 || info.count < current.count) {
+      vehicle.x += tx;
+      vehicle.z += tz;
+      current.count = info.count;
+      return "slid";
+    }
+  }
   return "blocked";
 }
 // Xe cạ lan can bị nắn dần cho song song với lan can (như xe thật quệt rào),
@@ -1894,6 +1921,11 @@ function solidPoint(room, x, y, z, skipGround = false) {
     }
     if (o.type === "tower") {
       if (y < base + o.h && Math.abs(x - o.x) < o.w / 2 && Math.abs(z - o.z) < o.w / 2) return true;
+      continue;
+    }
+    if (o.type === "fortramp") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Structures.fortRampSolid(o, lx, y - base, lz, (gx, gz) => groundHeightAt(room, gx, gz))) return true;
       continue;
     }
     const d = Math.hypot(x - o.x, z - o.z);
@@ -2368,7 +2400,9 @@ wss.on("connection", (ws) => {
       (room.phase === "plane" || room.phase === "playing") &&
       (p.state === "freefall" || p.state === "parachute")
     ) {
-      if (p.y - groundHeightAt(room, p.x, p.z) > AIR.maxLandingHeight) return;
+      // Độ cao server ghi nhận có thể trễ hơn client (giới hạn tốc độ rơi): vẫn cho
+      // tiếp đất, chỉ chặn trường hợp vô lý (còn quá cao).
+      if (p.y - groundHeightAt(room, p.x, p.z) > AIR.maxLandingHeight * 4) return;
       const reportedLandingY = Number(m.y);
       const landingY =
         Number.isFinite(reportedLandingY) &&
@@ -3073,7 +3107,7 @@ wss.on("connection", (ws) => {
       const stats = weaponStats(p);
       const melee = stats === WEAPON_STATS.none;
       if (
-        p.sprinting || // đang chạy nhanh thì không bắn/đấm được (client dừng chạy trước khi bắn)
+        (p.sprinting && !melee) || // đang chạy nhanh thì không bắn được (đấm thì vẫn được)
         p.swimming || // dưới nước không dùng được súng
         p.state !== "ground" ||
         p.healingUntil > shotTime ||
@@ -3555,5 +3589,6 @@ server.listen(PORT, () => {
   console.log(`Last Drop Arena listening on http://localhost:${PORT}`);
   scheduleMapRefill(300); // sinh sẵn map rừng + sa mạc ngay khi server rảnh
 });
+
 
 

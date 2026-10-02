@@ -863,9 +863,9 @@ function playSpatialGunshot(
     // Giảm thanh: nhỏ hơn hẳn, nghe ở tầm gần (~30% tầm), tiếng "phụt" trầm đục
     // thay cho tiếng nổ chát — mỗi súng một chất giọng riêng.
     const a = spatialAudio(position, {
-      volume: volume * (isSniper ? 0.75 : 0.6),
+      volume: volume * (isSniper ? 1.15 : 1.0),
       ...AUDIO_RANGE.gunshot,
-      max: AUDIO_RANGE.gunshot.max * 0.3,
+      max: AUDIO_RANGE.gunshot.max * 0.55,
       delay,
     });
     if (a) playSuppressedShot(a, weapon);
@@ -895,9 +895,10 @@ function playSpatialGunshot(
 }
 function playSuppressedShot(a, weapon) {
   const f = weapon === "sniper" ? 0.62 : weapon === "beryl" ? 0.8 : 1;
-  noiseBurst(a, { duration: 0.05 / f, filter: "bandpass", freq: 1500 * f, q: 1.1, gain: 1.0 }); // "phụt" khí qua vách ngăn
-  noiseBurst(a, { at: 0.003, duration: 0.09 / f, filter: "lowpass", freq: 520 * f, gain: 0.8 }); // thân tiếng đục
-  toneBurst(a, { duration: 0.06 / f, from: 210 * f, to: 85 * f, gain: 0.55 }); // cú đẩy nhẹ
+  noiseBurst(a, { duration: 0.05 / f, filter: "bandpass", freq: 1500 * f, q: 1.1, gain: 1.6 }); // "phụt" khí qua vách ngăn
+  noiseBurst(a, { at: 0.003, duration: 0.09 / f, filter: "lowpass", freq: 520 * f, gain: 1.3 }); // thân tiếng đục
+  toneBurst(a, { duration: 0.06 / f, from: 210 * f, to: 85 * f, gain: 0.9 }); // cú đẩy nhẹ
+  noiseBurst(a, { at: 0.002, duration: 0.012, filter: "highpass", freq: 3200, gain: 0.7 }); // tiếng "tách" đạn siêu thanh (nghe rõ ở gần)
   toneBurst(a, { at: 0.004, duration: 0.025, type: "triangle", from: 3200 * f, to: 2400 * f, gain: 0.07 }); // tiếng cơ khí khóa nòng
   noiseBurst(a, { at: 0.01, duration: 0.02, filter: "highpass", freq: 4500, gain: 0.25 }); // vỏ đạn văng
   if (weapon === "sniper") noiseBurst(a, { at: 0.12, duration: 0.18, filter: "bandpass", freq: 420, q: 0.7, gain: 0.18 }); // dội nhẹ
@@ -2017,6 +2018,11 @@ function raisedSurfacesAt(x, z) {
       Structures.keepSurfaces(o, groundHeightAt(o.x, o.z), lx, lz, out);
       continue;
     }
+    if (o.type === "stonewall" || o.type === "tower" || o.type === "fortramp") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      Structures.fortSurfaces(o, groundHeightAt(o.x, o.z), lx, lz, out, groundHeightAt);
+      continue;
+    }
     if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
     if (o.type === "house" || o.type === "hut") {
       const dx = x - o.x,
@@ -2857,20 +2863,59 @@ function drawMapObject(o, forest) {
       break;
     }
     case "stonewall": {
-      // Tường thành đá dày + lỗ châu mai trên đỉnh.
+      // Tường thành đá dày, KÍN TỚI ĐẤT: chân tường cắm xuống dưới điểm đất thấp
+      // nhất dọc tường (đất dốc không còn hở gầm). Đỉnh là lối đi; răng cưa
+      // châu mai chỉ ở 2 mép để giữa đi lại được.
       const stone = "#8a8676",
         dark = "#6f6c5e";
       const len = o.length || w;
-      bucketAdd(stone, stone, new THREE.BoxGeometry(w, o.h, len), (t) => {
-        t.position.set(o.x, baseY + o.h / 2 - 0.4, o.z);
+      const sy = Math.sin(o.yaw || 0),
+        cy = Math.cos(o.yaw || 0);
+      let low = baseY;
+      for (let k = 0; k <= 10; k++) {
+        const a = (k / 10 - 0.5) * len;
+        for (const side of [-1, 1]) low = Math.min(low, groundHeightAt(o.x + sy * a + cy * side * w / 2, o.z + cy * a - sy * side * w / 2));
+      }
+      const top = baseY + Structures.WALL_TOP(o);
+      const bottom = low - 0.6;
+      bucketAdd(stone, stone, new THREE.BoxGeometry(w, top - bottom, len), (t) => {
+        t.position.set(o.x, (top + bottom) / 2, o.z);
         t.rotation.y = o.yaw || 0;
       });
       const merlons = Math.max(1, Math.floor(len / 1.6));
-      for (let i = 0; i < merlons; i++) {
+      for (let i = 0; i < merlons; i += 2) {
         const along = -len / 2 + (i + 0.5) * (len / merlons);
-        if (i % 2) continue;
-        bucketAdd(dark, dark, new THREE.BoxGeometry(w + 0.1, 0.7, len / merlons), (t) => {
-          t.position.set(o.x + Math.sin(o.yaw || 0) * along, baseY + o.h - 0.4 + 0.35, o.z + Math.cos(o.yaw || 0) * along);
+        for (const side of [-1, 1])
+          bucketAdd(dark, dark, new THREE.BoxGeometry(0.32, 0.75, len / merlons), (t) => {
+            t.position.set(o.x + sy * along + cy * side * (w / 2 - 0.16), top + 0.37, o.z + cy * along - sy * side * (w / 2 - 0.16));
+            t.rotation.y = o.yaw || 0;
+          });
+      }
+      break;
+    }
+    case "fortramp": {
+      // Cầu thang đá lên tháp canh: khối nêm đặc + bậc thang, đỉnh khớp sàn tháp.
+      const stone = "#7f7b6b",
+        step = "#615e52";
+      const topRel = Structures.rampTopRel(o, groundHeightAt);
+      const L = o.length;
+      const pts = [
+        [-L / 2, -1.2],
+        [L / 2, -1.2],
+        [L / 2, topRel],
+      ];
+      const geo = prismGeometry(pts, o.w).rotateY(-Math.PI / 2);
+      bucketAdd(stone, stone, geo, (t) => {
+        t.position.set(o.x, baseY, o.z);
+        t.rotation.y = o.yaw || 0; // sau rotateY(-90°): trục dọc thang = +z cục bộ
+      });
+      const steps = Math.round(L / 0.45);
+      const sy = Math.sin(o.yaw || 0),
+        cy = Math.cos(o.yaw || 0);
+      for (let i = 1; i < steps; i++) {
+        const lz = -L / 2 + (L * i) / steps;
+        bucketAdd(step, step, new THREE.BoxGeometry(o.w, 0.06, 0.14), (t) => {
+          t.position.set(o.x + sy * lz, baseY + Structures.rampRise(o, lz, topRel) + 0.03, o.z + cy * lz);
           t.rotation.y = o.yaw || 0;
         });
       }
@@ -2880,7 +2925,11 @@ function drawMapObject(o, forest) {
       // Tháp canh vuông ở góc thành: thân đá, gờ nhô, lan can răng cưa.
       const stone = "#8a8676",
         dark = "#6f6c5e";
-      bucketAdd(stone, stone, new THREE.BoxGeometry(w, o.h, w), (t) => t.position.set(o.x, baseY + o.h / 2 - 0.5, o.z));
+      // Thân tháp kín tới đất (cắm xuống dưới góc đất thấp nhất).
+      let low = baseY;
+      for (const [cx, cz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) low = Math.min(low, groundHeightAt(o.x + (cx * w) / 2, o.z + (cz * w) / 2));
+      const towerTop = baseY + o.h - 0.5;
+      bucketAdd(stone, stone, new THREE.BoxGeometry(w, towerTop - (low - 0.6), w), (t) => t.position.set(o.x, (towerTop + low - 0.6) / 2, o.z));
       bucketAdd(dark, dark, new THREE.BoxGeometry(w + 0.6, 0.5, w + 0.6), (t) => t.position.set(o.x, baseY + o.h - 0.5, o.z));
       for (const [mx, mz] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]])
         bucketAdd(dark, dark, new THREE.BoxGeometry(0.9, 0.8, 0.9), (t) =>
@@ -3309,6 +3358,11 @@ function isBlockedAt(x, z, radiusOverride = null) {
     if (o.type === "keep") {
       const [lx, lz] = Structures.toLocal(o, x, z);
       if (Structures.keepBlocked(o, lx, lz, obstacleRadius, local.groundY - groundHeightAt(o.x, o.z))) return true;
+      continue;
+    }
+    if (o.type === "stonewall" || o.type === "tower" || o.type === "fortramp") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Structures.fortBlocked(o, lx, lz, obstacleRadius, local.groundY - groundHeightAt(o.x, o.z), groundHeightAt)) return true;
       continue;
     }
     if (o.type === "fence" || o.type === "stonewall") {
@@ -3767,6 +3821,11 @@ function carPointBlocked(ownId, x, z) {
       if (Structures.keepBlocked(o, lx, lz, r, null)) return true;
       continue;
     }
+    if (o.type === "fortramp" || o.type === "tower") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Structures.fortBlocked(o, lx, lz, r, null, groundHeightAt)) return true;
+      continue;
+    }
     const footprint = obstacleFootprintRadius(o);
     if (footprint !== null) {
       if (Math.hypot(x - o.x, z - o.z) < footprint + r) return true;
@@ -3859,6 +3918,21 @@ function moveCarStep(state, stepX, stepZ, current) {
       state.z = pz;
       current.count = info.count;
       alignCarToFence(state, next.fences[0], current, Math.hypot(stepX, stepZ));
+      return "slid";
+    }
+  }
+  // Đâm chéo vào đá / gốc cây / góc tường: thử lệch hướng nhẹ (±20°, ±40°) để
+  // xe trượt dần ra thay vì đứng khựng (cùng luật ở client và server).
+  for (const ang of [0.35, -0.35, 0.7, -0.7]) {
+    const c = Math.cos(ang),
+      sn = Math.sin(ang);
+    const tx = (stepX * c - stepZ * sn) * c * 0.85,
+      tz = (stepX * sn + stepZ * c) * c * 0.85;
+    const info = ((x, z) => carBlockInfo(state.id, x, z, state.yaw))(state.x + tx, state.z + tz);
+    if (info.count === 0 || info.count < current.count) {
+      state.x += tx;
+      state.z += tz;
+      current.count = info.count;
       return "slid";
     }
   }
@@ -4683,6 +4757,12 @@ function updateSpectateCamera(dt) {
     for (const [kind, model] of Object.entries(gun.userData.models)) model.visible = kind === key;
     gun.position.set(0, 0, 0);
     gun.rotation.set(0, 0, 0);
+    const model = gun.userData.models[key];
+    const G = FP_GRIP[key];
+    if (model?.userData.arms && G) {
+      setFpArm(model.userData.arms.right, fpH.fromArray(G.right), fpE.fromArray(G.rElbow));
+      setFpArm(model.userData.arms.left, fpH.fromArray(G.left), fpE.fromArray(G.lElbow));
+    }
   }
   if (performance.now() - spectateHudAt > 250) {
     spectateHudAt = performance.now();
@@ -4709,13 +4789,13 @@ function beginDeathView(position = local) {
   renderer.domElement.style.filter = "grayscale(1)";
   $("#deathViewOverlay")?.classList.remove("hidden");
   if (deathResultTimer) clearTimeout(deathResultTimer);
-  // 3 s nhìn chỗ mình ngã từ trên cao, rồi XEM TRỰC TIẾP góc nhìn người còn sống
+  // 15 s nhìn chỗ mình ngã từ trên cao, rồi XEM TRỰC TIẾP góc nhìn người còn sống
   // (PAGE UP / PAGE DOWN đổi người, ENTER xem kết quả). Không còn ai để xem thì
   // hiện kết quả như cũ.
   deathResultTimer = setTimeout(() => {
     deathResultTimer = null;
     if (!startSpectating(1)) showResult();
-  }, 3000);
+  }, 15000);
 }
 
 function renderPlayers(state) {
@@ -4815,6 +4895,26 @@ function renderPlayers(state) {
         localFootstepDistance = 0;
         // Ra khỏi xe: camera thẳng lại (bỏ độ nghiêng của khung xe).
         if (camera) camera.rotation.set(0, local.yaw, 0, "YXZ");
+      }
+      // Đồng bộ lại khi lệch với server (mất gói / server chặn bước đi khác client):
+      if (local.state === "ground" && (p.state === "freefall" || p.state === "parachute")) {
+        if (performance.now() - (local.landRetryAt || 0) > 600) {
+          local.landRetryAt = performance.now();
+          send({ type: "land", x: local.x, y: local.groundY, z: local.z });
+        }
+      } else if (local.state === "ground" && p.state === "ground" && !local.vehicleId && !p.vehicleId && !local.swimming) {
+        const off = Math.hypot((p.x || 0) - local.x, (p.z || 0) - local.z);
+        if (off > 2.5) {
+          local.desyncSince ||= performance.now();
+          if (performance.now() - local.desyncSince > 700) {
+            // Lệch > 2.5 m liên tục 0.7 s: về đúng chỗ server (nơi tính bắn / nhặt / bo).
+            local.x = p.x;
+            local.z = p.z;
+            local.groundY = Number(p.groundY) || local.groundY;
+            local.desyncSince = 0;
+            lastMove = 0;
+          }
+        } else local.desyncSince = 0;
       }
       const serverReloading = Boolean(p.reloading);
       ammo = Math.max(0, Number(p.ammo) || 0);
@@ -6697,12 +6797,14 @@ function onKeyDown(e) {
     "MetaLeft",
     "MetaRight",
   ].includes(e.code);
+  // Giữ Ctrl (đi chậm) vẫn dùng được MỌI phím điều khiển game: đi 4 hướng,
+  // nghiêng, nhảy, ngồi, nằm, chạy... (shortcut trình duyệt vẫn bị chặn mặc định).
   const ctrlWalkKey =
     e.ctrlKey &&
     !e.metaKey &&
     !e.altKey &&
-    !e.shiftKey &&
-    ["KeyW", "KeyS"].includes(e.code);
+    ["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "Space", "KeyC", "KeyZ", "ShiftLeft", "ShiftRight"].includes(e.code);
+  if (ctrlWalkKey) e.preventDefault();
   if (!modifierKey && !ctrlWalkKey && (e.ctrlKey || e.metaKey || e.altKey)) {
     // Ctrl+R, Ctrl+T, Alt+Left... không được kích hoạt thao tác game.
     e.preventDefault();
@@ -7171,6 +7273,8 @@ function onFire(e) {
   const wasSprinting =
     (e.button === 0 || e.button === 2) &&
     !local.vehicleId &&
+    !(e.button === 0 && weaponKey(local.weapon) === "none" && !local.throwable) && // đấm khi đang chạy: giữ nguyên tốc độ
+
     document.pointerLockElement === renderer?.domElement &&
     cancelSprint();
   if (wasSprinting) sprintShotAt = performance.now() + SPRINT_RECOVER_MS;
@@ -7312,6 +7416,11 @@ function solidPointClient(x, y, z) {
     }
     if (o.type === "tower") {
       if (y < base + o.h && Math.abs(x - o.x) < o.w / 2 && Math.abs(z - o.z) < o.w / 2) return true;
+      continue;
+    }
+    if (o.type === "fortramp") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Structures.fortRampSolid(o, lx, y - base, lz, groundHeightAt)) return true;
       continue;
     }
     const d = Math.hypot(x - o.x, z - o.z);
@@ -7525,8 +7634,8 @@ function shootOnce() {
     stopFiring(); // dưới nước không dùng được súng
     return;
   }
-  // Đang chạy / súng chưa nâng xong sau khi dừng chạy: không nổ.
-  if (local.sprinting || performance.now() < sprintShotAt) return;
+  // Đang chạy / súng chưa nâng xong sau khi dừng chạy: không nổ (tay không thì vẫn đấm được).
+  if (weaponKey(local.weapon) !== "none" && (local.sprinting || performance.now() < sprintShotAt)) return;
   const now = Date.now();
   if (
     local.weapon === "sniper" &&
@@ -10636,8 +10745,22 @@ function frame() {
       fz = -Math.cos(local.yaw),
       rx = Math.cos(local.yaw),
       rz = -Math.sin(local.yaw);
-    const moveX = ((fx * dz + rx * dx) / len) * speed;
-    const moveZ = ((fz * dz + rz * dx) / len) * speed;
+    let moveX = ((fx * dz + rx * dx) / len) * speed;
+    let moveZ = ((fz * dz + rz * dx) / len) * speed;
+    // LEO DỐC: tốc độ giảm theo độ dốc thật của sườn núi (đi chéo / leo thẳng
+    // đều phải đi đủ quãng đường dốc) — trước đây đi ngang tốc độ như đất bằng
+    // nên vài bước đã lên đỉnh. Xuống dốc giữ nguyên.
+    if ((moveX || moveZ) && !currentlyInWater) {
+      const ml = Math.hypot(moveX, moveZ);
+      const ax = local.x + (moveX / ml) * 0.6,
+        az = local.z + (moveZ / ml) * 0.6;
+      const grade = (groundHeightAt(ax, az) - groundHeightAt(local.x, local.z)) / 0.6;
+      if (grade > 0.08) {
+        const k = Math.max(0.28, 1 / (1 + 1.7 * (grade - 0.08)));
+        moveX *= k;
+        moveZ *= k;
+      }
+    }
     // Resolve axes separately so the player slides along walls instead of sticking.
     const stayInWaterWhileSubmerged =
       currentlyInWater && (local.swimDepth || 0) > 0.12;
@@ -10648,8 +10771,30 @@ function frame() {
     const canMoveTo = (x, z) =>
       !isBlockedAt(x, z, stuck ? 0.05 : null) &&
       (!stayInWaterWhileSubmerged || waterAt(x, z) || isOnBridgeAt(x, z, 0.8));
-    if (canMoveTo(local.x + moveX, local.z)) local.x += moveX;
-    if (canMoveTo(local.x, local.z + moveZ)) local.z += moveZ;
+    if (canMoveTo(local.x + moveX, local.z + moveZ)) {
+      local.x += moveX;
+      local.z += moveZ;
+    } else {
+      // Bị chặn: thử lệch hướng dần (±20°, ±40°, ±60°) → trượt vòng quanh đá /
+      // gốc cây / góc rào nghiêng thay vì đứng khựng; hết cách mới trượt theo trục.
+      let slid = false;
+      for (const ang of [0.35, -0.35, 0.7, -0.7, 1.05, -1.05]) {
+        const c = Math.cos(ang),
+          sn = Math.sin(ang);
+        const tx = (moveX * c - moveZ * sn) * c,
+          tz = (moveX * sn + moveZ * c) * c;
+        if (canMoveTo(local.x + tx, local.z + tz)) {
+          local.x += tx;
+          local.z += tz;
+          slid = true;
+          break;
+        }
+      }
+      if (!slid) {
+        if (canMoveTo(local.x + moveX, local.z)) local.x += moveX;
+        if (canMoveTo(local.x, local.z + moveZ)) local.z += moveZ;
+      }
+    }
     const traveled = Math.hypot(local.x - previousX, local.z - previousZ);
     const isMoving = traveled > 0.0005;
     const crouchWalking = isCrouching;
