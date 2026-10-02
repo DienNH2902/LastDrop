@@ -3024,3 +3024,107 @@ body:has(#game.active) #game {
 #game.spectating .bottom-hud {
   display: none !important;
 }
+
+/* Trong trận: không bôi đen / chọn chữ (kéo đồ trong balo hay làm bôi đen giao diện) */
+#game,
+#game *,
+#keybindPanel,
+#keybindPanel * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+#game input,
+#game textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+#game ::selection {
+  background: transparent;
+}
+/* Bảng gán phím */
+#keybindPanel {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: none;
+  place-items: center;
+  background: #050605cc;
+}
+#keybindPanel.open {
+  display: grid;
+}
+#keybindPanel .kb-card {
+  width: min(560px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  background: #171a14;
+  border: 1px solid #555b48;
+  color: #f3f3ed;
+  font-family: "DM Mono", monospace;
+}
+#keybindPanel .kb-head b {
+  display: block;
+  font: 900 24px "Barlow Condensed", Arial, sans-serif;
+  letter-spacing: 3px;
+  color: #d6ff45;
+}
+#keybindPanel .kb-head small {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: #8c9083;
+}
+#keybindPanel .kb-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  overflow-y: auto;
+}
+#keybindPanel .kb-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #1f231b;
+  border: 1px solid #3b4033;
+  color: inherit;
+  font: 11px "DM Mono", monospace;
+  letter-spacing: 1px;
+  cursor: pointer;
+  text-align: left;
+}
+#keybindPanel .kb-row:hover {
+  border-color: #d6ff45;
+}
+#keybindPanel .kb-row kbd {
+  min-width: 46px;
+  padding: 3px 7px;
+  background: #2c3226;
+  border: 1px solid #555b48;
+  color: #d6ff45;
+  font: bold 11px "DM Mono", monospace;
+  text-align: center;
+}
+#keybindPanel .kb-row.changed kbd {
+  color: #ffd27a;
+}
+#keybindPanel .kb-row.waiting {
+  border-color: #ff922f;
+  background: #2b2416;
+}
+#keybindPanel .kb-row.waiting kbd {
+  color: #ff922f;
+}
+#keybindPanel .kb-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+@media (max-width: 520px) {
+  #keybindPanel .kb-list {
+    grid-template-columns: 1fr;
+  }
+}

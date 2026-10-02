@@ -357,6 +357,7 @@ $("#masterVolume").value = saved.masterVolume ?? 30;
 $("#quality").value = saved.quality || "Performance";
 $("#crouchMode").value = saved.crouchMode === "hold" ? "hold" : "toggle";
 $("#proneMode").value = saved.proneMode === "hold" ? "hold" : "toggle";
+$("#aimMode").value = saved.aimMode === "hold" ? "hold" : "toggle";
 delete saved.name; // nickname is kept separately from graphics/audio settings
 localStorage.setItem(
   "ld-settings",
@@ -462,6 +463,18 @@ function distanceGain(distance, ref, max) {
 }
 // position = null nghĩa là âm thanh của chính người chơi (không pan, không giảm).
 // Trả về null nếu tắt tiếng hoặc nguồn âm quá xa (không tạo node nào cả).
+let remoteVoiceWindow = 0,
+  remoteVoiceCount = 0;
+// Trình duyệt có thể tạm dừng âm thanh (đổi tab, máy khựng, tai nghe đổi...):
+// mỗi lần người chơi bấm phím / chuột thì đánh thức lại ngay.
+for (const ev of ["keydown", "mousedown", "pointerdown"])
+  window.addEventListener(
+    ev,
+    () => {
+      if (audioCtx && audioCtx.state !== "running" && audioCtx.state !== "closed") audioCtx.resume().catch(() => {});
+    },
+    true,
+  );
 function spatialAudio(
   position,
   { volume = 1, ref = 2, max = 20, delay = 0 } = {},
@@ -469,9 +482,17 @@ function spatialAudio(
   if (!soundOn) return null;
   const sfx = Number($("#sfx").value) / 100;
   if (!(sfx > 0)) return null;
-  audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
-  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  if (!audioCtx || audioCtx.state === "closed") audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state !== "running") audioCtx.resume().catch(() => {});
   const now = audioCtx.currentTime;
+  if (position) {
+    // Mỗi 250 ms tối đa 40 âm thanh của người khác / môi trường; quá thì bỏ bớt âm xa.
+    if (now - remoteVoiceWindow > 0.25) {
+      remoteVoiceWindow = now;
+      remoteVoiceCount = 0;
+    }
+    if (++remoteVoiceCount > 40) return null;
+  }
   const listenerPosition = updateAudioListener(now);
   let attenuation = 1;
   let farness = 0; // 0 = sát, 1 = ở mép tầm nghe
@@ -1073,7 +1094,7 @@ function playSpatialFootstep(x, y, z, intensity = 1, ownPlayer = false) {
   const max = AUDIO_RANGE.footstep.max * intensity;
   const ref = Math.min(AUDIO_RANGE.footstep.ref, max * 0.3);
   const a = spatialAudio(
-    { x, y, z },
+    ownPlayer ? null : { x, y, z }, // bước chân CỦA MÌNH: luôn phát, không phụ thuộc vị trí tai nghe
     { volume: (ownPlayer ? 0.3 : 0.72) * (0.5 + 0.5 * intensity), ref, max }, // to hơn trước (0.22 / 0.6)
   );
   if (!a) return;
@@ -1334,8 +1355,154 @@ const settingsBindings = {
   // Ngồi (C) / Nằm (Z): "toggle" = bấm để bật/tắt, "hold" = giữ phím (thả là đứng dậy).
   crouchMode: { main: "crouchMode", pause: "pauseCrouchMode" },
   proneMode: { main: "proneMode", pause: "pauseProneMode" },
+  // Ngắm (chuột phải): "toggle" = bấm để bật/tắt, "hold" = giữ chuột phải, thả là thôi ngắm.
+  aimMode: { main: "aimMode", pause: "pauseAimMode" },
 };
 const isHoldMode = (key) => document.getElementById(key)?.value === "hold";
+// ---- Gán phím điều khiển (người chơi tự đổi trong Cài đặt) ----
+// Game xử lý theo phím MẶC ĐỊNH; phím người chơi bấm được đổi sang phím mặc
+// định của hành động tương ứng trước khi vào onKeyDown / onKeyUp.
+const KEY_ACTIONS = [
+  ["forward", "ĐI TỚI", "KeyW"],
+  ["backward", "ĐI LÙI", "KeyS"],
+  ["left", "SANG TRÁI", "KeyA"],
+  ["right", "SANG PHẢI", "KeyD"],
+  ["jump", "NHẢY / BƠI LÊN", "Space"],
+  ["sprint", "CHẠY NHANH", "ShiftLeft"],
+  ["slow", "ĐI CHẬM", "ControlLeft"],
+  ["crouch", "NGỒI / LẶN", "KeyC"],
+  ["prone", "NẰM", "KeyZ"],
+  ["peekLeft", "NGHIÊNG TRÁI", "KeyQ"],
+  ["peekRight", "NGHIÊNG PHẢI", "KeyE"],
+  ["interact", "NHẶT ĐỒ / LÊN XE", "KeyF"],
+  ["reload", "NẠP ĐẠN / RÚT CHỐT", "KeyR"],
+  ["frag", "LỰU ĐẠN NỔ", "Digit4"],
+  ["flash", "LỰU ĐẠN CHOÁNG", "Digit5"],
+  ["drop", "BỎ SÚNG", "KeyG"],
+  ["backpack", "BALO", "Tab"],
+  ["map", "BẢN ĐỒ", "KeyM"],
+];
+let keyBinds = {};
+try {
+  keyBinds = JSON.parse(localStorage.getItem("ld-keybinds") || "{}") || {};
+} catch {
+  keyBinds = {};
+}
+let keyRemap = new Map(); // phím người chơi → phím mặc định của hành động
+let keyFreed = new Set(); // phím mặc định đã chuyển cho hành động khác (bấm vào thì bỏ qua)
+function rebuildKeyRemap() {
+  keyRemap = new Map();
+  keyFreed = new Set();
+  for (const [id, , def] of KEY_ACTIONS) {
+    const code = keyBinds[id] || def;
+    keyRemap.set(code, def);
+    if (code !== def) keyFreed.add(def);
+  }
+  // Shift / Ctrl phải dùng như trái nếu người chơi không đổi.
+  if (!keyBinds.sprint) keyRemap.set("ShiftRight", "ShiftRight");
+  if (!keyBinds.slow) keyRemap.set("ControlRight", "ControlRight");
+}
+rebuildKeyRemap();
+function mapKeyEvent(e) {
+  let code = e.code;
+  if (keyRemap.has(code)) code = keyRemap.get(code);
+  else if (keyFreed.has(code)) code = "";
+  return {
+    code,
+    key: e.key,
+    repeat: e.repeat,
+    ctrlKey: e.ctrlKey,
+    metaKey: e.metaKey,
+    altKey: e.altKey,
+    shiftKey: e.shiftKey,
+    target: e.target,
+    preventDefault: () => e.preventDefault(),
+    stopPropagation: () => e.stopPropagation(),
+  };
+}
+const onKeyDownMapped = (e) => onKeyDown(mapKeyEvent(e));
+const onKeyUpMapped = (e) => onKeyUp(mapKeyEvent(e));
+const keyLabel = (code) =>
+  ({ Space: "SPACE", ShiftLeft: "SHIFT", ShiftRight: "SHIFT PHẢI", ControlLeft: "CTRL", ControlRight: "CTRL PHẢI", AltLeft: "ALT", Tab: "TAB", CapsLock: "CAPS", Backquote: "`" })[code] ||
+  code.replace(/^Key/, "").replace(/^Digit/, "").replace(/^Numpad/, "NUM ").replace(/^ArrowUp$/, "↑ LÊN").replace(/^ArrowDown$/, "↓ XUỐNG").replace(/^ArrowLeft$/, "← TRÁI").replace(/^ArrowRight$/, "→ PHẢI").toUpperCase();
+let keybindCapture = null;
+function openKeybindPanel() {
+  let panel = document.getElementById("keybindPanel");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "keybindPanel";
+    panel.innerHTML = `<div class="kb-card"><div class="kb-head"><b>PHÍM ĐIỀU KHIỂN</b><small>BẤM VÀO Ô RỒI NHẤN PHÍM MỚI · ESC ĐỂ HUỶ</small></div><div class="kb-list"></div><div class="kb-foot"><button type="button" class="secondary" data-kb-reset>KHÔI PHỤC MẶC ĐỊNH</button><button type="button" class="primary" data-kb-close>XONG</button></div></div>`;
+    document.body.append(panel);
+    panel.addEventListener("click", (e) => {
+      const row = e.target.closest("[data-kb]");
+      if (row) {
+        keybindCapture = row.dataset.kb;
+        renderKeybindPanel();
+        return;
+      }
+      if (e.target.closest("[data-kb-reset]")) {
+        keyBinds = {};
+        localStorage.setItem("ld-keybinds", "{}");
+        rebuildKeyRemap();
+        keybindCapture = null;
+        renderKeybindPanel();
+      }
+      if (e.target.closest("[data-kb-close]") || e.target === panel) closeKeybindPanel();
+    });
+    // Bắt phím ở pha capture để game không xử lý phím đang gán.
+    window.addEventListener(
+      "keydown",
+      (e) => {
+        if (!document.getElementById("keybindPanel")?.classList.contains("open")) return;
+        if (!keybindCapture) {
+          // Bảng đang mở: ESC đóng bảng (không mở / đóng menu tạm dừng phía sau).
+          if (e.code === "Escape") {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            closeKeybindPanel();
+          }
+          return;
+        }
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (e.code === "Escape") {
+          keybindCapture = null;
+          renderKeybindPanel();
+          return;
+        }
+        const codeOf = (id) => keyBinds[id] || KEY_ACTIONS.find((a) => a[0] === id)[2];
+        // Phím đã dùng cho hành động khác → đổi chỗ cho nhau.
+        const other = KEY_ACTIONS.find(([id]) => id !== keybindCapture && codeOf(id) === e.code);
+        if (other) keyBinds[other[0]] = codeOf(keybindCapture);
+        keyBinds[keybindCapture] = e.code;
+        for (const [id, , def] of KEY_ACTIONS) if (keyBinds[id] === def) delete keyBinds[id];
+        localStorage.setItem("ld-keybinds", JSON.stringify(keyBinds));
+        rebuildKeyRemap();
+        keybindCapture = null;
+        renderKeybindPanel();
+      },
+      true,
+    );
+  }
+  panel.classList.add("open");
+  renderKeybindPanel();
+}
+function closeKeybindPanel() {
+  keybindCapture = null;
+  document.getElementById("keybindPanel")?.classList.remove("open");
+}
+function renderKeybindPanel() {
+  const list = document.querySelector("#keybindPanel .kb-list");
+  if (!list) return;
+  list.innerHTML = KEY_ACTIONS.map(([id, name, def]) => {
+    const code = keyBinds[id] || def;
+    const waiting = keybindCapture === id;
+    return `<button type="button" class="kb-row${waiting ? " waiting" : ""}${code !== def ? " changed" : ""}" data-kb="${id}"><span>${name}</span><kbd>${waiting ? "NHẤN PHÍM..." : keyLabel(code)}</kbd></button>`;
+  }).join("");
+}
+document.addEventListener("click", (e) => {
+  if (e.target.closest("[data-open-keybinds]")) openKeybindPanel();
+});
 function syncSettingControl(key, value) {
   const binding = settingsBindings[key];
   if (!binding) return;
@@ -1438,6 +1605,7 @@ function saveSettings() {
       quality: $("#quality").value,
       crouchMode: $("#crouchMode").value,
       proneMode: $("#proneMode").value,
+      aimMode: $("#aimMode").value,
     }),
   );
 }
@@ -6483,9 +6651,9 @@ function beginGame() {
   document.addEventListener("mouseup", onMouseUp);
   window.addEventListener("blur", onGameWindowBlur);
   document.addEventListener("contextmenu", blockContextMenu);
-  document.addEventListener("keydown", onKeyDown);
+  document.addEventListener("keydown", onKeyDownMapped);
   document.addEventListener("keydown", blockBrowserShortcuts, true);
-  document.addEventListener("keyup", onKeyUp);
+  document.addEventListener("keyup", onKeyUpMapped);
   installReloadHud();
   installLootUi();
   installZoneHud();
@@ -7146,9 +7314,9 @@ function cleanupGame() {
   stopFiring();
   document.removeEventListener("pointerlockchange", onPointerLockChange);
   document.removeEventListener("contextmenu", blockContextMenu);
-  document.removeEventListener("keydown", onKeyDown);
+  document.removeEventListener("keydown", onKeyDownMapped);
   document.removeEventListener("keydown", blockBrowserShortcuts, true);
-  document.removeEventListener("keyup", onKeyUp);
+  document.removeEventListener("keyup", onKeyUpMapped);
   closeBackpack(false);
   for (const item of lootItems.values()) disposeLootMesh(item);
   lootItems.clear();
@@ -7301,7 +7469,7 @@ function onFire(e) {
       weaponKey(local.weapon) !== "none" && // tay không thì không có gì để ngắm
       document.pointerLockElement === renderer?.domElement
     )
-      setScope(!scoped);
+      setScope(isHoldMode("aimMode") ? true : !scoped);
     return;
   }
   if (e.button === 0 && local.vehicleId) {
@@ -7345,6 +7513,7 @@ function onFire(e) {
 }
 function onMouseUp(e) {
   if (e.button === 0) stopFiring();
+  if (e.button === 2 && scoped && isHoldMode("aimMode")) setScope(false); // chế độ giữ: thả chuột phải là thôi ngắm
   if (e.button === 0 && local.throwAimAt) {
     // Click nhanh = ném ngay; giữ rồi nhả = ném theo đường bay đang hiện.
     local.throwAimAt = 0;
@@ -10040,8 +10209,8 @@ function addSafeZoneWall() {
 // Tiếng máy bay và tiếng gió là âm lặp liên tục (loop) nên tạo bằng node riêng,
 // âm lượng bám theo thanh "Âm lượng hiệu ứng". Bung dù / tiếp đất dùng lại spatialAudio.
 function ensureAudio() {
-  audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
-  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  if (!audioCtx || audioCtx.state === "closed") audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state !== "running") audioCtx.resume().catch(() => {});
   return audioCtx;
 }
 function playCarHorn(position = null) {
