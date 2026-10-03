@@ -1536,7 +1536,8 @@ function dropDeathLoot(room, victim) {
     victim.cook = null;
   }
   room.crates ||= [];
-  if (crateAmmo > 0 || medkit > 0 || frag > 0 || flash > 0)
+  // Chỉ để lại hòm khi người chết ĐÃ nhặt đồ và còn đồ trong balo.
+  if ((victim.pickupId || 0) > 0 && (crateAmmo > 0 || medkit > 0 || frag > 0 || flash > 0))
     room.crates.push({
       id: `crate-${room.nextCrateId++}`,
       x: Math.round(spot.x * 100) / 100,
