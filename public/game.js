@@ -5434,8 +5434,11 @@ function renderPlayers(state) {
       if (
         curState === "ground" &&
         (prevState === "freefall" || prevState === "parachute")
-      )
+      ) {
         playLanding({ x: p.x, y: (p.groundY || 0) + 0.3, z: p.z });
+        // Người khác cũng thấy cú lộn nhào tiếp đất (trừ khi rơi xuống nước).
+        if (!p.swimming && !waterAt(p.x, p.z)) mesh.userData.rollAt = nowMs;
+      }
     }
     // Chỉ cầm súng sau khi tiếp đất; ở phòng chờ / máy bay / trên không thì tay không.
     const holding = curState === "ground" && !p.vehicleId;
@@ -5671,7 +5674,6 @@ function addCrateMesh(crate) {
   const root = new THREE.Group();
   root.userData.interactionTarget = { kind: "crate", id: crate.id };
   const orange = makeMat("#e87520", 0.88);
-  const dark = makeMat("#49301d", 0.95);
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.62, 0.72), orange);
   body.position.y = 0.34;
   root.add(body);
@@ -5681,23 +5683,6 @@ function addCrateMesh(crate) {
   );
   lid.position.y = 0.69;
   root.add(lid);
-  for (const z of [-0.27, 0.27]) {
-    const strap = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.68, 0.8), dark);
-    strap.position.set(0, 0.35, z);
-    root.add(strap);
-  }
-  const pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.025, 0.035, 1.25, 6),
-    dark,
-  );
-  pole.position.set(-0.12, 1.27, 0);
-  root.add(pole);
-  const flag = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.58, 0.38),
-    new THREE.MeshBasicMaterial({ color: "#111111", side: THREE.DoubleSide }),
-  );
-  flag.position.set(0.18, 1.65, 0);
-  root.add(flag);
   root.position.set(crate.x, groundHeightAt(crate.x, crate.z), crate.z);
   scene.add(root);
   crate.mesh = root;
@@ -7672,6 +7657,7 @@ function onMouse(e) {
   );
 }
 function onFire(e) {
+  if (landRoll && local.state === "ground") return; // đang lộn nhào: chưa bắn được
   // Đang chạy nhanh: không bắn/ngắm được. Click (trái hoặc phải) sẽ DỪNG CHẠY
   // (về đi bộ WASD bình thường); súng được nâng lên trong ~150 ms rồi mới nổ.
   const wasSprinting =
@@ -8689,13 +8675,97 @@ function requestJump() {
   jumpRequestedAt = Date.now();
   send({ type: "jump" });
 }
+// Bung dù 2 nhịp: tay phải đưa lên trước ngực nắm tay kéo dây dù, giật mạnh ra
+// (tiếng xé khóa dán + chốt bật + dây rít) → CHUTE_PULL_AT giây sau dù mới bung,
+// tán dù phồng dần (vải sột soạt to dần) tới khi căng hết cỡ hứng gió ("phựt").
+const CHUTE_PULL_AT = 0.4;
+let chutePull = null, // { t, auto, opened }
+  pullHand = null;
 function deployChute(auto) {
-  if (local.state !== "freefall") return;
+  if (local.state !== "freefall" || chutePull) return;
   if (!auto && airState.time < 0.8) return;
+  chutePull = { t: 0, auto, opened: false };
+  ensurePullHand().visible = true;
+  playCordPull();
+}
+function openChuteNow() {
+  if (local.state !== "freefall") return;
   setMode("parachute");
   send({ type: "chute" });
   playChuteOpen(null);
-  showLootToast(auto ? "TỰ ĐỘNG BUNG DÙ" : "ĐÃ BUNG DÙ");
+  // Tán dù trên màn hình: bung từ cụm nhỏ phía trên → phồng → căng.
+  const ov = $("#chuteOverlay");
+  ov.classList.remove("unfurl");
+  void ov.offsetWidth;
+  ov.classList.add("unfurl");
+  showLootToast(chutePull?.auto ? "TỰ ĐỘNG BUNG DÙ" : "ĐÃ BUNG DÙ");
+}
+// Cánh tay phải góc nhìn thứ nhất (tay áo + găng + tay cầm dây dù đỏ).
+function ensurePullHand() {
+  if (pullHand) return pullHand;
+  const g = new THREE.Group();
+  const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.34, 4, 8).rotateX(Math.PI / 2), mySleeveMat());
+  const glove = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), makeMat("#26261f"));
+  glove.scale.set(1, 1.15, 1.25);
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.035, 0.03), makeMat("#c8322a"));
+  handle.position.set(0, 0.035, -0.02);
+  glove.add(handle);
+  const cordGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+  const cord = new THREE.Line(cordGeo, new THREE.LineBasicMaterial({ color: 0xd8d2b8 }));
+  g.add(forearm, glove, cord);
+  g.userData = { forearm, glove, cord };
+  g.visible = false;
+  g.renderOrder = 5;
+  camera.add(g);
+  pullHand = g;
+  return g;
+}
+// Khung hình chính (toạ độ theo camera): ngoài màn hình → ngực → giật ra → hạ tay.
+const PULL_KEYS = [
+  [0, [0.34, -0.5, -0.46]],
+  [0.2, [0.05, -0.27, -0.36]], // nắm tay kéo ở ngực
+  [0.27, [0.06, -0.27, -0.36]],
+  [CHUTE_PULL_AT, [0.3, -0.13, -0.52]], // giật mạnh ra ngoài
+  [0.62, [0.36, -0.2, -0.5]],
+  [0.95, [0.42, -0.62, -0.42]],
+];
+const pullTmp = new THREE.Vector3(),
+  pullElbow = new THREE.Vector3(0.36, -0.68, -0.22),
+  pullChest = new THREE.Vector3(0.04, -0.29, -0.33);
+function updatePullHand(dt) {
+  if (!chutePull) return;
+  chutePull.t += dt;
+  const t = chutePull.t;
+  if (!chutePull.opened && t >= CHUTE_PULL_AT) {
+    chutePull.opened = true;
+    openChuteNow();
+  }
+  const hand = ensurePullHand();
+  if (t >= PULL_KEYS[PULL_KEYS.length - 1][0] || (local.state !== "freefall" && local.state !== "parachute")) {
+    hand.visible = false;
+    chutePull = null;
+    return;
+  }
+  let i = 0;
+  while (i < PULL_KEYS.length - 2 && t > PULL_KEYS[i + 1][0]) i++;
+  const [t0, a] = PULL_KEYS[i],
+    [t1, b] = PULL_KEYS[i + 1];
+  const k = clamp((t - t0) / (t1 - t0), 0, 1);
+  const e = k * k * (3 - 2 * k);
+  pullTmp.set(a[0] + (b[0] - a[0]) * e, a[1] + (b[1] - a[1]) * e, a[2] + (b[2] - a[2]) * e);
+  const { forearm, glove, cord } = hand.userData;
+  glove.position.copy(pullTmp);
+  glove.rotation.set(0.3, -0.4, -0.5);
+  // Cẳng tay nối khuỷu tay (cố định dưới-phải) → găng tay.
+  forearm.position.copy(pullElbow).lerp(pullTmp, 0.5);
+  forearm.scale.z = Math.max(0.4, pullElbow.distanceTo(pullTmp) / 0.43);
+  forearm.lookAt(hand.localToWorld(pullTmp.clone()));
+  // Dây dù căng từ túi dù trước ngực tới tay cầm (chỉ hiện khi đã nắm dây).
+  const p = cord.geometry.attributes.position;
+  p.setXYZ(0, pullChest.x, pullChest.y, pullChest.z);
+  p.setXYZ(1, pullTmp.x, pullTmp.y + 0.03, pullTmp.z);
+  p.needsUpdate = true;
+  cord.visible = t > 0.18 && t < 0.7;
 }
 // Đẩy người chơi ra khỏi cây / đá / tường nếu tiếp đất trúng chúng.
 function findFreeSpotLocal(x, z, landingY = local.groundY) {
@@ -8713,6 +8783,36 @@ function findFreeSpotLocal(x, z, landingY = local.groundY) {
     }
   }
   return { x, z };
+}
+const LAND_ROLL_TIME = 0.85;
+let landRoll = null,
+  rollSavedX = 0,
+  rollSavedY = 0;
+// Áp hiệu ứng lộn nhào lên camera NGAY TRƯỚC khi vẽ (rồi trả lại sau khi vẽ) để
+// không làm hỏng góc nhìn chuột của người chơi.
+function applyRollCamera(dt) {
+  if (!landRoll || !camera) return false;
+  landRoll.t += dt;
+  const p = landRoll.t / landRoll.dur;
+  if (p >= 1 || local.state !== "ground") {
+    landRoll = null;
+    if (gun && local.state === "ground") gun.visible = !scoped || !scopeMagnified();
+    return false;
+  }
+  const smooth = (a, b, x) => {
+    const k = clamp((x - a) / (b - a), 0, 1);
+    return k * k * (3 - 2 * k);
+  };
+  rollSavedX = camera.rotation.x;
+  rollSavedY = camera.position.y;
+  // Cúi người xuống → lăn qua đầu (xoay đủ 360° về phía trước) → đứng dậy.
+  camera.rotation.x = rollSavedX - Math.PI * 2 * smooth(0.12, 0.8, p);
+  camera.position.y = rollSavedY - 1.05 * Math.sin(Math.PI * smooth(0.02, 0.95, p));
+  return true;
+}
+function restoreRollCamera() {
+  camera.rotation.x = rollSavedX;
+  camera.position.y = rollSavedY;
 }
 function landNow() {
   local.peek = 0;
@@ -8737,7 +8837,16 @@ function landNow() {
   camera.fov = baseFov;
   camera.updateProjectionMatrix();
   send({ type: "land", x: local.x, y: local.groundY, z: local.z });
-  playLanding(null);
+  // Lộn nhào 1 vòng về phía trước để giảm chấn (camera xoay 360°, người lăn tới ~2 m).
+  chutePull = null;
+  if (pullHand) pullHand.visible = false;
+  $("#chuteOverlay").classList.remove("unfurl");
+  if (waterAt(local.x, local.z)) playLanding(null); // rơi xuống nước: không lộn nhào
+  else {
+    landRoll = { t: 0, dur: LAND_ROLL_TIME };
+    if (gun) gun.visible = false;
+    playLandRoll();
+  }
   showLootToast("ĐÃ TIẾP ĐẤT · CẦM SÚNG SẴN SÀNG");
 }
 // Đang ngồi trên máy bay: camera đứng đúng chỗ của mình trong khoang, tự do nhìn quanh.
@@ -8756,6 +8865,7 @@ function updatePlane() {
 // Rơi tự do và dù: WASD bay ngang theo hướng nhìn, Shift lao nhanh, Space bung dù.
 function updateAir(dt) {
   if (deathView) return; // đã bị hạ: không mô phỏng rơi / dù của mình nữa
+  updatePullHand(dt);
   const chute = local.state === "parachute";
   airState.time += dt;
   const input = !paused;
@@ -8792,7 +8902,7 @@ function updateAir(dt) {
   const approachGround = landingHeightAt(local.x, local.z, previousY);
   if (
     !chute &&
-    local.y - approachGround <= AIR.autoDeployAlt &&
+    local.y - approachGround <= AIR.autoDeployAlt + airState.fall * CHUTE_PULL_AT &&
     airState.time > 0.4
   )
     deployChute(true);
@@ -9239,6 +9349,7 @@ function animateAvatars(dt) {
       },
       dt,
     );
+    poseLandRoll(ud, now);
     if (now >= ud.flashUntil) {
       ud.muzzleFlash.visible = false;
       ud.sniperFlash.visible = false;
@@ -9247,6 +9358,45 @@ function animateAvatars(dt) {
     if (ud.reloading) ud.reloadIndicator.rotation.z += dt * 7;
     if (ud.healing) ud.healIndicator.rotation.y += dt * 5;
   }
+}
+// LỘN NHÀO TIẾP ĐẤT (nhìn từ người khác): cúi gập người, khòm lưng, co gối sát
+// ngực, hai tay ôm cẳng chân, cằm áp ngực → cả thân cuộn tròn lăn qua vai đủ
+// 1 vòng về phía trước (trục hông hạ thấp) → duỗi chân, đứng dậy.
+function poseLandRoll(ud, now) {
+  const rig = ud.rig;
+  if (!ud.rollAt) return;
+  const p = (now - ud.rollAt) / (LAND_ROLL_TIME * 1000);
+  if (p >= 1 || p < 0) {
+    ud.rollAt = 0;
+    rig.hips.rotation.x = 0;
+    return;
+  }
+  const smooth = (a, b, x) => {
+    const k = clamp((x - a) / (b - a), 0, 1);
+    return k * k * (3 - 2 * k);
+  };
+  // tuck: 0 → 1 (cuộn người) giữ trong lúc lăn → 0 (duỗi ra đứng dậy).
+  const tuck = smooth(0, 0.18, p) * (1 - smooth(0.78, 1, p));
+  const spin = smooth(0.12, 0.8, p);
+  rig.hips.rotation.x = -Math.PI * 2 * spin; // lăn tới trước (mặt nhìn về -Z)
+  rig.hips.position.y = rig.hips.position.y * (1 - tuck) + 0.42 * tuck;
+  rig.torso.rotation.x = rig.torso.rotation.x * (1 - tuck) - 1.05 * tuck; // khòm lưng
+  rig.head.rotation.x = rig.head.rotation.x * (1 - tuck) - 0.55 * tuck; // cằm áp ngực
+  rig.legs.forEach((leg, i) => {
+    const off = i === 0 ? 0.08 : -0.08; // hai chân lệch nhẹ cho tự nhiên
+    leg.thigh.rotation.x = leg.thigh.rotation.x * (1 - tuck) + (2.15 + off) * tuck; // gối kéo sát ngực
+    leg.knee.rotation.x = leg.knee.rotation.x * (1 - tuck) - (2.35 - off) * tuck; // gập gối
+    leg.ankle.rotation.x = leg.ankle.rotation.x * (1 - tuck) + 0.5 * tuck;
+    leg.thigh.rotation.z = (i === 0 ? -0.12 : 0.12) * tuck;
+  });
+  rig.arms.forEach((arm) => {
+    // Hai tay vòng ra trước ôm lấy cẳng chân.
+    arm.shoulder.rotation.x = arm.shoulder.rotation.x * (1 - tuck) + 1.25 * tuck;
+    arm.shoulder.rotation.z = arm.shoulder.rotation.z * (1 - tuck) + -arm.side * 0.25 * tuck;
+    arm.elbow.rotation.x = arm.elbow.rotation.x * (1 - tuck) + 0.35 * tuck;
+  });
+  // Súng đeo không cầm trong lúc lăn.
+  ud.weapon.visible = ud.sniperWeapon.visible = ud.berylWeapon.visible = false;
 }
 function updateRemoteMotion(dt) {
   const t = plane ? planeTime() : 0;
@@ -10949,31 +11099,70 @@ function updateWind(chute) {
     0.12,
   );
 }
+// Kéo dây dù: xé khóa dán (nhiều nhát rời rạc), chốt kim loại bật, dây rít qua ống.
+function playCordPull() {
+  const a = spatialAudio(null, { volume: 0.85, ref: 3, max: 30 });
+  if (!a) return;
+  noiseBurst(a, { at: 0.16, duration: 0.03, filter: "lowpass", freq: 900, gain: 0.5 }); // nắm tay cầm
+  for (let i = 0; i < 7; i++)
+    noiseBurst(a, { at: 0.27 + i * 0.016, duration: 0.022, filter: "highpass", freq: 2600 + (i % 3) * 500, gain: 0.55 - i * 0.04 }); // xé khóa dán
+  toneBurst(a, { at: 0.3, duration: 0.05, type: "triangle", from: 3100, to: 2300, gain: 0.07 }); // chốt kim loại bật
+  noiseBurst(a, { at: 0.31, duration: 0.012, filter: "bandpass", freq: 4200, q: 6, gain: 0.9 });
+  noiseBurst(a, { at: 0.33, duration: 0.18, filter: "bandpass", freq: 1900, q: 2.5, gain: 0.45 }); // dây rít qua ống
+  noiseBurst(a, { at: 0.36, duration: 0.12, filter: "bandpass", freq: 1200, q: 2, gain: 0.35 });
+}
+// Dù bung: túi dù bật → vải tuôn ra sột soạt TO DẦN → dây căng → tán dù đón gió
+// căng phồng "PHỰT" trầm nặng + cú giật người, rồi vải còn rung phần phật nhẹ.
 function playChuteOpen(position) {
   const a = spatialAudio(position, { volume: 0.9, ref: 6, max: 80 });
   if (!a) return;
-  noiseBurst(a, { duration: 0.08, filter: "highpass", freq: 2200, gain: 1.1 }); // tiếng vải dù bật mạnh
-  toneBurst(a, { at: 0.01, duration: 0.11, from: 180, to: 95, gain: 0.85 }); // tiếng giật bung khóa dù
-  noiseBurst(a, {
-    at: 0.03,
-    duration: 0.4,
-    filter: "bandpass",
-    freq: 700,
-    q: 0.8,
-    gain: 1,
-  }); // vải phồng lên
-  noiseBurst(a, {
-    at: 0.2,
-    duration: 0.25,
-    filter: "bandpass",
-    freq: 1400,
-    q: 1.2,
-    gain: 0.45,
-  }); // vải sột soạt
-  toneBurst(a, { at: 0.04, duration: 0.3, from: 140, to: 55, gain: 0.7 }); // cú giật nặng
+  noiseBurst(a, { duration: 0.05, filter: "bandpass", freq: 900, q: 1.5, gain: 0.7 }); // nắp túi dù bật
+  for (let i = 0; i < 14; i++) {
+    const k = i / 13;
+    noiseBurst(a, {
+      at: 0.04 + i * 0.05,
+      duration: 0.09,
+      filter: "bandpass",
+      freq: 600 + k * 1300 + (i % 2) * 300,
+      q: 0.9,
+      gain: 0.18 + k * 0.6,
+    }); // vải dù tuôn ra, sột soạt to dần
+  }
+  for (let i = 0; i < 5; i++)
+    noiseBurst(a, { at: 0.35 + i * 0.07, duration: 0.05, filter: "highpass", freq: 3000, gain: 0.25 + i * 0.05 }); // dây dù vuốt rít
+  // CĂNG HẾT CỠ: tiếng "phựt" của tán dù đón gió + cú giật vai.
+  const full = 0.78;
+  toneBurst(a, { at: full, duration: 0.32, from: 150, to: 48, gain: 1.05 });
+  noiseBurst(a, { at: full, duration: 0.22, filter: "lowpass", freq: 520, gain: 1.15, drive: 4 });
+  noiseBurst(a, { at: full, duration: 0.06, filter: "highpass", freq: 2000, gain: 0.8 }); // vải bật căng
+  // Vải rung phần phật nhỏ dần sau khi căng.
+  for (let i = 0; i < 6; i++)
+    noiseBurst(a, { at: full + 0.25 + i * 0.12, duration: 0.1, filter: "bandpass", freq: 380 + (i % 2) * 140, q: 1, gain: 0.35 - i * 0.05 });
 }
 // Tiếp đất sau khi NHẢY DÙ: cả người đổ xuống đất (cú "huỵch" nặng, trầm), lăn
 // một vòng giảm chấn, dây dù căng rồi tán dù xẹp phập phồng, khóa đai cách cách.
+// Lộn nhào tiếp đất (người chơi chính mình): gót chạm đất → vai lăn xuống
+// đất (huỵch + quần áo cọ xát đất/cỏ) → lưng lăn qua (balo, súng, đai va lách
+// cách) → chân chạm đất đứng dậy + thở hắt ra.
+function playLandRoll() {
+  const a = spatialAudio(null, { volume: 1, ref: 3, max: 50 });
+  if (!a) return;
+  const surface = footSurface(local.x, local.z);
+  const grit = surface === "sand" ? ["highpass", 2400] : surface === "grass" ? ["bandpass", 2100] : surface === "road" ? ["bandpass", 1500] : ["bandpass", 1000];
+  toneBurst(a, { duration: 0.14, from: 120, to: 50, gain: 0.8 }); // gót chạm đất
+  noiseBurst(a, { duration: 0.1, filter: "lowpass", freq: 600, gain: 0.8 });
+  toneBurst(a, { at: 0.18, duration: 0.26, from: 80, to: 32, gain: 1.15 }); // vai đổ xuống đất
+  noiseBurst(a, { at: 0.18, duration: 0.18, filter: "lowpass", freq: 520, gain: 1.0, drive: 5 });
+  for (let i = 0; i < 6; i++)
+    noiseBurst(a, { at: 0.2 + i * 0.06, duration: 0.09, filter: grit[0], freq: grit[1] - i * 80, q: 0.8, gain: 0.5 - i * 0.05 }); // quần áo cọ xát mặt đất
+  noiseBurst(a, { at: 0.33, duration: 0.03, filter: "bandpass", freq: 3300, q: 3, gain: 0.45 }); // súng / khóa đai va lách cách
+  noiseBurst(a, { at: 0.38, duration: 0.025, filter: "bandpass", freq: 2700, q: 4, gain: 0.35 });
+  toneBurst(a, { at: 0.36, duration: 0.05, type: "triangle", from: 2100, to: 1600, gain: 0.035 });
+  toneBurst(a, { at: 0.42, duration: 0.16, from: 75, to: 38, gain: 0.55 }); // lưng / balo lăn qua
+  toneBurst(a, { at: 0.62, duration: 0.1, from: 130, to: 60, gain: 0.6 }); // bàn chân chạm đất đứng dậy
+  noiseBurst(a, { at: 0.62, duration: 0.08, filter: grit[0], freq: grit[1], q: 0.8, gain: 0.45 });
+  noiseBurst(a, { at: 0.7, duration: 0.28, filter: "bandpass", freq: 750, q: 0.7, gain: 0.16 }); // thở hắt ra
+}
 function playLanding(position) {
   const a = spatialAudio(position, { volume: 1, ref: 3, max: 50 });
   if (!a) return;
@@ -11152,6 +11341,7 @@ function frame() {
       moveSpeed = SLOW_SPEED;
     }
 
+    if (landRoll) moveSpeed = 3.2 * (1 - landRoll.t / landRoll.dur) + 0.6;
     const speed = moveSpeed * dt;
     const previousX = local.x;
     const previousZ = local.z;
@@ -11163,6 +11353,10 @@ function frame() {
     if (keys.KeyS) dz -= 1;
     if (keys.KeyA) dx -= 1;
     if (keys.KeyD) dx += 1;
+    if (landRoll) {
+      dx = 0;
+      dz = 1; // lăn thẳng về phía trước theo hướng nhìn
+    }
     const len = Math.hypot(dx, dz) || 1;
     const fx = -Math.sin(local.yaw),
       fz = -Math.cos(local.yaw),
@@ -11398,6 +11592,7 @@ function frame() {
     camera.position.set(deathView.x, deathView.y + 45, deathView.z);
     camera.lookAt(deathView.x, deathView.y, deathView.z);
   }
+  const rolling = applyRollCamera(dt);
   if (screenShake > 0 && camera) {
     const sx = (Math.random() - 0.5) * screenShake * 0.12,
       sy = (Math.random() - 0.5) * screenShake * 0.12;
@@ -11407,6 +11602,7 @@ function frame() {
     camera.position.x -= sx;
     camera.position.y -= sy;
   } else renderer.render(scene, camera);
+  if (rolling) restoreRollCamera();
   adaptResolution(dt);
   requestAnimationFrame(frame);
 }

@@ -3581,3 +3581,16 @@ textarea {
   max-height: none;
   overflow: visible;
 }
+
+/* Tán dù bung dần: cụm vải nhỏ phía trên → phồng → căng hết cỡ (khớp tiếng "phựt"). */
+.chute-overlay.unfurl svg {
+  transform-origin: 50% 0%;
+  animation: chuteUnfurl 0.9s cubic-bezier(0.3, 0.7, 0.35, 1) both;
+}
+@keyframes chuteUnfurl {
+  0% { transform: scale(0.18, 0.08); opacity: 0.2; }
+  45% { transform: scale(0.55, 0.5); opacity: 0.85; }
+  80% { transform: scale(1.06, 0.94); opacity: 1; }
+  90% { transform: scale(0.98, 1.03); }
+  100% { transform: scale(1, 1); opacity: 1; }
+}
