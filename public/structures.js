@@ -365,12 +365,21 @@
     const roof = { x: 0, z: 0, hx: W + 0.15, hz: D + 0.15, y: H + MANOR.roof / 2, hy: MANOR.roof / 2, kind: "roof" };
     const P = MANOR.parapet,
       top = H + MANOR.roof;
-    const parapets = [
-      { x: 0, z: -D - 0.05, hx: W + 0.15, hz: 0.1, y: top + P / 2, hy: P / 2, kind: "parapet" },
-      { x: 0, z: D + 0.05, hx: W + 0.15, hz: 0.1, y: top + P / 2, hy: P / 2, kind: "parapet" },
-      { x: -W - 0.05, z: 0, hx: 0.1, hz: D + 0.15, y: top + P / 2, hy: P / 2, kind: "parapet" },
-      { x: W + 0.05, z: 0, hx: 0.1, hz: D + 0.15, y: top + P / 2, hy: P / 2, kind: "parapet" },
-    ];
+    // Lan can mái có LỐI HỞ 1.8 m giữa mỗi cạnh: đáp dù xuống mái vẫn đi ra mép
+    // nhảy xuống đất được (trước đây lan can kín 4 phía → kẹt trên mái).
+    const GAP = 1.8;
+    const parapets = [];
+    const seg = (x, z, hx, hz) => parapets.push({ x, z, hx, hz, y: top + P / 2, hy: P / 2, kind: "parapet" });
+    for (const sz of [-1, 1]) {
+      const half = (W + 0.15 - GAP / 2) / 2;
+      seg(-(GAP / 2 + half), sz * (D + 0.05), half, 0.1);
+      seg(GAP / 2 + half, sz * (D + 0.05), half, 0.1);
+    }
+    for (const sx of [-1, 1]) {
+      const half = (D + 0.15 - GAP / 2) / 2;
+      seg(sx * (W + 0.05), -(GAP / 2 + half), 0.1, half);
+      seg(sx * (W + 0.05), GAP / 2 + half, 0.1, half);
+    }
     // Ô đặt đồ / bàn trong từng phòng (tránh lối cửa, sát tường).
     const rooms = [
       { x0: -W + 0.6, x1: W - 0.6, z0: -D + 0.6, z1: split - 0.6 }, // sảnh
