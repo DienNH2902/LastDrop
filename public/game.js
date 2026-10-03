@@ -4608,6 +4608,7 @@ function initWorld() {
   addGrass(forest);
   for (const obstacle of mapObstacles) drawMapObject(obstacle, forest);
   flushMergeBuckets(); // dồn toàn bộ nhà/cây/đá/xương rồng thành vài chục draw call
+  configureSunShadow(); // nướng bóng cả map 1 lần
   // First-person weapon silhouette attached to the camera.
   // Súng cầm tay góc nhìn thứ nhất: AUG gắn red dot và Kar98k gắn ống 8x.
   // Tâm red dot đặt đúng (0.28, -0.075) so với camera: khi ngắm, súng dịch
@@ -4810,10 +4811,15 @@ function graphicsPixelRatio() {
     resolutionScale
   );
 }
-// Bóng đổ theo chất lượng: Performance tắt · Balanced 1024 · High 2048.
+// BÓNG ĐỔ "NƯỚNG SẴN": bản đồ bóng phủ CẢ MAP được vẽ ĐÚNG 1 LẦN khi vào trận
+// (nhà, cây, đá, nắng lọt cửa sổ xuống sàn...) rồi giữ nguyên — mỗi khung hình
+// KHÔNG vẽ lại bóng nên không tốn thêm hiệu năng như bóng động. Người chơi / xe
+// (vật di chuyển) không đổ bóng. Performance: tắt hẳn · Balanced 4096 · High 6144 (~0,1 m mỗi điểm bóng).
 function shadowQuality() {
   const q = $("#quality")?.value;
-  return q === "High" ? 2048 : q === "Balanced" ? 1024 : 0;
+  if (q === "Performance") return 0;
+  const max = renderer?.capabilities?.maxTextureSize || 4096;
+  return Math.min(max, q === "High" ? 6144 : 4096);
 }
 const SUN_DIR = new THREE.Vector3(-15, 30, 12).normalize();
 function configureSunShadow() {
@@ -4822,44 +4828,37 @@ function configureSunShadow() {
   const on = size > 0;
   const wasOn = renderer.shadowMap.enabled;
   renderer.shadowMap.enabled = on;
+  renderer.shadowMap.autoUpdate = false; // chỉ vẽ khi needsUpdate (1 lần)
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   sunLight.castShadow = on;
   if (on) {
     const cam = sunLight.shadow.camera;
-    const R = size >= 2048 ? 60 : 42; // vùng có bóng quanh người chơi (m)
+    const R = MAP_HALF + 30;
     cam.left = -R;
     cam.right = R;
     cam.top = R;
     cam.bottom = -R;
     cam.near = 1;
-    cam.far = 260;
+    cam.far = 900;
     cam.updateProjectionMatrix();
-    sunLight.shadow.bias = -0.0004;
-    sunLight.shadow.normalBias = 0.04;
-    sunLight.shadow.radius = 2;
+    sunLight.target.position.set(0, 0, 0);
+    sunLight.position.copy(SUN_DIR).multiplyScalar(420);
+    sunLight.target.updateMatrixWorld();
+    sunLight.updateMatrixWorld();
+    sunLight.shadow.bias = -0.0006;
+    sunLight.shadow.normalBias = 0.06;
     if (sunLight.shadow.mapSize.x !== size) {
       sunLight.shadow.mapSize.set(size, size);
       sunLight.shadow.map?.dispose();
       sunLight.shadow.map = null;
     }
+    renderer.shadowMap.needsUpdate = true; // nướng lại 1 lần (lúc vào trận / đổi chất lượng)
   }
-  // Bật / tắt bóng cần biên dịch lại shader của vật liệu.
   if (wasOn !== on)
     scene?.traverse((o) => {
       if (!o.material) return;
       for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.needsUpdate = true;
     });
-}
-// Mặt trời đi theo camera: khung bóng luôn phủ quanh người chơi; bám lưới theo
-// kích thước texel để bóng không "rung" khi di chuyển.
-const sunSnap = new THREE.Vector3();
-function updateSun() {
-  if (!sunLight?.castShadow) return;
-  const cam = sunLight.shadow.camera;
-  const step = (cam.right - cam.left) / sunLight.shadow.mapSize.x;
-  sunSnap.set(Math.round(camera.position.x / step) * step, Math.round(camera.position.y / step) * step, Math.round(camera.position.z / step) * step);
-  sunLight.target.position.copy(sunSnap);
-  sunLight.position.copy(sunSnap).addScaledVector(SUN_DIR, 120);
-  sunLight.target.updateMatrixWorld();
 }
 function applyGraphicsSettings() {
   if (!renderer) return;
@@ -7615,34 +7614,31 @@ function lockPointer(element) {
 // Bây giờ chỉ bỏ cú nhảy ĐƠN LẺ: bước nhảy rác của trình duyệt là 1 sự kiện
 // khổng lồ, thường NGƯỢC hướng đang xoay; chuyển động thật thì liên tục và cùng
 // hướng. Tối đa bỏ 1 sự kiện liên tiếp, sau đó luôn nhận và thích nghi ngưỡng.
-let mouseAvg = 12,
-  mouseDirX = 0, // hướng xoay ngang gần đây (trung bình có dấu)
-  mouseRejects = 0,
-  pointerLockedAt = 0;
+// CÁCH MỚI (triệt để): KHÔNG nhận/bỏ cả sự kiện nữa mà KẸP độ lớn mỗi sự kiện
+// theo đỉnh tốc độ tay vừa qua. Cú nhảy rác (kể cả CÙNG hướng đang xoay — chính là
+// lỗi "đang xoay nhanh thì giật phắt ra sau lưng") là 1 sự kiện vọt gấp nhiều lần
+// sự kiện trước → bị kẹp về mức hợp lý, màn hình xoay tiếp mượt thay vì nhảy.
+// Vung tay thật tăng tốc dần qua nhiều sự kiện → ngưỡng (2.2× đỉnh gần đây) bám kịp.
+let mousePeak = 40,
+  pointerLockedAt = 0,
+  lookDX = 0,
+  lookDY = 0;
 document.addEventListener("pointerlockchange", () => {
   pointerLockedAt = performance.now();
-  mouseAvg = 12;
-  mouseDirX = 0;
-  mouseRejects = 0;
+  mousePeak = 40;
 });
 function saneMouseDelta(e) {
-  if (performance.now() - pointerLockedAt < 40) return false;
-  const mx = e.movementX || 0,
+  if (performance.now() - pointerLockedAt < 60) return false; // vài sự kiện đầu sau khi khoá chuột hay là rác
+  let mx = e.movementX || 0,
     my = e.movementY || 0;
+  const limit = Math.max(90, mousePeak * 2.2);
+  mx = Math.max(-limit, Math.min(limit, mx));
+  my = Math.max(-limit, Math.min(limit, my));
   const mag = Math.max(Math.abs(mx), Math.abs(my));
-  const limit = Math.max(260, mouseAvg * 6);
-  if (mag > limit && mouseRejects < 1) {
-    // Cùng hướng đang xoay mạnh → chuyển động thật (vung chuột nhanh), nhận luôn.
-    const sameDirection = Math.abs(mouseDirX) > 20 && Math.sign(mx) === Math.sign(mouseDirX);
-    if (!sameDirection) {
-      mouseRejects++;
-      mouseAvg += (mag - mouseAvg) * 0.3; // vẫn thích nghi để lần sau không bỏ nữa
-      return false;
-    }
-  }
-  mouseRejects = 0;
-  mouseAvg += (mag - mouseAvg) * 0.2;
-  mouseDirX += (mx - mouseDirX) * 0.3;
+  // Đỉnh tốc độ: lên ngay theo giá trị (đã kẹp), xuống từ từ.
+  mousePeak = Math.max(mag, mousePeak * 0.9, 40);
+  lookDX = mx;
+  lookDY = my;
   return true;
 }
 function onMouse(e) {
@@ -7655,8 +7651,8 @@ function onMouse(e) {
   if (!saneMouseDelta(e)) return;
   if (local.vehicleId) {
     const sens = Number($("#sensitivity").value) || 50;
-    local.yaw -= e.movementX * sens * 0.000055;
-    vehiclePitch = clamp(vehiclePitch - e.movementY * sens * 0.000036, -1.2, 1.2);
+    local.yaw -= lookDX * sens * 0.000055;
+    vehiclePitch = clamp(vehiclePitch - lookDY * sens * 0.000036, -1.2, 1.2);
     return;
   }
   const sniperZoomScale =
@@ -7667,12 +7663,12 @@ function onMouse(e) {
   // số cố định nên zoom không làm chậm chuột dọc). 0.000036 × 50 = 0.0018, nên
   // ở độ nhạy mặc định cảm giác chuột dọc vẫn y như cũ khi không zoom.
   const lookSens = (Number($("#sensitivity").value) || 50) * sniperZoomScale;
-  local.yaw -= e.movementX * lookSens * 0.000055;
+  local.yaw -= lookDX * lookSens * 0.000055;
   camera.rotation.order = "YXZ";
   camera.rotation.y = local.yaw + recoilYaw;
   camera.rotation.x = Math.max(
     -1.35,
-    Math.min(1.35, camera.rotation.x - e.movementY * lookSens * 0.000036),
+    Math.min(1.35, camera.rotation.x - lookDY * lookSens * 0.000036),
   );
 }
 function onFire(e) {
@@ -11402,7 +11398,6 @@ function frame() {
     camera.position.set(deathView.x, deathView.y + 45, deathView.z);
     camera.lookAt(deathView.x, deathView.y, deathView.z);
   }
-  updateSun();
   if (screenShake > 0 && camera) {
     const sx = (Math.random() - 0.5) * screenShake * 0.12,
       sy = (Math.random() - 0.5) * screenShake * 0.12;
