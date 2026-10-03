@@ -13,6 +13,7 @@
 const Terrain = require("../public/terrain.js");
 
 const MAP_HALF = Terrain.MAP_HALF;
+const Structures = require("../public/structures.js");
 const ROAD_W = 9;
 
 function makeRandom(seed) {
@@ -254,7 +255,7 @@ function createObstacles(seed, mapId) {
   // Dãy núi bên trong: đi ngẫu nhiên, mỗi bước một khối elip dọc theo hướng đi,
   // độ cao dao động → sống núi nhấp nhô.
   const target = jungle ? 0.7 : forest ? 0.4 : 0.6;
-  for (let range = 0; range < (jungle ? 160 : 60) && coverage() < target; range++) {
+  for (let range = 0; range < (jungle ? 320 : 140) && coverage() < target; range++) {
     let x, z, dir;
     if (random() < 0.5) {
       // Dãy núi nhánh mọc từ viền đâm vào trong map.
@@ -322,10 +323,10 @@ function createObstacles(seed, mapId) {
   }
   if (fortresses.length) T0 = Terrain.build(obstacles);
   const villagePlan = jungle
-    ? [12, 11, 10, 10, 9, 8, 8, 7, 7, 6, 6]
+    ? [16, 15, 14, 13, 12, 12, 11, 10, 10, 9, 9, 8, 8, 7, 7, 6]
     : forest
-      ? [15, 13, 12, 11, 10, 9, 8, 7]
-      : [16, 15, 12, 10, 8, 7, 6, 6, 5];
+      ? [20, 18, 16, 15, 14, 13, 12, 11, 10, 10, 9, 8, 8, 7]
+      : [20, 18, 16, 15, 13, 12, 11, 10, 9, 8, 8, 7, 6, 6];
   // Hai lượt: lượt đầu đòi đất thật phẳng; lượt sau nới điều kiện cho những
   // làng còn thiếu (map nhiều núi) để luôn đủ nhà chứa vật phẩm.
   const pending = villagePlan.map((size) => ({ size, done: false }));
@@ -361,7 +362,7 @@ function createObstacles(seed, mapId) {
         const h = T0.heightAt(x, z);
         if (h > 30) continue;
         obstacles.push({ type: "plateau", x, z, r: R * 0.8, level: round(h), solid: false });
-        villages.push({ x, z, R, size: plan.size, mountain: h > 8, level: h });
+        villages.push({ x, z, R, size: plan.size, mountain: h > 8, level: h, plateau: true });
         plan.done = true;
         break;
       }
@@ -816,8 +817,11 @@ function createObstacles(seed, mapId) {
     if (nearWater(x, z, w + 4)) return false;
     // Nền nhà phải khá bằng (không dựng nhà treo lưng chừng vách núi).
     const h0 = T0.heightAt(x, z);
-    if (!village.mountain && !flatAround(x, z, w * 0.7, h0 + 2.5)) return false;
-    if (village.mountain && Math.hypot(x - village.x, z - village.z) > village.R - w * 0.6) return false;
+    // Làng trên nền san phẳng (Thành Cổ): nền đã phẳng → chỉ cần nằm trong nền.
+    if (village.plateau && !village.mountain && Math.hypot(x - village.x, z - village.z) > village.R * 0.8 + 2 - w * 0.5) return false;
+    // Nhà sàn đứng trên cột → chịu được nền gồ ghề hơn nhà thường.
+    if (!village.mountain && !village.plateau && !flatAround(x, z, w * 0.7, h0 + (stilt ? 4 : 2.5))) return false;
+    if (village.mountain && Math.hypot(x - village.x, z - village.z) > village.R + 4 - w * 0.5) return false;
     const house = {
       type: hut ? "hut" : "house",
       x,
@@ -836,8 +840,39 @@ function createObstacles(seed, mapId) {
     return true;
   };
   const faceYaw = (x, z, tx, tz) => Math.atan2(-(tx - x), -(tz - z)); // cửa (mặt -Z) nhìn về điểm đích
+  // NHÀ TO NHIỀU PHÒNG (sảnh + 2 phòng, mái bằng đứng được) — 1–2 căn mỗi làng lớn.
+  const manors = [];
+  const tryManor = (x, z, yaw, village) => {
+    const w = rand(13, 15.5),
+      d = rand(10, 12);
+    const r = Math.hypot(w, d) / 2 + 1.5;
+    if (Math.abs(x) > MAP_HALF - 16 || Math.abs(z) > MAP_HALF - 16) return false;
+    if (!occ.free(x, z, r)) return false;
+    if (nearRoad(x, z, r)) return false;
+    if (nearWater(x, z, r + 4)) return false;
+    const h0 = T0.heightAt(x, z);
+    if (!village.mountain && !village.plateau && !flatAround(x, z, r * 0.8, h0 + 2.5)) return false;
+    if ((village.mountain || village.plateau) && Math.hypot(x - village.x, z - village.z) > village.R * 0.8 - r * 0.5) return false;
+    const manor = { type: "manor", x, z, w, d, h: 4.2, yaw, solid: true };
+    obstacles.push(manor);
+    obstacles.push({ type: "pad", x, z, r: r + 0.4, solid: false });
+    manors.push(manor);
+    occ.add(x, z, r + 0.5);
+    return true;
+  };
   for (const v of villages) {
     let made = 0;
+    // Làng lớn: 1–2 nhà to ở gần tâm làng (đặt TRƯỚC nhà nhỏ để có chỗ).
+    if (v.size >= 6 && !v.fortress) {
+      const want = v.size >= 12 ? 2 : 1;
+      for (let k = 0, tries = 0; k < want && tries < 120; tries++) {
+        const a = rand(0, Math.PI * 2),
+          dd = rand(4, Math.max(6, v.R * 0.55));
+        const x = v.x + Math.cos(a) * dd,
+          z = v.z + Math.sin(a) * dd;
+        if (tryManor(x, z, faceYaw(x, z, v.x, v.z) + rand(-0.2, 0.2), v)) k++;
+      }
+    }
     // Dãy nhà hai bên các đoạn đường chạy qua làng, cửa quay ra đường.
     const local = roads.filter((r) => Math.hypot(r.x - v.x, r.z - v.z) < v.R);
     for (const r of local) {
@@ -855,9 +890,9 @@ function createObstacles(seed, mapId) {
       }
     }
     // Hàng nhà phía sau / quanh quảng trường, quay về tâm làng.
-    for (let tries = 0; tries < 160 && made < v.size; tries++) {
+    for (let tries = 0; tries < 600 && made < v.size; tries++) {
       const a = rand(0, Math.PI * 2),
-        d = rand(10, v.R);
+        d = rand(8, v.R + 6);
       const x = v.x + Math.cos(a) * d,
         z = v.z + Math.sin(a) * d;
       if (tryHouse(x, z, faceYaw(x, z, v.x, v.z) + rand(-0.25, 0.25), random() < 0.4, v)) made++;
@@ -895,8 +930,9 @@ function createObstacles(seed, mapId) {
       // tới sàn đỉnh tháp (mặt trong tháp ở |x| = HALF - 3).
       const sx = Math.sign(lx),
         sz = Math.sign(lz);
-      const RAMP_LEN = 13;
-      const center = W(sx * (HALF - 3 - RAMP_LEN / 2), sz * (HALF - 1.6));
+      // Thang lấn 0.3 m vào thân tháp và áp lọt vào tường bên → không còn khe hở để lọt.
+      const RAMP_LEN = 13.6;
+      const center = W(sx * (HALF - 3 + 0.3 - RAMP_LEN / 2), sz * (HALF - 1.45));
       obstacles.push({
         type: "fortramp",
         x: center.x,
@@ -904,7 +940,19 @@ function createObstacles(seed, mapId) {
         // +lz cục bộ của thang = hướng đi lên (về phía tháp, +sx trong hệ thành).
         yaw: Math.atan2(c * sx, -sn * sx),
         length: RAMP_LEN,
-        w: 1.7,
+        w: 1.9,
+        // Tháp vuông theo trục X/Z (không xoay theo thành) → khi thành xoay, góc tháp chạm
+        // thang sớm hơn mặt tháp. Thang phải lên đủ cao NGAY điểm chạm đầu tiên đó.
+        overlap: (() => {
+          const ux = Math.sin(Math.atan2(c * sx, -sn * sx)),
+            uz = Math.cos(Math.atan2(c * sx, -sn * sx));
+          for (let lz = -RAMP_LEN / 2; lz <= RAMP_LEN / 2; lz += 0.05) {
+            const px = center.x + ux * lz,
+              pz = center.z + uz * lz;
+            if (Math.abs(px - p.x) < 3 + 0.6 && Math.abs(pz - p.z) < 3 + 0.6) return round(Math.max(0.3, RAMP_LEN / 2 - lz + 0.1));
+          }
+          return 0.3;
+        })(),
         h: 9.25,
         tx: p.x, // tháp mà thang dẫn lên: đỉnh thang = sàn tháp
         tz: p.z,
@@ -919,6 +967,32 @@ function createObstacles(seed, mapId) {
     obstacles.push({ type: "keep", x: kp.x, z: kp.z, w: 16, h: 9.8, yaw, solid: true });
     occ.add(x, z, HALF * 1.45 + 4);
   }
+  // ---------------- Bàn ghế trong nhà / thành chính ----------------
+  // Bàn (chặn đi lại, có đồ trên mặt bàn) + 2 ghế (trang trí). lift = cao độ sàn so với nền.
+  const furnish = (host, lx, lz, yaw, lift = 0) => {
+    const c = Math.cos(host.yaw || 0),
+      sn = Math.sin(host.yaw || 0);
+    const px = host.x + c * lx + sn * lz,
+      pz = host.z - sn * lx + c * lz;
+    const ty = (host.yaw || 0) + yaw;
+    obstacles.push({ type: "table", x: round(px), z: round(pz), w: 1.3, d: 0.75, h: 0.78, yaw: round(ty), lift: lift || undefined, solid: true });
+    // Ghế hai bên chiều rộng bàn (trục z cục bộ của bàn), quay mặt vào bàn.
+    for (const side of [-1, 1])
+      // Lưng ghế ở +z cục bộ của ghế → ghế phía +z của bàn giữ nguyên hướng, phía -z quay 180° (mặt hướng vào bàn).
+      obstacles.push({ type: "chair", x: round(px + Math.sin(ty) * side * 0.75), z: round(pz + Math.cos(ty) * side * 0.75), w: 0.45, d: 0.45, h: 0.9, yaw: round(ty + (side > 0 ? 0 : Math.PI)), lift: lift || undefined, solid: true });
+  };
+  for (const h of houses) {
+    if (h.type !== "house") continue;
+    furnish(h, rand(-0.15, 0.15) * h.w * 0.5, h.w * 0.18, random() < 0.5 ? 0 : Math.PI / 2, h.lift || 0);
+  }
+  for (const mn of manors)
+    Structures.manorLayout(mn).rooms.forEach((room, i) => {
+      // Sảnh: bàn lệch sang góc, chừa lối từ cửa chính tới 2 cửa phòng.
+      const lx = i === 0 ? (random() < 0.5 ? -1 : 1) * (room.x1 - 1.2) : (room.x0 + room.x1) / 2;
+      furnish(mn, lx, (room.z0 + room.z1) / 2, i === 0 ? Math.PI / 2 : random() < 0.5 ? 0 : Math.PI / 2, Structures.MANOR.floor);
+    });
+  for (const kp of obstacles.filter((o) => o.type === "keep"))
+    for (const [lx, lz, lift] of [[3.5, 5.6, 0.1], [4.4, -4.6, 0.1], [-3.4, -5.6, 4.35], [3.0, -5.6, 4.35]]) furnish(kp, lx, lz, 0, lift);
   if (process.env.MAPGEN_DEBUG) console.log("villages", villages.map((v) => `${v.mountain ? "M" : ""}${v.size}:${houses.filter((h) => Math.hypot(h.x - v.x, h.z - v.z) < v.R + 10).length}`).join(" "), "roads", roadLines.length);
   // Vài căn chòi lẻ ven đường ngoài làng.
   for (let tries = 0, made = 0; tries < 300 && made < (forest ? 6 : 8) && roads.length; tries++) {
@@ -1037,7 +1111,7 @@ function createObstacles(seed, mapId) {
   } else if (forest) {
     // Rừng gom cụm: nhiều cây cao thấp khác nhau đứng dày (rừng rậm hơn: nhiều cụm
     // hơn, mỗi cụm dày hơn; cây vẫn gộp chung vài lần vẽ nên không nặng thêm).
-    const groves = 26;
+    const groves = 52;
     for (let g = 0; g < groves; g++) {
       let cx = 0,
         cz = 0,
@@ -1061,7 +1135,7 @@ function createObstacles(seed, mapId) {
       }
     }
     // Cây lẻ rải khắp map và trên sườn núi thấp.
-    for (let n = 0, tries = 0; n < 480 && tries < 6000; tries++) {
+    for (let n = 0, tries = 0; n < 1000 && tries < 12000; tries++) {
       const x = rand(-MAP_HALF, MAP_HALF),
         z = rand(-MAP_HALF, MAP_HALF);
       const w = rand(0.7, 1.2),

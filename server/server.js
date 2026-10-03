@@ -36,7 +36,7 @@ setInterval(() => {
 //  countdown : đếm ngược COUNTDOWN_MS.
 //  plane     : tất cả lên chung một máy bay bay thẳng qua map; nhảy dù khi máy bay vào vùng map.
 //  playing   : mọi người đã nhảy; ai tiếp đất rồi mới được cầm súng / nhặt đồ / bắn.
-const MAP_HALF = 200; // map 400 × 400 m: gấp 4 lần diện tích hiện tại (200 × 200)
+const MAP_HALF = 300; // map 600 × 600 m (khớp public/terrain.js)
 const MAP_SCALE = MAP_HALF / 50;
 const COUNTDOWN_MS = 5000;
 /* WEATHER SCHEDULING TEMPORARILY COMMENTED OUT FOR PERFORMANCE TESTING.
@@ -69,7 +69,7 @@ const ZONE_FULL_RADIUS = MAP_HALF * Math.SQRT2; // đủ phủ hết bản đồ
 const ZONE_TICK_SECONDS = 0.1; // tickRoom chạy mỗi 100ms
 
 const PLANE_ALT = 200; // độ cao máy bay (m)
-const PLANE_SPEED = 12; // m/s
+const PLANE_SPEED = 17; // m/s — map to hơn: bay nhanh hơn để thời gian trên máy bay như cũ
 const PLANE_LEAD = 65; // máy bay xuất phát cách góc xa nhất của zone ít nhất bấy nhiêu m
 // Chỗ đứng trong khoang máy bay (x phải, z lùi về sau), gần nhau, cùng hướng về phía trước.
 const PLANE_SEATS = [
@@ -283,7 +283,9 @@ const server = http.createServer((req, res) => {
   });
 });
 // Nén từng gói WebSocket tốn CPU server và thêm độ trễ; gói state đã được làm gọn.
-const wss = new WebSocketServer({ server, perMessageDeflate: false });
+// Nén CHỈ các gói lớn (dữ liệu map lúc vào phòng, danh sách đồ ~100–400 KB → nhỏ ~5–8 lần);
+// gói trạng thái 20 lần/giây (~4 KB) không nén để không tốn CPU / không thêm độ trễ.
+const wss = new WebSocketServer({ server, perMessageDeflate: { threshold: 32 * 1024, zlibDeflateOptions: { level: 6 }, serverNoContextTakeover: true, clientNoContextTakeover: true } });
 const send = (ws, data) => {
   if (ws.readyState === 1) ws.send(JSON.stringify(data));
 };
@@ -596,8 +598,8 @@ function vehicleSeatPosition(vehicle, seat = 0) {
 // ---- Vật phẩm rơi trên map: đạn và bịch máu ----
 const PICKUP_RADIUS = 2.5; // mét; client hiện gợi ý F ở 2 m, server dư 0.5 m để bù độ trễ vị trí
 const AMMO_PER_BOX = 30;
-const AMMO_BOX_COUNT = 416;
-const MEDKIT_COUNT = 224;
+const AMMO_BOX_COUNT = 560; // ~1/5 đi kèm súng, còn lại rải thưa
+const MEDKIT_COUNT = 320;
 const HEAL_AMOUNT = 20;
 const HEAL_DURATION_MS = 5000;
 const MAX_HP = 100;
@@ -606,8 +608,8 @@ const MAX_RESERVE_AMMO = 210;
 const MAX_MEDKITS = 5;
 // Lựu đạn: nổ (frag) và choáng (flash). Mỗi loại mang tối đa MAX_THROWABLES quả.
 const MAX_THROWABLES = 3;
-const FRAG_COUNT = 60,
-  FLASH_COUNT = 40;
+const FRAG_COUNT = 130,
+  FLASH_COUNT = 90;
 const GRENADE = {
   frag: { fuse: 6000, kill: 3.5, reach: 11, name: "LỰU ĐẠN NỔ" },
   flash: { fuse: 2000, name: "LỰU ĐẠN CHOÁNG" }, // choáng nổ nhanh hơn
@@ -711,102 +713,143 @@ function isOnBridge(obstacles, x, z, clearance = 0) {
 function createLoot(room) {
   const items = [];
   let nextId = 1;
-  const houses = room.obstacles.filter(
-    (o) => o.type === "house" || o.type === "hut",
-  );
-  // Thành chính: mỗi tầng là một "nhà" riêng trong vòng chia đồ (đồ nằm đúng tầng).
-  const keepFloors = [];
+  const r2v = (v) => Math.round(v * 100) / 100;
+  const shuffle = (arr) => {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  };
+  const tables = room.obstacles.filter((o) => o.type === "table");
+  const nearTable = (x, z) => tables.some((t) => Math.hypot(t.x - x, t.z - z) < 1.15);
+  const toWorld = (o, lx, lz) => {
+    const c = Math.cos(o.yaw || 0),
+      sn = Math.sin(o.yaw || 0);
+    return { x: o.x + c * lx + sn * lz, z: o.z - sn * lx + c * lz };
+  };
+  // Mỗi TÒA NHÀ là một nhóm ô: { floor: [ô trên sàn], tops: [ô trên mặt bàn] }.
+  const buildings = [];
+  const houses = room.obstacles.filter((o) => o.type === "house" || o.type === "hut");
+  for (const house of houses) {
+    const inner = house.w / 2 - 0.8;
+    const floor = [];
+    for (let lx = -inner; lx <= inner + 1e-6; lx += 1.2)
+      for (let lz = -inner; lz <= inner + 1e-6; lz += 1.2) {
+        if (lz < -inner + 1.3 && Math.abs(lx) < 1.3) continue; // lối vào sau cửa
+        const p = toWorld(house, lx, lz);
+        if (!nearTable(p.x, p.z)) floor.push(p);
+      }
+    buildings.push({ floor: shuffle(floor), tops: [] });
+  }
+  for (const manor of room.obstacles.filter((o) => o.type === "manor")) {
+    const floor = [];
+    for (const slot of Structures.manorLootSlots(manor)) {
+      const p = toWorld(manor, slot.lx, slot.lz);
+      p.y = r2v(obstacleBaseY(room, manor) + Structures.MANOR.floor); // nằm TRÊN sàn, không chìm
+      if (!nearTable(p.x, p.z)) floor.push(p);
+    }
+    // Nhà to: 3 phòng → chia đồ nhiều lượt như 3 nhà.
+    const b = { floor: shuffle(floor), tops: [] };
+    buildings.push(b, b, b);
+  }
   for (const keep of room.obstacles.filter((o) => o.type === "keep")) {
     const ground = obstacleBaseY(room, keep);
     const byLevel = new Map();
     for (const slot of Structures.keepLootSlots()) {
-      const [x, z] = Structures.toWorld(keep, slot.lx, slot.lz);
+      const p = Structures.toWorld(keep, slot.lx, slot.lz);
+      if (nearTable(p[0], p[1])) continue;
       if (!byLevel.has(slot.level)) byLevel.set(slot.level, []);
-      byLevel.get(slot.level).push({ x, z, y: Math.round((ground + slot.y) * 100) / 100 });
+      byLevel.get(slot.level).push({ x: p[0], z: p[1], y: r2v(ground + slot.y) });
     }
-    for (const cells of byLevel.values()) keepFloors.push(cells);
+    for (const cells of byLevel.values()) {
+      const b = { floor: shuffle(cells), tops: [] };
+      for (let k = 0; k < 3; k++) buildings.push(b); // thành chính: nhiều đồ hơn nhà
+    }
   }
-  const slots = houses.map((house) => {
-    const inner = house.w / 2 - 0.8;
-    const cells = [];
-    for (let lx = -inner; lx <= inner + 1e-6; lx += 1.2)
-      for (let lz = -inner; lz <= inner + 1e-6; lz += 1.2) {
-        // Lối vào ngay sau cửa (mặt -Z) để trống cho người chơi đi vào.
-        if (lz < -inner + 1.3 && Math.abs(lx) < 1.3) continue;
-        const c = Math.cos(house.yaw || 0),
-          sn = Math.sin(house.yaw || 0);
-        // Toạ độ cục bộ → thế giới (nghịch đảo phép xoay dùng trong blockedByBuilding).
-        cells.push({
-          x: house.x + c * lx + sn * lz,
-          z: house.z - sn * lx + c * lz,
-        });
+  // Mặt bàn: gắn vào tòa nhà gần nhất (bàn nằm trong tòa đó).
+  for (const t of tables) {
+    const top = r2v(obstacleBaseY(room, t) + (t.lift || 0) + Structures.TABLE_TOP);
+    let best = null,
+      bestD = 1e9;
+    for (const b of buildings) {
+      const p = b.floor[0];
+      if (!p) continue;
+      const d = Math.hypot(p.x - t.x, p.z - t.z) + (p.y !== undefined && Math.abs(p.y - top) > 2 ? 100 : 0);
+      if (d < bestD) {
+        bestD = d;
+        best = b;
       }
-    for (let i = cells.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [cells[i], cells[j]] = [cells[j], cells[i]];
     }
-    return cells;
-  });
-  for (const cells of keepFloors) {
-    for (let i = cells.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [cells[i], cells[j]] = [cells[j], cells[i]];
+    if (best && bestD < 14) {
+      // 2 chỗ trên mặt bàn (hai nửa chiều dài).
+      for (const u of [-0.32, 0.32])
+        best.tops.push({ x: t.x + Math.cos(t.yaw || 0) * u, z: t.z - Math.sin(t.yaw || 0) * u, y: top });
     }
-    // Mỗi tầng thành chính được chia đồ nhiều lượt (công trình lớn, nhiều đồ hơn nhà).
-    for (let k = 0; k < 3; k++) slots.push(cells);
   }
-  const order = slots.map((_, i) => i);
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [order[i], order[j]] = [order[j], order[i]];
-  }
+  const order = shuffle(buildings.map((_, i) => i));
   let cursor = 0;
-  const place = (type, count, amount) => {
-    let made = 0,
-      misses = 0;
-    while (made < count && misses < order.length) {
-      const cells = slots[order[cursor % order.length]];
-      cursor++;
-      const cell = cells?.pop();
-      if (!cell) {
-        misses++;
-        continue;
+  const nextBuilding = (need = 1) => {
+    for (let tries = 0; tries < order.length; tries++) {
+      const b = buildings[order[cursor++ % order.length]];
+      if (b.floor.length + b.tops.length >= need) return b;
+    }
+    return null;
+  };
+  // preferTop: ưu tiên mặt bàn (súng, phụ kiện); đồ lặt vặt ưu tiên sàn.
+  const takeCell = (b, preferTop) => (preferTop ? b.tops.pop() || b.floor.pop() : b.floor.pop() || b.tops.pop());
+  const put = (type, cell, amount, extra = {}) => {
+    items.push({
+      id: nextId++,
+      type,
+      x: r2v(cell.x),
+      z: r2v(cell.z),
+      ...(cell.y !== undefined ? { y: cell.y } : {}),
+      amount,
+      ...extra,
+    });
+  };
+  const counts = { ammo: AMMO_BOX_COUNT, medkit: MEDKIT_COUNT, frag: FRAG_COUNT, flash: FLASH_COUNT };
+  // 1) Súng (trên bàn nếu có) + 1–2 hộp đạn 30 viên ngay cạnh, cùng tòa nhà.
+  for (const [weapon, count] of Object.entries(WEAPON_SPAWNS))
+    for (let n = 0; n < count; n++) {
+      const b = nextBuilding(2);
+      if (!b) break;
+      put("weapon", takeCell(b, true), 1, { weapon, ammo: 0, yaw: Math.round(Math.random() * 628) / 100 });
+      for (let k = 0, extra = Math.random() < 0.5 ? 1 : 2; k < extra && counts.ammo > 0; k++) {
+        const cell = takeCell(b, false);
+        if (!cell) break;
+        put("ammo", cell, AMMO_PER_BOX);
+        counts.ammo--;
       }
-      misses = 0;
-      items.push({
-        id: nextId++,
-        type,
-        x: Math.round(cell.x * 100) / 100,
-        z: Math.round(cell.z * 100) / 100,
-        ...(cell.y !== undefined ? { y: cell.y } : {}), // đồ ở tầng trên thành chính
-        amount,
-      });
-      made++;
+    }
+  // 2) Phụ kiện (trên bàn nếu có) + 1 lựu đạn đi kèm (70%).
+  for (const [att, count] of Object.entries(Attach.SPAWNS))
+    for (let n = 0; n < count; n++) {
+      const b = nextBuilding(1);
+      if (!b) break;
+      put("attach", takeCell(b, true), 1, { att, yaw: Math.round(Math.random() * 628) / 100 });
+      if (Math.random() < 0.7) {
+        const kind = Math.random() < 0.6 ? "frag" : "flash";
+        const cell = counts[kind] > 0 ? takeCell(b, false) : null;
+        if (cell) {
+          put(kind, cell, 1);
+          counts[kind]--;
+        }
+      }
+    }
+  // 3) Phần còn lại rải đều (đồ trên sàn đã thưa hơn vì phần lớn đi kèm súng / phụ kiện).
+  const scatter = (type, count, amount) => {
+    for (let n = 0; n < count; n++) {
+      const b = nextBuilding(1);
+      if (!b) break;
+      put(type, takeCell(b, false), amount);
     }
   };
-  // Súng đặt trước (luôn đủ chỗ), rồi tới đạn và bịch máu. Mọi người tiếp
-  // đất tay không → phải vào nhà tìm súng; mỗi khẩu nằm ngang, hướng ngẫu nhiên.
-  for (const [weapon, count] of Object.entries(WEAPON_SPAWNS)) {
-    const before = items.length;
-    place("weapon", count, 1);
-    for (const item of items.slice(before)) {
-      item.weapon = weapon;
-      item.ammo = 0; // súng mới nhặt KHÔNG có đạn sẵn — phải tìm hộp đạn rồi nạp (R)
-      item.yaw = Math.round(Math.random() * 628) / 100;
-    }
-  }
-  place("frag", FRAG_COUNT, 1);
-  place("flash", FLASH_COUNT, 1);
-  place("ammo", AMMO_BOX_COUNT, AMMO_PER_BOX);
-  place("medkit", MEDKIT_COUNT, 1);
-  for (const [att, count] of Object.entries(Attach.SPAWNS)) {
-    const before = items.length;
-    place("attach", count, 1);
-    for (const item of items.slice(before)) {
-      item.att = att;
-      item.yaw = Math.round(Math.random() * 628) / 100;
-    }
-  }
+  scatter("frag", counts.frag, 1);
+  scatter("flash", counts.flash, 1);
+  scatter("ammo", counts.ammo, AMMO_PER_BOX);
+  scatter("medkit", counts.medkit, 1);
   return items;
 }
 // Thông số vũ khí (server là nơi quyết định). "none" = tay không.
@@ -817,7 +860,7 @@ const WEAPON_STATS = {
   sniper: { name: "KAR98K", mag: 5, cooldown: 1500, head: 100, body: 60, range: 140 },
 };
 // Số súng rải trong các khu nhà mỗi trận (sniper tăng từ 2 lên 7 cho dễ tìm hơn).
-const WEAPON_SPAWNS = { ranger: 14, beryl: 10, sniper: 7 };
+const WEAPON_SPAWNS = { ranger: 32, beryl: 24, sniper: 16 };
 const weaponStats = (player) => WEAPON_STATS[player.weapon] || WEAPON_STATS.none;
 // Thời gian nạp đạn (ms): Kar98k mở khóa nòng, ấn kẹp đạn, đóng khóa nòng —
 // lâu hơn nhịp lên đạn giữa 2 phát; súng trường thay băng 1.8 s. Khớp client.
@@ -909,6 +952,11 @@ function raisedSurfacesAt(room, x, z) {
     if (o.type === "stonewall" || o.type === "tower" || o.type === "fortramp") {
       const [lx, lz] = Structures.toLocal(o, x, z);
       Structures.fortSurfaces(o, obstacleBaseY(room, o), lx, lz, out, (gx, gz) => groundHeightAt(room, gx, gz));
+      continue;
+    }
+    if (o.type === "manor") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      Structures.manorSurfaces(o, obstacleBaseY(room, o), lx, lz, out);
       continue;
     }
     if (o.type !== "house" && o.type !== "hut" && o.type !== "rock") continue;
@@ -1076,6 +1124,12 @@ function blockedPosition(
         }
       }
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
+      continue;
+    }
+    if (o.type === "manor" || o.type === "table" || o.type === "chair") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      const rel = mover ? mover.groundY - obstacleBaseY(room, o) : null;
+      if (o.type === "manor" ? Structures.manorBlocked(o, lx, lz, obstacleRadius, rel) : Structures.tableBlocked(o, lx, lz, obstacleRadius, rel)) return true;
       continue;
     }
     if (o.type === "stonewall" || o.type === "tower" || o.type === "fortramp") {
@@ -1939,6 +1993,14 @@ function solidPoint(room, x, y, z, skipGround = false) {
       if (Structures.fortRampSolid(o, lx, y - base, lz, (gx, gz) => groundHeightAt(room, gx, gz))) return true;
       continue;
     }
+    if (o.type === "manor") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      const ry = y - base;
+      for (const b of Structures.manorParts(o))
+        if (Math.abs(lx - b.x) < b.hx && Math.abs(ry - b.y) < b.hy && Math.abs(lz - b.z) < b.hz) return true;
+      continue;
+    }
+    if (o.type === "table" || o.type === "chair") continue; // bàn ghế không che nổ
     const d = Math.hypot(x - o.x, z - o.z);
     if (o.type === "tree") {
       if (d < o.w * 0.25 && y < base + o.h * 0.62) return true;
@@ -3399,6 +3461,16 @@ wss.on("connection", (ws) => {
             const d = rayBox({ x: o.x + c * b.x + sn * b.z, y: baseY + b.y, z: o.z - sn * b.x + c * b.z }, o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz });
             if (d !== null && (wallDistance === undefined || wallDistance === null || d < wallDistance)) wallDistance = d;
           }
+        } else if (o.type === "manor") {
+          // Nhà to: từng đoạn tường / mái (cửa sổ, cửa ra vào bắn xuyên được).
+          const c = Math.cos(o.yaw || 0),
+            sn = Math.sin(o.yaw || 0);
+          for (const b of Structures.manorParts(o)) {
+            const d = rayBox({ x: o.x + c * b.x + sn * b.z, y: baseY + b.y, z: o.z - sn * b.x + c * b.z }, o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz });
+            if (d !== null && (wallDistance === undefined || wallDistance === null || d < wallDistance)) wallDistance = d;
+          }
+        } else if (o.type === "table" || o.type === "chair") {
+          continue; // bàn không chặn đạn
         } else if (o.type === "house" || o.type === "hut") {
           wallDistance = rayBuilding(o);
         } else if (o.type === "tree") {

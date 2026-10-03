@@ -14,7 +14,7 @@
 //   road     {x,z,yaw,length,w}              — san phẳng mặt cắt ngang của đường
 //   pad      {x,z,r}                         — san nền dưới từng căn nhà
 (function (root) {
-  const MAP_HALF = 200;
+  const MAP_HALF = 300; // map 600 × 600 m (đủ rộng cho 5 người)
   const EXTENT = MAP_HALF + 70; // vẽ thêm núi viền ngoài map để không thấy mép vuông
   const CELL = 2;
   const N = Math.round((EXTENT * 2) / CELL) + 1;

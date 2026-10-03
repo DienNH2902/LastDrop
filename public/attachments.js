@@ -20,7 +20,7 @@
   const SLOT_NAMES = { scope: "ỐNG NGẮM", muzzle: "ĐẦU NÒNG", grip: "TAY CẦM", mag: "BĂNG ĐẠN" };
   const PACK_MAX = 8; // số phụ kiện tối đa để trong balo
   // Số món rải trên map mỗi trận.
-  const SPAWNS = { reddot: 14, x4: 9, x8: 5, comp: 9, supp: 7, vgrip: 9, extAR: 9, extSR: 5 };
+  const SPAWNS = { reddot: 30, x4: 20, x8: 11, comp: 20, supp: 16, vgrip: 20, extAR: 20, extSR: 11 };
 
   const fits = (id, weapon) => Boolean(ATTACH[id] && ATTACH[id].guns.includes(weapon));
   // att (object slot → id) <-> chuỗi gọn "scope|muzzle|grip|mag" để gửi qua mạng.
