@@ -272,7 +272,8 @@
   const WALL_TOP = (o) => o.h - 0.4; // mặt lối đi trên tường (so với nền)
   const TOWER_TOP = (o) => o.h - 0.25; // mặt sàn đỉnh tháp
   // Độ cao cầu thang tại lz (dọc thang, +lz đi lên), topRel = đỉnh so với nền thang.
-  const rampRise = (o, lz, topRel) => topRel * Math.max(0, Math.min(1, (lz + o.length / 2) / o.length));
+  // o.overlap: phần đầu thang lấn vào thân tháp — thang lên đủ cao NGAY tại mặt tháp.
+  const rampRise = (o, lz, topRel) => topRel * Math.max(0, Math.min(1, (lz + o.length / 2) / (o.length - (o.overlap || 0))));
   // Đỉnh cầu thang (so với nền thang) = sàn tháp nó dẫn lên.
   const rampTopRel = (o, groundAt) => groundAt(o.tx, o.tz) + o.towerH - groundAt(o.x, o.z);
   function fortSurfaces(o, ground, lx, lz, out, groundAt) {
@@ -313,7 +314,135 @@
     return ry >= -0.2 && ry < rampRise(o, lz, rampTopRel(o, groundAt)) - 0.02;
   }
 
+  // ======================= NHÀ TO NHIỀU PHÒNG (manor) =======================
+  // o.w (bề ngang, trục x) × o.d (bề sâu, trục z), tường cao o.h, mái bằng đứng được.
+  // Cửa chính ở mặt -Z. Bên trong: SẢNH trước + 2 PHÒNG sau (vách ngăn có cửa).
+  // Tường = các đoạn thẳng theo trục, mỗi đoạn có lỗ (cửa / cửa sổ) theo độ cao.
+  const MANOR = { wall: 0.24, doorHalf: 0.85, doorH: 2.35, sill: 1.0, winTop: 2.25, winHalf: 0.65, roof: 0.22, parapet: 0.45, floor: 0.3 };
+  const manorCache = new WeakMap();
+  function manorLayout(o) {
+    let L = manorCache.get(o);
+    if (L) return L;
+    const W = o.w / 2,
+      D = o.d / 2,
+      H = o.h,
+      T = MANOR.wall;
+    const split = D * 0.12; // vách ngang ngăn sảnh / phòng sau (z cục bộ)
+    const door = (u) => ({ u0: u - MANOR.doorHalf, u1: u + MANOR.doorHalf, y0: 0, y1: MANOR.doorH });
+    const win = (u) => ({ u0: u - MANOR.winHalf, u1: u + MANOR.winHalf, y0: MANOR.sill, y1: MANOR.winTop });
+    // Đoạn tường: trục ("x": chạy dọc x tại z = at; "z": chạy dọc z tại x = at), từ u0 → u1.
+    const walls = [
+      { axis: "x", at: -D, u0: -W, u1: W, holes: [door(0), win(-W * 0.6), win(W * 0.6)] }, // mặt trước + cửa chính
+      { axis: "x", at: D, u0: -W, u1: W, holes: [win(-W * 0.5), win(W * 0.5)] }, // mặt sau
+      { axis: "z", at: -W, u0: -D, u1: D, holes: [win(-D * 0.5), win(D * 0.55)] }, // hông trái
+      { axis: "z", at: W, u0: -D, u1: D, holes: [win(-D * 0.5), win(D * 0.55)] }, // hông phải
+      { axis: "x", at: split, u0: -W, u1: W, holes: [door(-W * 0.5), door(W * 0.5)], inner: true }, // vách sảnh ↔ 2 phòng
+      { axis: "z", at: 0, u0: split, u1: D, holes: [], inner: true }, // vách giữa 2 phòng sau
+    ];
+    // Đổi đoạn tường + lỗ thành các hộp đặc (cục bộ, y từ sàn).
+    const boxes = [];
+    for (const w of walls) {
+      const cuts = [...w.holes].sort((a, b) => a.u0 - b.u0);
+      const pushBox = (u0, u1, y0, y1, kind) => {
+        if (u1 - u0 < 0.02 || y1 - y0 < 0.02) return;
+        const cu = (u0 + u1) / 2,
+          hu = (u1 - u0) / 2;
+        if (w.axis === "x") boxes.push({ x: cu, z: w.at, hx: hu, hz: T / 2, y: (y0 + y1) / 2, hy: (y1 - y0) / 2, kind });
+        else boxes.push({ x: w.at, z: cu, hx: T / 2, hz: hu, y: (y0 + y1) / 2, hy: (y1 - y0) / 2, kind });
+      };
+      let u = w.u0;
+      for (const h of cuts) {
+        pushBox(u, h.u0, 0, H, "wall");
+        pushBox(h.u0, h.u1, 0, h.y0, h.y0 > 0 ? "sill" : "wall"); // bệ cửa sổ
+        pushBox(h.u0, h.u1, h.y1, H, "lintel"); // lanh tô trên cửa / cửa sổ
+        u = h.u1;
+      }
+      pushBox(u, w.u1, 0, H, "wall");
+    }
+    // Sàn nhà (tối màu) + mái bằng + lan can mái.
+    // Sàn nâng MANOR.floor m trên nền (nền dốc nhẹ vẫn không trồi lên sàn), đế chìm xuống đất.
+    const floor = { x: 0, z: 0, hx: W, hz: D, y: (MANOR.floor - 0.5) / 2, hy: (MANOR.floor + 0.5) / 2, kind: "floor" };
+    const roof = { x: 0, z: 0, hx: W + 0.15, hz: D + 0.15, y: H + MANOR.roof / 2, hy: MANOR.roof / 2, kind: "roof" };
+    const P = MANOR.parapet,
+      top = H + MANOR.roof;
+    const parapets = [
+      { x: 0, z: -D - 0.05, hx: W + 0.15, hz: 0.1, y: top + P / 2, hy: P / 2, kind: "parapet" },
+      { x: 0, z: D + 0.05, hx: W + 0.15, hz: 0.1, y: top + P / 2, hy: P / 2, kind: "parapet" },
+      { x: -W - 0.05, z: 0, hx: 0.1, hz: D + 0.15, y: top + P / 2, hy: P / 2, kind: "parapet" },
+      { x: W + 0.05, z: 0, hx: 0.1, hz: D + 0.15, y: top + P / 2, hy: P / 2, kind: "parapet" },
+    ];
+    // Ô đặt đồ / bàn trong từng phòng (tránh lối cửa, sát tường).
+    const rooms = [
+      { x0: -W + 0.6, x1: W - 0.6, z0: -D + 0.6, z1: split - 0.6 }, // sảnh
+      { x0: -W + 0.6, x1: -0.6, z0: split + 0.6, z1: D - 0.6 }, // phòng trái
+      { x0: 0.6, x1: W - 0.6, z0: split + 0.6, z1: D - 0.6 }, // phòng phải
+    ];
+    L = { W, D, H, top, split, boxes, floor, roof, parapets, rooms };
+    manorCache.set(o, L);
+    return L;
+  }
+  // Hộp chặn đạn / lựu đạn (cục bộ). Cửa sổ, cửa ra vào là lỗ trống → bắn xuyên được.
+  const manorParts = (o) => {
+    const L = manorLayout(o);
+    return [...L.boxes, L.roof, ...L.parapets];
+  };
+  function manorSurfaces(o, ground, lx, lz, out) {
+    const L = manorLayout(o);
+    if (Math.abs(lx) > L.W + 0.15 || Math.abs(lz) > L.D + 0.15) return;
+    out.push({ height: ground + MANOR.floor, base: ground - 0.9, type: "manorFloor", obstacle: o });
+    out.push({ height: ground + L.top, base: ground + L.top - 1, type: "manorRoof", obstacle: o });
+  }
+  // Va chạm di chuyển (rel = độ cao chân so với nền; null = xe).
+  function manorBlocked(o, lx, lz, r, rel) {
+    const L = manorLayout(o);
+    if (Math.abs(lx) >= L.W + 0.15 + r || Math.abs(lz) >= L.D + 0.15 + r) return false;
+    if (rel === null) return true; // xe không vào nhà
+    if (rel >= L.top - 0.45) {
+      // Trên mái: lan can quanh mép chặn rơi.
+      for (const b of L.parapets) if (Math.abs(lx - b.x) < b.hx + r && Math.abs(lz - b.z) < b.hz + r) return true;
+      return false;
+    }
+    // Trong / ngoài nhà ở mặt đất: chặn bởi đoạn tường đứng (cửa ra vào là lỗ đi qua được).
+    for (const b of L.boxes) {
+      if (b.y - b.hy > 0.3) continue; // lanh tô trên đầu: không vướng
+      if (b.y + b.hy < rel + 0.3) continue;
+      if (Math.abs(lx - b.x) < b.hx + r && Math.abs(lz - b.z) < b.hz + r) return true;
+    }
+    return false;
+  }
+  function manorLootSlots(o) {
+    const L = manorLayout(o);
+    const out = [];
+    for (const room of L.rooms)
+      for (let x = room.x0; x <= room.x1 + 1e-6; x += 1.5)
+        for (let z = room.z0; z <= room.z1 + 1e-6; z += 1.5) {
+          if (z < -L.D + 2 && Math.abs(x) < 1.4) continue; // lối cửa chính
+          if (Math.abs(z - L.split) < 1.4 && (Math.abs(x + L.W * 0.5) < 1.2 || Math.abs(x - L.W * 0.5) < 1.2)) continue; // lối cửa phòng
+          out.push({ lx: x, lz: z });
+        }
+    return out;
+  }
+
+  // ======================= BÀN / GHẾ =======================
+  // table {w (dài, trục x), d (rộng, trục z), h, lift?} · chair {w, h, lift?}. lift = cao độ sàn
+  // đặt đồ (sàn nhà sàn, tầng thành chính) so với mặt đất tại tâm vật.
+  const TABLE_TOP = 0.78;
+  function tableBlocked(o, lx, lz, r, rel) {
+    if (Math.abs(lx) >= o.w / 2 + r || Math.abs(lz) >= o.d / 2 + r) return false;
+    if (rel === null) return false; // bàn nằm trong nhà, xe không tới
+    const floor = o.lift || 0;
+    return rel > floor - 0.6 && rel < floor + TABLE_TOP - 0.25; // đứng cùng sàn: vướng bàn
+  }
+
   const api = {
+    MANOR,
+    manorLayout,
+    manorParts,
+    manorSurfaces,
+    manorBlocked,
+    manorLootSlots,
+    TABLE_TOP,
+    tableBlocked,
     fortSurfaces,
     fortBlocked,
     fortRampSolid,

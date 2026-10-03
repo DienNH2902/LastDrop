@@ -1,6 +1,6 @@
 // Client prototype: Three.js scene, FPS controls and WebSocket room connection.
 import * as THREE from "three";
-import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import {
   buildAug,
   buildKar98,
@@ -122,6 +122,7 @@ let socket = null,
   scene,
   camera,
   renderer,
+  sunLight = null,
   clock,
   gun,
   local = {
@@ -223,7 +224,7 @@ const PLANE_SEATS = [
   [0.9, 0.6],
   [-0.9, -1.0],
 ];
-const MAP_HALF = 200; // map 400 × 400 m, diện tích gấp 4 lần bản hiện tại
+const MAP_HALF = 300; // map 600 × 600 m (khớp terrain.js / server)
 const MAP_SCALE = MAP_HALF / 50;
 const AIR = {
   freefallHoriz: 20, // m/s bay ngang khi rơi tự do
@@ -2017,6 +2018,7 @@ function makeMat(color, roughness = 1) {
 // kỳ hình ảnh nào vì mỗi mảnh vẫn giữ đúng vị trí/xoay/scale gốc, chỉ khác là
 // được "đóng cứng" vào hình học chung thay vì làm một Mesh riêng.
 let mergeBuckets = null;
+const MERGE_CHUNK = 150;
 // Bucket đặc biệt cần vật liệu riêng (không phải Lambert đục của makeMat).
 // Kính cửa sổ: cả map gộp chung MỘT mesh trong suốt → chỉ thêm 1 draw call.
 const BUCKET_MATERIALS = {
@@ -2078,10 +2080,33 @@ function flushMergeBuckets() {
   for (const key in mergeBuckets) {
     const bucket = mergeBuckets[key];
     if (!bucket.parts.length) continue;
-    const merged = mergeGeometries(bucket.parts, false);
-    const mesh = new THREE.Mesh(merged, BUCKET_MATERIALS[key]?.() || makeMat(bucket.color));
-    if (BUCKET_MATERIALS[key]) mesh.renderOrder = 1; // kính trong vẽ sau vật đục
-    scene.add(mesh);
+    // Nhóm theo khu MERGE_CHUNK m: mỗi khu một mesh → khung bóng quanh người chơi
+    // (và camera) chỉ vẽ vài khu gần, không vẽ cả map 2 lần.
+    const groups = new Map();
+    if (bucket.parts.length < 40) groups.set(0, bucket.parts);
+    else
+      for (const g of bucket.parts) {
+        g.computeBoundingSphere();
+        const c = g.boundingSphere.center;
+        const k = Math.floor((c.x + MAP_HALF) / MERGE_CHUNK) * 64 + Math.floor((c.z + MAP_HALF) / MERGE_CHUNK);
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(g);
+      }
+    const special = Boolean(BUCKET_MATERIALS[key]);
+    for (const parts of groups.values()) {
+      const merged = mergeGeometries(parts, false);
+      for (const g of parts) g.dispose();
+      merged.computeBoundingSphere();
+      const mesh = new THREE.Mesh(merged, BUCKET_MATERIALS[key]?.() || makeMat(bucket.color));
+      if (special) mesh.renderOrder = 1; // kính trong vẽ sau vật đục
+      else {
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+      }
+      mesh.matrixAutoUpdate = false; // tĩnh: khỏi tính lại ma trận mỗi khung hình
+      mesh.updateMatrix();
+      scene.add(mesh);
+    }
   }
   mergeBuckets = null;
 }
@@ -2199,6 +2224,11 @@ function raisedSurfacesAt(x, z) {
     if (o.type === "keep") {
       const [lx, lz] = Structures.toLocal(o, x, z);
       Structures.keepSurfaces(o, groundHeightAt(o.x, o.z), lx, lz, out);
+      continue;
+    }
+    if (o.type === "manor") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      Structures.manorSurfaces(o, groundHeightAt(o.x, o.z), lx, lz, out);
       continue;
     }
     if (o.type === "stonewall" || o.type === "tower" || o.type === "fortramp") {
@@ -2444,7 +2474,9 @@ function createGroundMesh(forest) {
       geometry.setAttribute("color", new THREE.BufferAttribute(col, 3));
       geometry.setIndex(index);
       geometry.computeBoundingSphere();
-      scene.add(new THREE.Mesh(geometry, material));
+      const groundChunk = new THREE.Mesh(geometry, material);
+      groundChunk.receiveShadow = true;
+      scene.add(groundChunk);
     }
   addWaterSurfaces(forest);
   addRoadRibbons(forest);
@@ -2661,6 +2693,24 @@ function waterMaterial(kind, options) {
     waterMaterials.set(kind, material);
   }
   return material;
+}
+// Tán lá dùng chung: cầu chia 1 lần, gộp đỉnh (mượt), nhiễu nhẹ cho viền lá lởm chởm.
+let leafBlobBase = null;
+function leafBlobGeometry() {
+  if (!leafBlobBase) {
+    const g = mergeVertices(new THREE.IcosahedronGeometry(1, 1).deleteAttribute("normal").deleteAttribute("uv"));
+    const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i),
+        y = p.getY(i),
+        z = p.getZ(i);
+      const n = 0.86 + 0.26 * window.LDTerrain.valueNoise(x * 3.3 + 1.7, z * 3.3 + y * 2.1, 5);
+      p.setXYZ(i, x * n, y * n * (y < 0 ? 0.7 : 1), z * n);
+    }
+    g.computeVertexNormals();
+    leafBlobBase = g;
+  }
+  return leafBlobBase.clone();
 }
 function drawMapObject(o, forest) {
   const baseY =
@@ -2934,7 +2984,7 @@ function drawMapObject(o, forest) {
       bucketAdd(
         "tree-trunk",
         "#5a4029",
-        new THREE.CylinderGeometry(w * 0.14, w * 0.24, trunkH, 6),
+        new THREE.CylinderGeometry(w * 0.14, w * 0.24, trunkH, 7, 1, true),
         (t) => t.position.set(o.x, baseY - sink + trunkH / 2, o.z),
       );
       if ((o.variant || 0) < 2) {
@@ -2944,7 +2994,7 @@ function drawMapObject(o, forest) {
           bucketAdd(
             tier % 2 ? "pine-a" : "pine-b",
             tier % 2 ? "#2f5e38" : "#274f30",
-            new THREE.ConeGeometry(w * (1.55 - f * 0.9), o.h * 0.36, 8),
+            new THREE.ConeGeometry(w * (1.55 - f * 0.9), o.h * 0.36, 11),
             (t) => {
               t.position.set(o.x, baseY + o.h * (0.34 + f * 0.5), o.z);
               t.rotation.y = (o.yaw || 0) + tier;
@@ -2963,7 +3013,7 @@ function drawMapObject(o, forest) {
           bucketAdd(
             "broadleaf-" + o.variant,
             leaf,
-            new THREE.IcosahedronGeometry(1, 0),
+            leafBlobGeometry(),
             (t) => {
               const r = w * 1.35 * bs;
               const c = Math.cos(o.yaw || 0),
@@ -2978,6 +3028,52 @@ function drawMapObject(o, forest) {
             },
           );
       }
+      break;
+    }
+    case "manor": {
+      // NHÀ TO: tường trát vữa, bệ / lanh tô sẫm, sàn gỗ tối, mái bằng + lan can.
+      const colors = { wall: "#c9bea4", sill: "#8a7a63", lintel: "#8a7a63", floor: "#4a3c2e", roof: "#6d665b", parapet: "#a39880" };
+      const myaw = o.yaw || 0;
+      const place = (t, lx, y, lz) => {
+        const [wx, wz] = Structures.toWorld(o, lx, lz);
+        t.position.set(wx, baseY + y, wz);
+        t.rotation.y = myaw;
+      };
+      const L = Structures.manorLayout(o);
+      for (const b of [...L.boxes, L.floor, L.roof, ...L.parapets]) {
+        const key = "manor_" + b.kind;
+        bucketAdd(key, colors[b.kind], new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2), (t) => place(t, b.x, b.y, b.z));
+      }
+      // Chân tường đá sẫm quanh nhà cho đỡ "hộp".
+      bucketAdd("manor_sill", colors.sill, new THREE.BoxGeometry(L.W * 2 + 0.3, 0.35, L.D * 2 + 0.3), (t) => place(t, 0, 0.12, 0));
+      break;
+    }
+    case "table": {
+      const top = o.lift ? 0 : 0; // baseY đã gồm lift
+      const tyaw = o.yaw || 0;
+      const place = (t, lx, y, lz) => {
+        const [wx, wz] = Structures.toWorld(o, lx, lz);
+        t.position.set(wx, baseY + y + top, wz);
+        t.rotation.y = tyaw;
+      };
+      bucketAdd("tbl_wood", "#5a3f28", new THREE.BoxGeometry(o.w, 0.06, o.d), (t) => place(t, 0, Structures.TABLE_TOP - 0.03, 0));
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]])
+        bucketAdd("tbl_wood", "#5a3f28", new THREE.BoxGeometry(0.07, Structures.TABLE_TOP - 0.06, 0.07), (t) => place(t, sx * (o.w / 2 - 0.08), (Structures.TABLE_TOP - 0.06) / 2, sz * (o.d / 2 - 0.08)));
+      break;
+    }
+    case "chair": {
+      const cy = groundHeightAt(o.x, o.z) + (o.lift || 0);
+      const cyaw = o.yaw || 0;
+      const place = (t, lx, y, lz) => {
+        const [wx, wz] = Structures.toWorld(o, lx, lz);
+        t.position.set(wx, cy + y, wz);
+        t.rotation.y = cyaw;
+      };
+      const S = 0.44;
+      bucketAdd("chr_wood", "#6e4e31", new THREE.BoxGeometry(S, 0.05, S), (t) => place(t, 0, 0.45, 0));
+      bucketAdd("chr_wood", "#6e4e31", new THREE.BoxGeometry(S, 0.45, 0.05), (t) => place(t, 0, 0.7, S / 2 - 0.02));
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]])
+        bucketAdd("chr_wood", "#6e4e31", new THREE.BoxGeometry(0.05, 0.45, 0.05), (t) => place(t, sx * (S / 2 - 0.04), 0.225, sz * (S / 2 - 0.04)));
       break;
     }
     case "keep": {
@@ -3088,6 +3184,7 @@ function drawMapObject(o, forest) {
         [-L / 2, -1.2],
         [L / 2, -1.2],
         [L / 2, topRel],
+        [L / 2 - (o.overlap || 0), topRel],
         [-L / 2, 0],
       ];
       const geo = prismGeometry(pts, o.w).rotateY(-Math.PI / 2);
@@ -3229,21 +3326,19 @@ function drawMapObject(o, forest) {
       const colorA = forest ? "#6f7465" : "#9a7552";
       const colorB = forest ? "#5f6557" : "#86613f";
       const makeRock = (sx, sy, sz, y, spin, color) => {
-        const g = new THREE.DodecahedronGeometry(0.5, 1);
+        // Cầu chia mịn + gộp đỉnh trùng → pháp tuyến mượt, đá tròn lì tự nhiên, hết "khối hộp".
+        const g = mergeVertices(new THREE.IcosahedronGeometry(0.5, 2).deleteAttribute("normal").deleteAttribute("uv"));
         const p = g.attributes.position;
         for (let i = 0; i < p.count; i++) {
           const vx = p.getX(i),
             vy = p.getY(i),
             vz = p.getZ(i);
+          // 2 lớp nhiễu (khối lớn + gồ nhỏ); đáy phẳng bớt để đá ngồi chắc trên đất.
           const n =
-            0.78 +
-            0.44 *
-              window.LDTerrain.valueNoise(
-                vx * 3.1 + o.x * 0.37,
-                vz * 3.1 + vy * 2.3 + o.z * 0.37,
-                7,
-              );
-          p.setXYZ(i, vx * n, vy * n, vz * n);
+            0.8 +
+            0.32 * window.LDTerrain.valueNoise(vx * 2.4 + o.x * 0.37, vz * 2.4 + vy * 1.9 + o.z * 0.37, 7) +
+            0.1 * window.LDTerrain.valueNoise(vx * 7.3 + o.z * 0.21, vy * 7.3 + vz * 5.1 + o.x * 0.21, 11);
+          p.setXYZ(i, vx * n, vy < -0.2 ? vy * n * 0.6 - 0.08 : vy * n, vz * n);
         }
         g.computeVertexNormals();
         bucketAdd("rock-" + color, color, g, (t) => {
@@ -3342,6 +3437,11 @@ function underStiltFloorAt(x, z) {
 function nearHouse(x, z, margin) {
   for (const o of obstaclesNear(x, z))
     if (o.type === "keep" && Math.max(...Structures.toLocal(o, x, z).map(Math.abs)) < o.w / 2 + margin + 0.5) return true; // không mọc cỏ xuyên sàn thành
+  for (const o of obstaclesNear(x, z))
+    if (o.type === "manor") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Math.abs(lx) < o.w / 2 + margin + 0.6 && Math.abs(lz) < o.d / 2 + margin + 0.6) return true; // không mọc cỏ xuyên sàn nhà to
+    }
   for (const o of obstaclesNear(x, z))
     if (
       (o.type === "house" || o.type === "hut") &&
@@ -3544,6 +3644,12 @@ function isBlockedAt(x, z, radiusOverride = null) {
     if (o.type === "keep") {
       const [lx, lz] = Structures.toLocal(o, x, z);
       if (Structures.keepBlocked(o, lx, lz, obstacleRadius, local.groundY - groundHeightAt(o.x, o.z))) return true;
+      continue;
+    }
+    if (o.type === "manor" || o.type === "table" || o.type === "chair") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      const rel = local.groundY - groundHeightAt(o.x, o.z);
+      if (o.type === "manor" ? Structures.manorBlocked(o, lx, lz, obstacleRadius, rel) : Structures.tableBlocked(o, lx, lz, obstacleRadius, rel)) return true;
       continue;
     }
     if (o.type === "stonewall" || o.type === "tower" || o.type === "fortramp") {
@@ -4007,6 +4113,12 @@ function carPointBlocked(ownId, x, z) {
       if (Structures.keepBlocked(o, lx, lz, r, null)) return true;
       continue;
     }
+    if (o.type === "manor") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      if (Structures.manorBlocked(o, lx, lz, r, null)) return true;
+      continue;
+    }
+    if (o.type === "table" || o.type === "chair") continue;
     if (o.type === "fortramp" || o.type === "tower") {
       const [lx, lz] = Structures.toLocal(o, x, z);
       if (Structures.fortBlocked(o, lx, lz, r, null, groundHeightAt)) return true;
@@ -4458,22 +4570,31 @@ function initWorld() {
   // Render to the actual game panel, not the full browser window. The HUD
   // crosshair is centered in this panel; using innerHeight shifts the shot ray.
   renderer.setSize(viewport.width, viewport.height);
-  renderer.shadowMap.enabled = false;
+  // Màu tươi + dải sáng tự nhiên (Neutral giữ độ bão hoà, không bệch như ACES).
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = 1.08;
+  renderer.shadowMap.enabled = shadowQuality() > 0;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.domElement.style.display = "block";
   renderer.domElement.style.position = "absolute";
   renderer.domElement.style.inset = "0";
   host.append(renderer.domElement);
   clock = new THREE.Clock();
+  // Trời + nắng: ánh sáng môi trường dịu hơn để bóng đổ / trong nhà tối hơn rõ,
+  // nắng gắt hơn để ngoài trời tươi. Nắng chiếu xiên → lọt qua cửa sổ xuống sàn.
   scene.add(
     new THREE.HemisphereLight(
-      forest ? 0xe0f5d9 : 0xffedcc,
-      forest ? 0x334d30 : 0x66543b,
-      2,
+      forest ? 0xd8f0ff : 0xfff0d8,
+      forest ? 0x3b4a2c : 0x6a5438,
+      1.35,
     ),
   );
-  const sun = new THREE.DirectionalLight(0xffedc5, 2);
+  const sun = new THREE.DirectionalLight(0xfff0d0, 3.1);
   sun.position.set(-15, 30, 12);
-  scene.add(sun);
+  sun.target.position.set(0, 0, 0);
+  scene.add(sun, sun.target);
+  sunLight = sun;
+  configureSunShadow();
 
   if (!mapObstacles.length) {
     setMapObstacles(gameState?.obstacles || []);
@@ -4689,8 +4810,60 @@ function graphicsPixelRatio() {
     resolutionScale
   );
 }
+// Bóng đổ theo chất lượng: Performance tắt · Balanced 1024 · High 2048.
+function shadowQuality() {
+  const q = $("#quality")?.value;
+  return q === "High" ? 2048 : q === "Balanced" ? 1024 : 0;
+}
+const SUN_DIR = new THREE.Vector3(-15, 30, 12).normalize();
+function configureSunShadow() {
+  if (!sunLight || !renderer) return;
+  const size = shadowQuality();
+  const on = size > 0;
+  const wasOn = renderer.shadowMap.enabled;
+  renderer.shadowMap.enabled = on;
+  sunLight.castShadow = on;
+  if (on) {
+    const cam = sunLight.shadow.camera;
+    const R = size >= 2048 ? 60 : 42; // vùng có bóng quanh người chơi (m)
+    cam.left = -R;
+    cam.right = R;
+    cam.top = R;
+    cam.bottom = -R;
+    cam.near = 1;
+    cam.far = 260;
+    cam.updateProjectionMatrix();
+    sunLight.shadow.bias = -0.0004;
+    sunLight.shadow.normalBias = 0.04;
+    sunLight.shadow.radius = 2;
+    if (sunLight.shadow.mapSize.x !== size) {
+      sunLight.shadow.mapSize.set(size, size);
+      sunLight.shadow.map?.dispose();
+      sunLight.shadow.map = null;
+    }
+  }
+  // Bật / tắt bóng cần biên dịch lại shader của vật liệu.
+  if (wasOn !== on)
+    scene?.traverse((o) => {
+      if (!o.material) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.needsUpdate = true;
+    });
+}
+// Mặt trời đi theo camera: khung bóng luôn phủ quanh người chơi; bám lưới theo
+// kích thước texel để bóng không "rung" khi di chuyển.
+const sunSnap = new THREE.Vector3();
+function updateSun() {
+  if (!sunLight?.castShadow) return;
+  const cam = sunLight.shadow.camera;
+  const step = (cam.right - cam.left) / sunLight.shadow.mapSize.x;
+  sunSnap.set(Math.round(camera.position.x / step) * step, Math.round(camera.position.y / step) * step, Math.round(camera.position.z / step) * step);
+  sunLight.target.position.copy(sunSnap);
+  sunLight.position.copy(sunSnap).addScaledVector(SUN_DIR, 120);
+  sunLight.target.updateMatrixWorld();
+}
 function applyGraphicsSettings() {
   if (!renderer) return;
+  configureSunShadow();
   renderer.setPixelRatio(graphicsPixelRatio());
   const viewport = $("#world").getBoundingClientRect();
   renderer.setSize(viewport.width, viewport.height);
@@ -7646,6 +7819,14 @@ function solidPointClient(x, y, z) {
       if (Structures.keepRampSolid(lx, ry, lz)) return true;
       continue;
     }
+    if (o.type === "manor") {
+      const [lx, lz] = Structures.toLocal(o, x, z);
+      const ry = y - base;
+      for (const bx of Structures.manorParts(o))
+        if (Math.abs(lx - bx.x) < bx.hx && Math.abs(ry - bx.y) < bx.hy && Math.abs(lz - bx.z) < bx.hz) return true;
+      continue;
+    }
+    if (o.type === "table" || o.type === "chair") continue;
     if (o.type === "fence" || o.type === "stonewall") {
       if (y < base + o.h && fenceBlocks(o, x, z, 0)) return true;
       continue;
@@ -9470,6 +9651,16 @@ function minimapBase(S, forest, k, X, Y) {
       const sz = Math.max(3, o.w * k);
       ctx.fillStyle = "#e2d8b8";
       ctx.fillRect(X(o.x) - sz / 2, Y(o.z) - sz / 2, sz, sz);
+    } else if (o.type === "manor") {
+      ctx.save();
+      ctx.translate(X(o.x), Y(o.z));
+      ctx.rotate(-(o.yaw || 0));
+      ctx.fillStyle = "#b9ad93";
+      ctx.fillRect((-o.w * k) / 2, (-o.d * k) / 2, o.w * k, o.d * k);
+      ctx.strokeStyle = "#5b5345";
+      ctx.lineWidth = 1;
+      ctx.strokeRect((-o.w * k) / 2, (-o.d * k) / 2, o.w * k, o.d * k);
+      ctx.restore();
     } else if (o.type === "keep") {
       const sz = o.w * k;
       ctx.save();
@@ -11211,6 +11402,7 @@ function frame() {
     camera.position.set(deathView.x, deathView.y + 45, deathView.z);
     camera.lookAt(deathView.x, deathView.y, deathView.z);
   }
+  updateSun();
   if (screenShake > 0 && camera) {
     const sx = (Math.random() - 0.5) * screenShake * 0.12,
       sy = (Math.random() - 0.5) * screenShake * 0.12;
