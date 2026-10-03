@@ -1844,8 +1844,16 @@ function connect(message) {
       ) {
         if (!inMatch) beginGame();
         renderPlayers(m);
-        if (deathView) announceMatchOverWhileSpectating();
-        else if (local.hp <= 0) beginDeathView(local);
+        if (deathView || local.hp <= 0) {
+          // Đã bị hạ (đang xem người khác / đang xem xác mình): ra bảng kết quả NGAY,
+          // 10 giây sau tự về trang chủ (bấm nút về Home trước cũng được).
+          showResult();
+          clearTimeout(window.__ldAutoHome);
+          window.__ldAutoHome = setTimeout(() => {
+            if ($("#result")?.classList.contains("active")) $("#trophyHomeBtn")?.click();
+            else if ($("#game")?.classList.contains("active")) show("menu"); // phòng hờ: không mở được kết quả thì vẫn về Home
+          }, 10000);
+        }
         else if ((Number(m.total) || 0) > 1) showVictory();
         else showResult();
       }
@@ -2980,7 +2988,7 @@ function drawMapObject(o, forest) {
       // Hai dáng cây: thông nhiều tầng (variant 0–1) và cây lá rộng tán tròn
       // (variant 2–3). Gốc lún 0.5 m để cây trên sườn dốc không bị hở chân.
       const sink = 0.5;
-      const trunkH = o.h * (o.variant >= 2 ? 0.5 : 0.62) + sink;
+      const trunkH = o.h * (o.variant >= 2 ? 0.74 : 0.66) + sink; // thân xuyên vào trong tán lá, không hở
       bucketAdd(
         "tree-trunk",
         "#5a4029",
@@ -5673,13 +5681,13 @@ function addCrateMesh(crate) {
   if (!scene || crate.mesh) return;
   const root = new THREE.Group();
   root.userData.interactionTarget = { kind: "crate", id: crate.id };
-  const orange = makeMat("#e87520", 0.88);
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.62, 0.72), orange);
+  const purple = makeMat("#7a3fc4", 0.88);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.62, 0.72), purple);
   body.position.y = 0.34;
   root.add(body);
   const lid = new THREE.Mesh(
     new THREE.BoxGeometry(1.02, 0.12, 0.78),
-    makeMat("#ff922f", 0.8),
+    makeMat("#9b5ce6", 0.8),
   );
   lid.position.y = 0.69;
   root.add(lid);
