@@ -5,7 +5,7 @@
 // gameplay (va chạm, loot, xe, nước, cầu) vẫn đọc đúng các trường như trước.
 //
 // Nguyên tắc:
-// - Núi = chuỗi khối elip xoay nối nhau thành DÃY dài, cao 30m đến 70 m, phủ ~40%
+// - Núi = chuỗi khối elip xoay nối nhau thành DÃY dài, cao từ 30 m đến 70 m, phủ ~40%
 //   (rừng) / ~60% (sa mạc) diện tích; viền map là núi uốn lượn để không lộ mép vuông.
 // - Nhà gom thành làng; đường cong nối các làng, cắt nhau trên đất liền, qua
 //   sông bằng cầu có rào; có đường lên núi.
