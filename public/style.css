@@ -3594,3 +3594,7 @@ textarea {
   90% { transform: scale(0.98, 1.03); }
   100% { transform: scale(1, 1); opacity: 1; }
 }
+
+/* Sắp chạm đất: buông dây điều khiển dù (tay 2D) — tay 3D bắt chéo trước ngực thay thế. */
+.chute-overlay { transition: opacity 0.18s ease-out; }
+.chute-overlay.bracing { opacity: 0 !important; }
