@@ -722,7 +722,14 @@ function createLoot(room) {
     return arr;
   };
   const tables = room.obstacles.filter((o) => o.type === "table");
-  const nearTable = (x, z) => tables.some((t) => Math.hypot(t.x - x, t.z - z) < 1.15);
+  // Ô đặt đồ không được nằm trên / sát bàn, giường, kệ sách.
+  const furniture = room.obstacles.filter((o) => o.type === "table" || o.type === "bed" || o.type === "shelf");
+  const nearTable = (x, z) =>
+    furniture.some((t) => {
+      if (Math.abs(t.x - x) > 2.5 || Math.abs(t.z - z) > 2.5) return false;
+      const [lx, lz] = Structures.toLocal(t, x, z);
+      return Math.abs(lx) < t.w / 2 + 0.45 && Math.abs(lz) < t.d / 2 + 0.45;
+    });
   const toWorld = (o, lx, lz) => {
     const c = Math.cos(o.yaw || 0),
       sn = Math.sin(o.yaw || 0);
@@ -1126,7 +1133,7 @@ function blockedPosition(
       if (blockedByBuilding(o, x, z, obstacleRadius)) return true;
       continue;
     }
-    if (o.type === "manor" || o.type === "table" || o.type === "chair") {
+    if (o.type === "manor" || o.type === "table" || o.type === "chair" || o.type === "bed" || o.type === "shelf") {
       const [lx, lz] = Structures.toLocal(o, x, z);
       const rel = mover ? mover.groundY - obstacleBaseY(room, o) : null;
       if (o.type === "manor" ? Structures.manorBlocked(o, lx, lz, obstacleRadius, rel) : Structures.tableBlocked(o, lx, lz, obstacleRadius, rel)) return true;
@@ -2001,7 +2008,7 @@ function solidPoint(room, x, y, z, skipGround = false) {
         if (Math.abs(lx - b.x) < b.hx && Math.abs(ry - b.y) < b.hy && Math.abs(lz - b.z) < b.hz) return true;
       continue;
     }
-    if (o.type === "table" || o.type === "chair") continue; // bàn ghế không che nổ
+    if (o.type === "table" || o.type === "chair" || o.type === "bed" || o.type === "shelf") continue; // đồ đạc không che nổ
     const d = Math.hypot(x - o.x, z - o.z);
     if (o.type === "tree") {
       if (d < o.w * 0.25 && y < base + o.h * 0.62) return true;
@@ -3470,7 +3477,7 @@ wss.on("connection", (ws) => {
             const d = rayBox({ x: o.x + c * b.x + sn * b.z, y: baseY + b.y, z: o.z - sn * b.x + c * b.z }, o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz });
             if (d !== null && (wallDistance === undefined || wallDistance === null || d < wallDistance)) wallDistance = d;
           }
-        } else if (o.type === "table" || o.type === "chair") {
+        } else if (o.type === "table" || o.type === "chair" || o.type === "bed" || o.type === "shelf") {
           continue; // bàn không chặn đạn
         } else if (o.type === "house" || o.type === "hut") {
           wallDistance = rayBuilding(o);

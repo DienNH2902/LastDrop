@@ -985,6 +985,62 @@ function createObstacles(seed, mapId) {
     if (h.type !== "house") continue;
     furnish(h, rand(-0.15, 0.15) * h.w * 0.5, h.w * 0.18, random() < 0.5 ? 0 : Math.PI / 2, h.lift || 0);
   }
+  // ---------------- Đồ trang trí trong nhà ----------------
+  // Giường, kệ sách (rắn, chặn đi lại) + thảm, giày dép, gương (chỉ để nhìn).
+  // Mọi thứ nằm trong dữ liệu map → client vẽ 1 lần lúc dựng map, gộp chung
+  // mesh như nhà / cây, không tốn gì thêm khi chơi.
+  const decor = (host, type, lx, lz, yaw, extra, lift = 0) => {
+    const c = Math.cos(host.yaw || 0),
+      sn = Math.sin(host.yaw || 0);
+    obstacles.push({
+      type,
+      x: round(host.x + c * lx + sn * lz),
+      z: round(host.z - sn * lx + c * lz),
+      yaw: round((host.yaw || 0) + yaw),
+      lift: lift || undefined,
+      v: Math.floor(random() * 4), // biến thể màu
+      ...extra,
+    });
+  };
+  const BED = { w: 2.0, d: 0.95, h: 0.55, solid: true }, // w = chiều dài giường
+    SHELF = { w: 1.2, d: 0.34, h: 1.8, solid: true },
+    RUG = { w: 1.9, d: 1.25, h: 0.02, solid: false },
+    SHOES = { w: 0.5, d: 0.3, h: 0.1, solid: false },
+    MIRROR = { w: 0.6, d: 0.04, h: 1.0, solid: false };
+  for (const h of houses) {
+    const half = h.w / 2,
+      lift = h.lift || 0,
+      inner = half - 0.12; // mặt trong tường
+    decor(h, "rug", rand(-0.3, 0.3), -half * 0.32, rand(-0.1, 0.1), RUG, lift);
+    decor(h, "shoes", 0.95 + rand(0, 0.25), -inner + 0.3, rand(-0.4, 0.4), SHOES, lift); // cạnh cửa ra vào
+    if (h.type !== "house") continue;
+    // Giường dọc tường hông phải, đầu giường sát tường sau.
+    decor(h, "bed", inner - BED.d / 2 - 0.02, inner - BED.w / 2 - 0.02, -Math.PI / 2, BED, lift);
+    // Kệ sách áp tường sau, lệch trái.
+    decor(h, "shelf", -half * 0.45, inner - SHELF.d / 2 - 0.02, 0, SHELF, lift);
+    // Gương treo tường hông trái (xa cửa sổ giữa tường).
+    decor(h, "mirror", -inner + 0.03, half * 0.52, Math.PI / 2, MIRROR, lift);
+  }
+  for (const mn of manors) {
+    const L = Structures.manorLayout(mn);
+    const F = Structures.MANOR.floor;
+    const [hall, left, right] = L.rooms;
+    const inX0 = -L.W + 0.12,
+      inZ1 = L.D - 0.12;
+    decor(mn, "rug", 0, (hall.z0 + hall.z1) / 2, 0, { ...RUG, w: 2.6, d: 1.6 }, F);
+    decor(mn, "shoes", 1.25, -L.D + 0.45, 0, SHOES, F);
+    decor(mn, "shoes", -1.3, -L.D + 0.42, 0.3, SHOES, F);
+    // Kệ sách áp vách sảnh ở GIỮA 2 cửa phòng (cửa phòng ở x = ±W/2 → không chắn lối).
+    decor(mn, "shelf", 0, L.split - 0.12 - SHELF.d / 2 - 0.02, 0, SHELF, F);
+    // 2 phòng ngủ: giường sát tường sau ở góc ngoài, kệ sách áp vách giữa, gương, thảm.
+    for (const [room, sx] of [[left, -1], [right, 1]]) {
+      decor(mn, "bed", sx * (-inX0 - BED.d / 2 - 0.02), inZ1 - BED.w / 2 - 0.02, -Math.PI / 2, BED, F);
+      decor(mn, "shelf", sx * (0.12 + SHELF.d / 2 + 0.02), (room.z0 + room.z1) / 2, sx > 0 ? -Math.PI / 2 : Math.PI / 2, SHELF, F);
+      decor(mn, "mirror", sx * (0.12 + 0.03), room.z0 + 0.55, sx > 0 ? Math.PI / 2 : -Math.PI / 2, MIRROR, F);
+      // Thảm cạnh giường (phía trước giường, sát tường ngoài), KHÔNG nằm dưới bàn ghế giữa phòng.
+      decor(mn, "rug", sx * (L.W - 1.2), inZ1 - BED.w - 0.75, 0, RUG, F);
+    }
+  }
   for (const mn of manors)
     Structures.manorLayout(mn).rooms.forEach((room, i) => {
       // Sảnh: bàn lệch sang góc, chừa lối từ cửa chính tới 2 cửa phòng.

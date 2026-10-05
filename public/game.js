@@ -2720,6 +2720,92 @@ function leafBlobGeometry() {
   }
   return leafBlobBase.clone();
 }
+// Đồ trang trí nội thất: gộp vào bucket theo màu (vẽ 1 lần lúc dựng map).
+const DECOR_COLORS = {
+  wood: ["#6b4a30", "#5a3d27", "#7a5638", "#4e3524"],
+  sheet: ["#d9d4c4", "#c9d2d8", "#d8c9b4", "#cfd6c3"],
+  blanket: ["#7c3b34", "#35506e", "#4f6b3a", "#8a6a3a"],
+  rug: ["#8a3b30", "#3d4f6b", "#6b5a2e", "#5a3550"],
+  rugEdge: ["#c8a46a", "#b9b39b", "#a8573b", "#c9b37e"],
+  book: ["#8a2f2a", "#2f4f7a", "#3f6b3a", "#b08a3a", "#5a3a6b", "#2e2e2e", "#a65a2a"],
+  shoe: ["#2a2622", "#5a3a24", "#3a3f4a", "#7a6a55"],
+};
+function drawDecor(o) {
+  const v = o.v || 0;
+  const by = groundHeightAt(o.x, o.z) + (o.lift || 0);
+  const yaw = o.yaw || 0;
+  const put = (key, color, geo, lx, y, lz, ry = 0) =>
+    bucketAdd(key, color, geo, (t) => {
+      const [wx, wz] = Structures.toWorld(o, lx, lz);
+      t.position.set(wx, by + y, wz);
+      t.rotation.y = yaw + ry;
+    });
+  const W = o.w,
+    D = o.d;
+  if (o.type === "rug") {
+    // Thảm: viền + nền + hoạ tiết sọc, sát sàn (không nhấp nháy với sàn).
+    put("decor-rugEdge-" + v, DECOR_COLORS.rugEdge[v], new THREE.BoxGeometry(W, 0.012, D), 0, 0.012, 0);
+    put("decor-rug-" + v, DECOR_COLORS.rug[v], new THREE.BoxGeometry(W - 0.16, 0.014, D - 0.16), 0, 0.016, 0);
+    for (const k of [-0.25, 0, 0.25])
+      put("decor-rugEdge-" + v, DECOR_COLORS.rugEdge[v], new THREE.BoxGeometry(0.05, 0.016, D - 0.34), k * W, 0.018, 0);
+  } else if (o.type === "shoes") {
+    // Đôi giày: đế + thân + mũi bo, hơi lệch nhau như vừa cởi ra.
+    const col = DECOR_COLORS.shoe[v];
+    for (const [sx, rot, dz] of [[-0.08, 0.12, 0], [0.09, -0.2, 0.05]]) {
+      put("decor-sole", "#1b1916", new THREE.BoxGeometry(0.1, 0.025, 0.27), sx, 0.013, dz, rot);
+      put("decor-shoe-" + v, col, new THREE.BoxGeometry(0.095, 0.07, 0.17), sx, 0.06, dz + 0.04, rot);
+      put("decor-shoe-" + v, col, new THREE.SphereGeometry(0.05, 8, 6).scale(1, 0.7, 1.1), sx, 0.045, dz - 0.07, rot);
+    }
+  } else if (o.type === "mirror") {
+    // Gương treo tường: khung gỗ + mặt kính sáng (phản chiếu giả bằng màu sáng xanh bạc).
+    put("decor-wood-" + v, DECOR_COLORS.wood[v], new THREE.BoxGeometry(W, o.h, 0.04), 0, 1.0 + o.h / 2, 0);
+    put("decor-glass", "#bcd3dc", new THREE.BoxGeometry(W - 0.1, o.h - 0.1, 0.02), 0, 1.0 + o.h / 2, 0.016);
+  } else if (o.type === "bed") {
+    // Giường: khung gỗ, chân, đầu giường cao, nệm, ga, chăn gấp, gối.
+    const wood = DECOR_COLORS.wood[v];
+    put("decor-wood-" + v, wood, new THREE.BoxGeometry(W, 0.18, D), 0, 0.2, 0);
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]])
+      put("decor-wood-" + v, wood, new THREE.BoxGeometry(0.07, 0.12, 0.07), sx * (W / 2 - 0.05), 0.06, sz * (D / 2 - 0.05));
+    put("decor-wood-" + v, wood, new THREE.BoxGeometry(0.07, 0.95, D), W / 2 - 0.035, 0.47, 0); // đầu giường
+    put("decor-wood-" + v, wood, new THREE.BoxGeometry(0.06, 0.45, D), -W / 2 + 0.03, 0.25, 0); // cuối giường
+    put("decor-sheet-" + v, DECOR_COLORS.sheet[v], new THREE.BoxGeometry(W - 0.14, 0.16, D - 0.06), 0, 0.37, 0);
+    put("decor-blanket-" + v, DECOR_COLORS.blanket[v], new THREE.BoxGeometry(W * 0.55, 0.05, D - 0.02), -W * 0.18, 0.47, 0);
+    put("decor-blanket-" + v, DECOR_COLORS.blanket[v], new THREE.BoxGeometry(W * 0.12, 0.08, D - 0.04), W * 0.12, 0.49, 0); // mép chăn gấp
+    put("decor-sheet-" + ((v + 1) % 4), DECOR_COLORS.sheet[(v + 1) % 4], new THREE.SphereGeometry(0.2, 10, 6).scale(1, 0.38, 1.7), W / 2 - 0.3, 0.5, 0);
+  } else if (o.type === "shelf") {
+    // Kệ sách: 2 vách, nóc, đáy, 4 tầng, sách đủ màu cao thấp xen kẽ, vài cuốn nằm.
+    const wood = DECOR_COLORS.wood[v];
+    for (const sx of [-1, 1]) put("decor-wood-" + v, wood, new THREE.BoxGeometry(0.04, o.h, D), sx * (W / 2 - 0.02), o.h / 2, 0);
+    put("decor-wood-" + v, wood, new THREE.BoxGeometry(W, 0.03, 0.02), 0, o.h / 2, D / 2 - 0.01); // lưng kệ (mỏng)
+    put("decor-wood-" + v, wood, new THREE.BoxGeometry(W, o.h, 0.015), 0, o.h / 2, D / 2 - 0.008);
+    const levels = 4;
+    let seed = Math.abs(Math.round(o.x * 13.7 + o.z * 7.3)) + 1;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    for (let i = 0; i <= levels; i++) {
+      const y = 0.04 + (i * (o.h - 0.08)) / levels;
+      put("decor-wood-" + v, wood, new THREE.BoxGeometry(W - 0.06, 0.03, D - 0.02), 0, y, 0);
+      if (i === levels) break;
+      const gap = (o.h - 0.08) / levels;
+      for (let x = -W / 2 + 0.06; x < W / 2 - 0.1; ) {
+        if (rnd() < 0.12) {
+          x += 0.08 + rnd() * 0.12; // chỗ trống
+          continue;
+        }
+        const bw = 0.04 + rnd() * 0.05, // gáy sách dày vừa: ít khối hơn, nhìn vẫn thật
+          bh = gap * (0.6 + rnd() * 0.3);
+        const ci = Math.floor(rnd() * DECOR_COLORS.book.length);
+        if (rnd() < 0.08) {
+          // cuốn sách nằm ngang
+          put("decor-book-" + ci, DECOR_COLORS.book[ci], new THREE.BoxGeometry(0.2, 0.035, D * 0.75), x + 0.1, y + 0.033, -0.01);
+          x += 0.22;
+          continue;
+        }
+        put("decor-book-" + ci, DECOR_COLORS.book[ci], new THREE.BoxGeometry(bw, bh, D * (0.7 + rnd() * 0.2)), x + bw / 2, y + 0.015 + bh / 2, -0.01, (rnd() - 0.5) * 0.06);
+        x += bw + 0.004;
+      }
+    }
+  }
+}
 function drawMapObject(o, forest) {
   const baseY =
     o.type === "hill" || o.solid === false ? 0 : groundHeightAt(o.x, o.z) + (o.lift || 0);
@@ -3069,6 +3155,13 @@ function drawMapObject(o, forest) {
         bucketAdd("tbl_wood", "#5a3f28", new THREE.BoxGeometry(0.07, Structures.TABLE_TOP - 0.06, 0.07), (t) => place(t, sx * (o.w / 2 - 0.08), (Structures.TABLE_TOP - 0.06) / 2, sz * (o.d / 2 - 0.08)));
       break;
     }
+    case "bed":
+    case "shelf":
+    case "rug":
+    case "shoes":
+    case "mirror":
+      drawDecor(o);
+      break;
     case "chair": {
       const cy = groundHeightAt(o.x, o.z) + (o.lift || 0);
       const cyaw = o.yaw || 0;
@@ -3654,7 +3747,7 @@ function isBlockedAt(x, z, radiusOverride = null) {
       if (Structures.keepBlocked(o, lx, lz, obstacleRadius, local.groundY - groundHeightAt(o.x, o.z))) return true;
       continue;
     }
-    if (o.type === "manor" || o.type === "table" || o.type === "chair") {
+    if (o.type === "manor" || o.type === "table" || o.type === "chair" || o.type === "bed" || o.type === "shelf") {
       const [lx, lz] = Structures.toLocal(o, x, z);
       const rel = local.groundY - groundHeightAt(o.x, o.z);
       if (o.type === "manor" ? Structures.manorBlocked(o, lx, lz, obstacleRadius, rel) : Structures.tableBlocked(o, lx, lz, obstacleRadius, rel)) return true;
@@ -4126,7 +4219,7 @@ function carPointBlocked(ownId, x, z) {
       if (Structures.manorBlocked(o, lx, lz, r, null)) return true;
       continue;
     }
-    if (o.type === "table" || o.type === "chair") continue;
+    if (o.type === "table" || o.type === "chair" || o.type === "bed" || o.type === "shelf") continue;
     if (o.type === "fortramp" || o.type === "tower") {
       const [lx, lz] = Structures.toLocal(o, x, z);
       if (Structures.fortBlocked(o, lx, lz, r, null, groundHeightAt)) return true;
@@ -4594,10 +4687,10 @@ function initWorld() {
     new THREE.HemisphereLight(
       forest ? 0xd8f0ff : 0xfff0d8,
       forest ? 0x3b4a2c : 0x6a5438,
-      1.35,
+      0.78,
     ),
   );
-  const sun = new THREE.DirectionalLight(0xfff0d0, 3.1);
+  const sun = new THREE.DirectionalLight(0xfff0d0, 3.7);
   sun.position.set(-15, 30, 12);
   sun.target.position.set(0, 0, 0);
   scene.add(sun, sun.target);
@@ -7816,7 +7909,7 @@ function solidPointClient(x, y, z) {
         if (Math.abs(lx - bx.x) < bx.hx && Math.abs(ry - bx.y) < bx.hy && Math.abs(lz - bx.z) < bx.hz) return true;
       continue;
     }
-    if (o.type === "table" || o.type === "chair") continue;
+    if (o.type === "table" || o.type === "chair" || o.type === "bed" || o.type === "shelf") continue;
     if (o.type === "fence" || o.type === "stonewall") {
       if (y < base + o.h && fenceBlocks(o, x, z, 0)) return true;
       continue;
