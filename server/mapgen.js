@@ -9,7 +9,7 @@
 //   (rừng) / ~60% (sa mạc) diện tích; viền map là núi uốn lượn để không lộ mép vuông.
 // - Nhà gom thành làng; đường cong nối các làng, cắt nhau trên đất liền, qua
 //   sông bằng cầu có rào; có đường lên núi.
-// - Không vật thể nào chồng lên nhau (kiểm tra bằng lưới chiếm chỗ).
+// - Không vật thể nào xếp chồng lên nhau (kiểm tra bằng lưới chiếm chỗ).
 const Terrain = require("../public/terrain.js");
 
 const MAP_HALF = Terrain.MAP_HALF;
