@@ -14,6 +14,7 @@ import {
   bakedWeaponMat,
 } from "./weapons.js";
 import { buildAvatar, poseAvatar, HAND_OFFSET, SKINS, skinPalette } from "./avatar.js";
+import { wallMaterials, planarUV, decalGeometry, DECAL } from "./walldecor.js";
 
 // querySelector được gọi hàng chục lần MỖI khung hình (HUD, vòng bo, loot...).
 // Nhớ lại phần tử đã tìm; nếu phần tử đó bị gỡ khỏi trang thì tìm lại.
@@ -363,6 +364,7 @@ $("#sfx").value = saved.sfx ?? 30;
 $("#music").value = saved.music ?? 10;
 $("#masterVolume").value = saved.masterVolume ?? 30;
 $("#quality").value = saved.quality || "Performance";
+$("#brightness").value = saved.bright ?? 50; // khoá mới "bright" (thang 0–100), bỏ giá trị thang cũ
 $("#crouchMode").value = saved.crouchMode === "hold" ? "hold" : "toggle";
 $("#proneMode").value = saved.proneMode === "hold" ? "hold" : "toggle";
 $("#aimMode").value = saved.aimMode === "hold" ? "hold" : "toggle";
@@ -1371,6 +1373,14 @@ const settingsBindings = {
     suffix: "%",
   },
   quality: { main: "quality", pause: "pauseQuality" },
+  // Độ sáng 0–100% (50% = mặc định): chỉ đổi hệ số phơi sáng (uniform) → áp ngay, không tốn hiệu năng.
+  brightness: {
+    main: "brightness",
+    pause: "pauseBrightness",
+    mainLabel: "brightVal",
+    pauseLabel: "pauseBrightVal",
+    suffix: "%",
+  },
   // Ngồi (C) / Nằm (Z): "toggle" = bấm để bật/tắt, "hold" = giữ phím (thả là đứng dậy).
   crouchMode: { main: "crouchMode", pause: "pauseCrouchMode" },
   proneMode: { main: "proneMode", pause: "pauseProneMode" },
@@ -1601,6 +1611,7 @@ function saveSettings() {
       sfx: $("#sfx").value,
       music: $("#music").value,
       quality: $("#quality").value,
+      bright: $("#brightness").value,
       crouchMode: $("#crouchMode").value,
       proneMode: $("#proneMode").value,
       aimMode: $("#aimMode").value,
@@ -1611,6 +1622,7 @@ function onSettingInput(key, value) {
   syncSettingControl(key, value);
   saveSettings();
   if (key === "quality") applyGraphicsSettings();
+  if (key === "brightness") applyBrightness();
   if (["masterVolume", "sfx", "music"].includes(key)) applyAudioSettings();
 }
 for (const [key, binding] of Object.entries(settingsBindings)) {
@@ -2101,13 +2113,17 @@ function flushMergeBuckets() {
         groups.get(k).push(g);
       }
     const special = Boolean(BUCKET_MATERIALS[key]);
+    const texKey = key.startsWith("tex-") ? key.slice(4) : null;
     for (const parts of groups.values()) {
       const merged = mergeGeometries(parts, false);
       for (const g of parts) g.dispose();
       merged.computeBoundingSphere();
-      const mesh = new THREE.Mesh(merged, BUCKET_MATERIALS[key]?.() || makeMat(bucket.color));
+      const mesh = new THREE.Mesh(merged, texKey ? wallMaterials()[texKey] : BUCKET_MATERIALS[key]?.() || makeMat(bucket.color));
       if (special) mesh.renderOrder = 1; // kính trong vẽ sau vật đục
-      else {
+      else if (texKey === "decal") {
+        mesh.receiveShadow = true; // decal dán sát tường: nhận bóng, không đổ bóng
+        mesh.renderOrder = 2;
+      } else {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
       }
@@ -2720,6 +2736,85 @@ function leafBlobGeometry() {
   }
   return leafBlobBase.clone();
 }
+// ---- TƯỜNG NHÀ: chất liệu + dấu vết thời gian (vẽ 1 lần lúc dựng map) ----
+const hash01 = (x, z, k = 0) => {
+  const v = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453;
+  return v - Math.floor(v);
+};
+// Ngoài: Rừng = ván gỗ bạc màu · Sa mạc = vữa trát · Thành Cổ = gỗ cổ / đá / gạch.
+function houseSkin(o, forest) {
+  if (isJungleMap()) {
+    const h = hash01(o.x, o.z, 1);
+    return o.type === "manor" ? (h < 0.5 ? "stone" : "brick") : h < 0.45 ? "oldWood" : h < 0.75 ? "stone" : "brick";
+  }
+  if (o.type === "manor") return "plaster";
+  return forest ? "extWood" : "plaster";
+}
+// Danh sách dấu vết cho 1 căn: luôn có rêu chân tường, nứt, ố; theo chất liệu có
+// tróc sơn / bong vữa lộ gạch, lộ gỗ; thêm graffiti, tờ rơi, poster LAST DROP.
+function houseDecalPlan(o, skin, small) {
+  let seed = Math.floor(hash01(o.x, o.z, 7) * 1e9) || 1;
+  const r = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
+  const list = [];
+  const add = (cell, w, h, place, opts = {}) => list.push({ cell, w, h, place, ...opts });
+  const mossN = skin === "plaster" ? 1 : 2;
+  for (let i = 0; i < mossN; i++) add(DECAL.moss, 1.4 + r() * 1.2, 0.6 + r() * 0.5, "bottom", { overlap: true });
+  if (skin === "stone" || skin === "brick" || skin === "oldWood") add(DECAL.moss2, 0.9, 1.6 + r() * 0.8, "corner", { overlap: true });
+  add(DECAL.crack, 0.8 + r() * 0.5, 1.0 + r() * 0.5, "mid");
+  add(DECAL.stain, 1.2 + r() * 1.0, 1.0 + r() * 0.6, "top", { overlap: true });
+  if (skin === "plaster") {
+    add(DECAL.peel, 0.9 + r() * 0.5, 0.7 + r() * 0.4, "mid");
+    add(DECAL.brick, 0.9 + r() * 0.5, 0.8 + r() * 0.4, "mid");
+    if (r() < 0.6) add(DECAL.wood, 0.8 + r() * 0.4, 0.8 + r() * 0.3, "mid");
+    if (r() < 0.5) add(DECAL.crack, 0.7, 0.9, "mid");
+  } else if (skin === "extWood" || skin === "oldWood") {
+    add(DECAL.peel, 0.8 + r() * 0.4, 0.6 + r() * 0.3, "mid"); // sơn bong trên ván gỗ
+  }
+  const extra = small ? 0.5 : 1;
+  if (r() < 0.65 * extra + 0.1) add([DECAL.graffiti1, DECAL.graffiti2, DECAL.graffiti3][Math.floor(r() * 3)], 1.5 + r() * 0.6, 1.05 + r() * 0.4, "mid");
+  if (r() < 0.6 * extra + 0.1) add(r() < 0.5 ? DECAL.flyer1 : DECAL.flyer2, 0.42, 0.56, "eye", { spin: (r() - 0.5) * 0.2 });
+  if (r() < 0.35 * extra) add(r() < 0.5 ? DECAL.flyer1 : DECAL.flyer2, 0.42, 0.56, "eye", { spin: (r() - 0.5) * 0.2 });
+  if (r() < 0.42 * extra + 0.05) add(DECAL.poster, 0.78, 0.92, "eye");
+  if (r() < 0.25 * extra) add(DECAL.torn, 0.6, 0.6, "eye");
+  return { list, r };
+}
+// Dán decal lên các mặt NGOÀI của tường. face: { axis "x" | "z", sign, at (toạ độ
+// mặt ngoài), u0, u1 (khoảng dọc tường), top (đỉnh tường), solid(u, y) → điểm có tường }.
+function placeWallDecals(plan, faces, emit) {
+  const { list, r } = plan;
+  const placed = faces.map(() => []);
+  for (const d of list) {
+    for (let tries = 0; tries < 14; tries++) {
+      const fi = Math.floor(r() * faces.length);
+      const F = faces[fi];
+      const top = F.top;
+      if (d.h > top - 0.1 || d.w > F.u1 - F.u0 - 0.3) continue;
+      const u = d.place === "corner" ? (r() < 0.5 ? F.u0 + d.w / 2 + 0.05 : F.u1 - d.w / 2 - 0.05) : F.u0 + d.w / 2 + 0.1 + r() * (F.u1 - F.u0 - d.w - 0.2);
+      const y =
+        d.place === "bottom" || d.place === "corner"
+          ? d.h / 2 + 0.02
+          : d.place === "top"
+            ? top - d.h / 2 - 0.04
+            : d.place === "eye"
+              ? 1.25 + r() * Math.max(0, Math.min(0.5, top - 2.1))
+              : 0.8 + d.h / 2 + r() * Math.max(0, top - d.h - 1.3);
+      if (y + d.h / 2 > top) continue;
+      // Toàn bộ mảng phải nằm trên phần tường đặc (không lơ lửng giữa cửa / cửa sổ).
+      let ok = true;
+      for (let a = 0; a <= 4 && ok; a++)
+        for (let b = 0; b <= 2 && ok; b++) if (!F.solid(u - d.w / 2 + (d.w * a) / 4, y - d.h / 2 + (d.h * b) / 2)) ok = false;
+      if (!ok) continue;
+      if (!d.overlap && placed[fi].some((p) => Math.abs(p.u - u) < (p.w + d.w) / 2 + 0.05 && Math.abs(p.y - y) < (p.h + d.h) / 2 + 0.05)) continue;
+      placed[fi].push({ u, y, w: d.w, h: d.h });
+      const g = decalGeometry(d.cell, d.w, d.h, r() < 0.5 && d.cell !== DECAL.poster && d.place !== "eye" && d.cell < 3 ? true : d.cell === DECAL.moss || d.cell === DECAL.crack || d.cell === DECAL.stain ? r() < 0.5 : false, d.spin || 0);
+      const lift = 0.022 + placed[fi].length * 0.004; // lớp sau nổi hơn lớp trước (không trùng mặt → không nháy)
+      if (F.axis === "z") g.rotateY(F.sign < 0 ? Math.PI : 0).translate(u, y, F.at + F.sign * lift);
+      else g.rotateY(F.sign > 0 ? Math.PI / 2 : -Math.PI / 2).translate(F.at + F.sign * lift, y, u);
+      emit(g);
+      break;
+    }
+  }
+}
 // Đồ trang trí nội thất: gộp vào bucket theo màu (vẽ 1 lần lúc dựng map).
 const DECOR_COLORS = {
   wood: ["#6b4a30", "#5a3d27", "#7a5638", "#4e3524"],
@@ -2902,11 +2997,32 @@ function drawMapObject(o, forest) {
         ys = Math.sin(yaw);
       const at = (t, x, y, z) =>
         t.position.set(o.x + yc * x + ys * z, y + baseY, o.z - ys * x + yc * z);
-      const wall = (x, y, z, sx, sy, sz, color = wallColor) =>
-        bucketAdd(color, color, new THREE.BoxGeometry(sx, sy, sz), (t) => {
-          at(t, x, y, z);
+      // Hình học đã ở toạ độ cục bộ của nhà → chỉ cần đặt gốc nhà + xoay.
+      const local = (key, geo) =>
+        bucketAdd(key, "#ffffff", geo, (t) => {
+          at(t, 0, 0, 0);
           t.rotation.y = yaw;
         });
+      const skin = houseSkin(o, forest);
+      // wall(): KHÔNG truyền màu = tường chính → vẽ bằng chất liệu (ngoài cũ kỹ,
+      // trong ốp gỗ sạch). Có màu = chi tiết (sàn, khung cửa...) giữ màu trơn.
+      const wall = (x, y, z, sx, sy, sz, color = null) => {
+        if (color)
+          return bucketAdd(color, color, new THREE.BoxGeometry(sx, sy, sz), (t) => {
+            at(t, x, y, z);
+            t.rotation.y = yaw;
+          });
+        local("tex-" + skin, planarUV(new THREE.BoxGeometry(sx, sy, sz).translate(x, y, z)));
+        // Ốp gỗ sạch mặt TRONG (cách mặt tường 4 mm, quay vào trong nhà).
+        const inset = thickness / 2 + 0.015;
+        if (sz <= thickness + 1e-6 && Math.abs(Math.abs(z) - half) < 0.01) {
+          const sg = Math.sign(z);
+          local("tex-intWood", planarUV(new THREE.PlaneGeometry(sx, sy).rotateY(sg > 0 ? Math.PI : 0).translate(x, y, z - sg * inset)));
+        } else if (sx <= thickness + 1e-6 && Math.abs(Math.abs(x) - half) < 0.01) {
+          const sg = Math.sign(x);
+          local("tex-intWood", planarUV(new THREE.PlaneGeometry(sz, sy).rotateY(-sg * Math.PI / 2).translate(x - sg * inset, y, z)));
+        }
+      };
       wall(0, 0.04, 0, w, 0.08, w, "#594834"); // interior floor slab
       // Split front wall leaves a real doorway; the back remains fully covered.
       wall(
@@ -3001,10 +3117,11 @@ function drawMapObject(o, forest) {
       for (const side of [-1, 1]) {
         // Mái cần xoay nghiêng nên không dùng chung hàm wall() (không trả về
         // mesh để chỉnh rotation nữa) — gọi bucketAdd trực tiếp.
+        const jungleRoof = isJungleMap();
         bucketAdd(
+          jungleRoof ? "tex-shingle" : roofColor,
           roofColor,
-          roofColor,
-          new THREE.BoxGeometry(w * 0.58, 0.24, w + 0.55),
+          jungleRoof ? planarUV(new THREE.BoxGeometry(w * 0.58, 0.24, w + 0.55), 2.2) : new THREE.BoxGeometry(w * 0.58, 0.24, w + 0.55),
           (t) => {
             at(t, side * w * 0.245, wallH + w * 0.16, 0);
             // Xoay theo hướng nhà trước rồi mới nghiêng mái.
@@ -3026,11 +3143,24 @@ function drawMapObject(o, forest) {
         [0, ridge],
         [-half, eave],
       ];
-      for (const endZ of [-half, half])
-        bucketAdd(wallColor, wallColor, prismGeometry(gable, thickness), (t) => {
-          at(t, 0, wallH, endZ);
-          t.rotation.y = yaw;
-        });
+      for (const endZ of [-half, half]) {
+        local("tex-" + skin, planarUV(prismGeometry(gable, thickness).translate(0, wallH, endZ)));
+        local("tex-intWood", planarUV(prismGeometry(gable, 0.01).translate(0, wallH, endZ - Math.sign(endZ) * (thickness / 2 + 0.022))));
+      }
+      void wallColor;
+      // Dấu vết thời gian trên mặt ngoài (rêu, nứt, ố, tróc sơn, graffiti, tờ rơi, poster).
+      {
+        const outer = half + thickness / 2;
+        const inDoor = (u, y) => Math.abs(u) < doorHalf + 0.14 && y < doorH + 0.16;
+        const inWin = (u, y) => Math.abs(u) < windowHalf + 0.06 && y > sill - 0.06 && y < windowTop + 0.06;
+        const faces = [
+          { axis: "z", sign: -1, at: -outer, u0: -half, u1: half, top: wallH, solid: (u, y) => !inDoor(u, y) },
+          { axis: "z", sign: 1, at: outer, u0: -half, u1: half, top: wallH, solid: () => true },
+          { axis: "x", sign: -1, at: -outer, u0: -half, u1: half, top: wallH, solid: (u, y) => !inWin(u, y) },
+          { axis: "x", sign: 1, at: outer, u0: -half, u1: half, top: wallH, solid: (u, y) => !inWin(u, y) },
+        ];
+        placeWallDecals(houseDecalPlan(o, skin, hut), faces, (g) => local("tex-decal", g));
+      }
       if (o.lift) {
         // NHÀ SÀN: gầm để trống, chỉ có 9 cột gỗ (ngồi / nằm chui qua được —
         // khớp va chạm), dầm đỡ sàn và cầu thang dốc lên cửa.
@@ -3134,9 +3264,54 @@ function drawMapObject(o, forest) {
         t.rotation.y = myaw;
       };
       const L = Structures.manorLayout(o);
-      for (const b of [...L.boxes, L.floor, L.roof, ...L.parapets]) {
-        const key = "manor_" + b.kind;
-        bucketAdd(key, colors[b.kind], new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2), (t) => place(t, b.x, b.y, b.z));
+      const skin = houseSkin(o, forest);
+      const local = (key, geo) => bucketAdd(key, "#ffffff", geo, (t) => place(t, 0, 0, 0));
+      const T = Structures.MANOR.wall;
+      const isOuterZ = (b) => b.hz <= T / 2 + 1e-6 && Math.abs(Math.abs(b.z) - L.D) < 0.01;
+      const isOuterX = (b) => b.hx <= T / 2 + 1e-6 && Math.abs(Math.abs(b.x) - L.W) < 0.01;
+      for (const b of L.boxes) {
+        const geo = () => planarUV(new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2).translate(b.x, b.y, b.z));
+        if (isOuterZ(b) || isOuterX(b)) {
+          local("tex-" + skin, geo());
+          // Ốp gỗ sạch mặt trong tường ngoài.
+          if (isOuterZ(b)) {
+            const sg = Math.sign(b.z);
+            local("tex-intWood", planarUV(new THREE.PlaneGeometry(b.hx * 2, b.hy * 2).rotateY(sg > 0 ? Math.PI : 0).translate(b.x, b.y, b.z - sg * (T / 2 + 0.015))));
+          } else {
+            const sg = Math.sign(b.x);
+            local("tex-intWood", planarUV(new THREE.PlaneGeometry(b.hz * 2, b.hy * 2).rotateY(-sg * Math.PI / 2).translate(b.x - sg * (T / 2 + 0.015), b.y, b.z)));
+          }
+        } else local("tex-intWood", geo()); // vách ngăn trong nhà: gỗ sạch cả 2 mặt
+      }
+      for (const b of L.parapets) local("tex-" + skin, planarUV(new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2).translate(b.x, b.y, b.z)));
+      for (const b of [L.floor, L.roof]) bucketAdd("manor_" + b.kind, colors[b.kind], new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2), (t) => place(t, b.x, b.y, b.z));
+      // Dấu vết trên 4 mặt ngoài: chỉ dán lên phần tường đặc (tránh cửa, cửa sổ).
+      {
+        const onFace = (pred, coord) => (u, y) =>
+          L.boxes.some((b) => pred(b) && Math.abs(coord(b, u).u - (coord(b, u).c)) < coord(b, u).h && Math.abs(y - b.y) < b.hy);
+        const zFace = (sg) => ({
+          axis: "z",
+          sign: sg,
+          at: sg * (L.D + T / 2),
+          u0: -L.W,
+          u1: L.W,
+          top: L.H,
+          solid: onFace((b) => isOuterZ(b) && Math.sign(b.z) === sg, (b, u) => ({ u, c: b.x, h: b.hx })),
+        });
+        const xFace = (sg) => ({
+          axis: "x",
+          sign: sg,
+          at: sg * (L.W + T / 2),
+          u0: -L.D,
+          u1: L.D,
+          top: L.H,
+          solid: onFace((b) => isOuterX(b) && Math.sign(b.x) === sg, (b, u) => ({ u, c: b.z, h: b.hz })),
+        });
+        const plan = houseDecalPlan(o, skin, false);
+        // Nhà to: nhiều mặt tường hơn → dán thêm 1 lượt dấu vết.
+        const plan2 = houseDecalPlan({ x: o.x + 3.1, z: o.z - 1.7 }, skin, false);
+        plan.list.push(...plan2.list);
+        placeWallDecals(plan, [zFace(-1), zFace(1), xFace(-1), xFace(1)], (g) => local("tex-decal", g));
       }
       // Chân tường đá sẫm quanh nhà cho đỡ "hộp".
       bucketAdd("manor_sill", colors.sill, new THREE.BoxGeometry(L.W * 2 + 0.3, 0.35, L.D * 2 + 0.3), (t) => place(t, 0, 0.12, 0));
@@ -3630,6 +3805,37 @@ function addGrass(forest) {
         );
       }
     }
+  // CỎ VEN ĐƯỜNG: dải cỏ dày, cao hơn chạy dọc 2 mép lề đường (mép đường không
+  // còn "cắt thẳng" như giả). Chung chunk cỏ → không thêm draw call nào.
+  for (const road of mapObstacles) {
+    if (road.type !== "road" || road.bridge || !road.length) continue;
+    const dirX = Math.sin(road.yaw || 0),
+      dirZ = Math.cos(road.yaw || 0);
+    const edge = road.w / 2 + (road.dirt ? 1.3 : 1.2);
+    const step = (forest ? (jungleGrass ? 0.26 : 0.32) : 0.75) * (lowQuality ? 1.6 : 1);
+    for (let t = -road.length / 2; t <= road.length / 2; t += step)
+      for (const side of [-1, 1]) {
+        const rows = forest ? 2 : 1;
+        for (let k = 0; k < rows; k++) {
+          const off = edge - 0.25 + rand() * 0.55 + k * 0.45;
+          const tt = t + (rand() - 0.5) * step;
+          const x = road.x + dirX * tt + dirZ * side * off,
+            z = road.z + dirZ * tt - dirX * side * off;
+          if (Math.abs(x) > MAP_HALF - 1 || Math.abs(z) > MAP_HALF - 1) continue;
+          if (waterBedDepth(x, z) > 0 || isNearRoad(x, z, 0.75) || nearHouse(x, z, 0.3)) continue;
+          if (forest)
+            push(
+              "grass",
+              x,
+              z,
+              (jungleGrass ? 1.15 : 0.95) + rand() * 0.6 - k * 0.15,
+              tint.setHSL(0.21 + rand() * 0.07, 0.42 + rand() * 0.2, 0.42 + rand() * 0.22),
+            );
+          else if (rand() < 0.7)
+            push("grass", x, z, 0.7 + rand() * 0.45, tint.setHSL(0.1 + rand() * 0.04, 0.34, 0.55 + rand() * 0.15));
+        }
+      }
+  }
   grassChunks = [];
   for (const kind of Object.values(kinds))
     for (const chunk of kind.chunks.values()) {
@@ -4674,7 +4880,7 @@ function initWorld() {
   renderer.setSize(viewport.width, viewport.height);
   // Màu tươi + dải sáng tự nhiên (Neutral giữ độ bão hoà, không bệch như ACES).
   renderer.toneMapping = THREE.NeutralToneMapping;
-  renderer.toneMappingExposure = 1.08;
+  renderer.toneMappingExposure = brightnessExposure();
   renderer.shadowMap.enabled = shadowQuality() > 0;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.domElement.style.display = "block";
@@ -4962,8 +5168,19 @@ function configureSunShadow() {
       for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.needsUpdate = true;
     });
 }
+// Độ sáng người chơi chọn: 0% tối nhất · 50% mặc định · 100% sáng nhất.
+function brightnessExposure() {
+  const raw = Number($("#brightness")?.value);
+  const v = clamp(Number.isFinite(raw) ? raw : 50, 0, 100);
+  const k = v <= 50 ? 0.45 + (v / 50) * 0.55 : 1 + ((v - 50) / 50) * 0.6; // 0.45× → 1× → 1.6×
+  return 1.08 * k;
+}
+function applyBrightness() {
+  if (renderer) renderer.toneMappingExposure = brightnessExposure();
+}
 function applyGraphicsSettings() {
   if (!renderer) return;
+  applyBrightness();
   configureSunShadow();
   renderer.setPixelRatio(graphicsPixelRatio());
   const viewport = $("#world").getBoundingClientRect();
@@ -6959,6 +7176,10 @@ function beginGame() {
   setMode("lobby"); // vào map chờ: tay không, không vật phẩm
   $("#world").onclick = () => {
     if (paused || backpackOpen || bigMap.open) return;
+    // ĐÃ khoá chuột (đang chơi): mỗi cú click / cú đấm KHÔNG được xin khoá chuột +
+    // fullscreen + khoá phím lại — trình duyệt khoá lại sẽ sinh cú di chuột rác và
+    // làm xoay màn hình khựng (lỗi "đấm liên tục thì giật").
+    if (document.pointerLockElement === renderer?.domElement) return;
     // Bật fullscreen/keyboard lock từ cú click của người chơi. Đây là cách
     // trình duyệt hỗ trợ để gửi các tổ hợp như Ctrl+W về game khi có thể.
     enterGameInputMode();
@@ -7678,6 +7899,7 @@ function cleanupGame() {
   muzzleFlash = null;
   lastVehicleControlKey = "";
   resolutionScale = 1;
+  resolutionLocked = false;
 }
 // Khóa chuột kiểu THƯỜNG. KHÔNG dùng { unadjustedMovement: true }: trên
 // Chrome/Edge Windows chế độ đọc chuyển động thô đôi khi không đưa con trỏ ẩn
@@ -7686,6 +7908,7 @@ function cleanupGame() {
 // nhặt súng rồi xoay). Cú giật chuột cũ đã được saneMouseDelta xử lý riêng.
 function lockPointer(element) {
   if (!element?.requestPointerLock) return;
+  if (document.pointerLockElement === element) return; // đã khoá: không xin lại
   try {
     element.requestPointerLock()?.catch?.(() => {});
   } catch {}
@@ -7709,23 +7932,39 @@ function lockPointer(element) {
 let mousePeak = 40,
   pointerLockedAt = 0,
   lookDX = 0,
-  lookDY = 0;
+  lookDY = 0,
+  lastGoodDX = 0,
+  lastGoodDY = 0,
+  mouseRejected = false;
 document.addEventListener("pointerlockchange", () => {
   pointerLockedAt = performance.now();
   mousePeak = 40;
+  lastGoodDX = lastGoodDY = 0;
+  mouseRejected = false;
 });
 function saneMouseDelta(e) {
-  if (performance.now() - pointerLockedAt < 60) return false; // vài sự kiện đầu sau khi khoá chuột hay là rác
+  if (performance.now() - pointerLockedAt < 80) return false; // vài sự kiện đầu sau khi khoá chuột hay là rác
   let mx = e.movementX || 0,
     my = e.movementY || 0;
-  const limit = Math.max(90, mousePeak * 2.2);
+  const mag = Math.max(Math.abs(mx), Math.abs(my));
+  // Cú nhảy rác của trình duyệt = 1 sự kiện ĐƠN LẺ vọt gấp nhiều lần tốc độ tay vừa
+  // qua (kể cả cùng hướng). Thay bằng chuyển động hợp lệ trước đó → xoay tiếp mượt,
+  // không "giật thêm 1 khoảng". Không bao giờ bỏ 2 sự kiện liền nhau: vung tay thật
+  // tăng tốc qua nhiều sự kiện nên sự kiện sau vẫn được nhận (ngưỡng đã nâng).
+  if (mag > Math.max(70, mousePeak * 2.6) && !mouseRejected) {
+    mouseRejected = true;
+    mousePeak = Math.max(mousePeak, mag * 0.5);
+    lookDX = lastGoodDX;
+    lookDY = lastGoodDY;
+    return true;
+  }
+  mouseRejected = false;
+  const limit = Math.max(90, mousePeak * 2.6); // chặn thêm một lớp nếu vẫn vọt
   mx = Math.max(-limit, Math.min(limit, mx));
   my = Math.max(-limit, Math.min(limit, my));
-  const mag = Math.max(Math.abs(mx), Math.abs(my));
-  // Đỉnh tốc độ: lên ngay theo giá trị (đã kẹp), xuống từ từ.
-  mousePeak = Math.max(mag, mousePeak * 0.9, 40);
-  lookDX = mx;
-  lookDY = my;
+  mousePeak = Math.max(Math.max(Math.abs(mx), Math.abs(my)), mousePeak * 0.92, 30);
+  lookDX = lastGoodDX = mx;
+  lookDY = lastGoodDY = my;
   return true;
 }
 function onMouse(e) {
@@ -11898,6 +12137,7 @@ let frameTimeAvg = 1 / 60,
 let slowChecks = 0,
   fastChecks = 0,
   resolutionChangedAt = 0;
+let resolutionLocked = false;
 function adaptResolution(dt) {
   frameTimeAvg += (dt - frameTimeAvg) * 0.05;
   const now = performance.now();
@@ -11907,8 +12147,10 @@ function adaptResolution(dt) {
   fastChecks = frameTimeAvg < 1 / 57 ? fastChecks + 1 : 0;
   if (now - resolutionChangedAt < 8000) return;
   let next = resolutionScale;
-  if (slowChecks >= 4) next = Math.max(0.55, resolutionScale - 0.1);
-  else if (fastChecks >= 12) next = Math.min(1, resolutionScale + 0.05);
+  if (slowChecks >= 4) {
+    next = Math.max(0.55, resolutionScale - 0.1);
+    resolutionLocked = true; // đã phải hạ 1 lần: KHÔNG tự nâng lại nữa (tránh lên/xuống liên tục → hình chớp định kỳ)
+  } else if (fastChecks >= 12 && !resolutionLocked) next = Math.min(1, resolutionScale + 0.05);
   if (Math.abs(next - resolutionScale) < 0.001) return;
   resolutionScale = next;
   resolutionChangedAt = now;
