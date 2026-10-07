@@ -1009,7 +1009,7 @@ function createObstacles(seed, mapId) {
     MIRROR = { w: 0.6, d: 0.04, h: 1.0, solid: false };
   for (const h of houses) {
     const half = h.w / 2,
-      lift = h.lift || 0,
+      lift = (h.lift || 0) + 0.08, // đặt TRÊN mặt sàn gỗ (dày 0.08 m), không chìm / trùng mặt sàn
       inner = half - 0.12; // mặt trong tường
     decor(h, "rug", rand(-0.3, 0.3), -half * 0.32, rand(-0.1, 0.1), RUG, lift);
     decor(h, "shoes", 0.95 + rand(0, 0.25), -inner + 0.3, rand(-0.4, 0.4), SHOES, lift); // cạnh cửa ra vào
