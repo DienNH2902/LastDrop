@@ -2096,10 +2096,46 @@ function bucketAdd(key, color, geometry, build) {
   geometry.dispose();
   (mergeBuckets[key] ||= { color, parts: [] }).parts.push(geo);
 }
+// Mọi vật tĩnh màu trơn (nhà, cây, đá, đường, nội thất...) dồn chung MỘT vật liệu
+// màu theo đỉnh: mỗi khu MERGE_CHUNK m chỉ còn 1 draw call thay vì 1 call / màu
+// (trước đây ~770 mesh, ~560 call mỗi khung hình). Hình ảnh không đổi.
+let solidVertexMat = null;
 function flushMergeBuckets() {
+  if (!solidVertexMat) sharedMaterials.add((solidVertexMat = new THREE.MeshLambertMaterial({ vertexColors: true })));
+  const solid = new Map();
+  const tint = new THREE.Color();
+  const chunkOf = (g) => {
+    g.computeBoundingSphere();
+    const c = g.boundingSphere.center;
+    return Math.floor((c.x + MAP_HALF) / MERGE_CHUNK) * 64 + Math.floor((c.z + MAP_HALF) / MERGE_CHUNK);
+  };
   for (const key in mergeBuckets) {
     const bucket = mergeBuckets[key];
     if (!bucket.parts.length) continue;
+    if (!BUCKET_MATERIALS[key] && !key.startsWith("tex-")) {
+      tint.set(bucket.color); // đổi sang không gian màu tuyến tính như vật liệu thường
+      for (const g of bucket.parts) {
+        for (const name of Object.keys(g.attributes)) if (name !== "position" && name !== "normal") g.deleteAttribute(name);
+        if (!g.attributes.normal) g.computeVertexNormals();
+        const n = g.attributes.position.count;
+        if (!g.index) {
+          const idx = new (n > 65535 ? Uint32Array : Uint16Array)(n);
+          for (let i = 0; i < n; i++) idx[i] = i;
+          g.setIndex(new THREE.BufferAttribute(idx, 1));
+        }
+        const col = new Float32Array(n * 3);
+        for (let i = 0; i < n; i++) {
+          col[i * 3] = tint.r;
+          col[i * 3 + 1] = tint.g;
+          col[i * 3 + 2] = tint.b;
+        }
+        g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+        const k = chunkOf(g);
+        if (!solid.has(k)) solid.set(k, []);
+        solid.get(k).push(g);
+      }
+      continue;
+    }
     // Nhóm theo khu MERGE_CHUNK m: mỗi khu một mesh → khung bóng quanh người chơi
     // (và camera) chỉ vẽ vài khu gần, không vẽ cả map 2 lần.
     const groups = new Map();
@@ -2131,6 +2167,17 @@ function flushMergeBuckets() {
       mesh.updateMatrix();
       scene.add(mesh);
     }
+  }
+  for (const parts of solid.values()) {
+    const merged = mergeGeometries(parts, false);
+    for (const g of parts) g.dispose();
+    merged.computeBoundingSphere();
+    const mesh = new THREE.Mesh(merged, solidVertexMat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
+    scene.add(mesh);
   }
   mergeBuckets = null;
 }
@@ -3850,6 +3897,8 @@ function addGrass(forest) {
       });
       mesh.instanceMatrix.needsUpdate = true;
       mesh.computeBoundingSphere();
+      mesh.matrixAutoUpdate = false; // ô cỏ tĩnh: không tính lại ma trận mỗi khung hình
+      mesh.updateMatrix();
       mesh.visible = false;
       scene.add(mesh);
       grassChunks.push(mesh);
@@ -5027,11 +5076,11 @@ function initWorld() {
   camera.add(gun);
   updateLocalWeaponVisual(); // bắt đầu trận bằng tay không (hoặc vũ khí đang có)
   // (Vô lăng giả gắn vào camera đã bỏ: tài xế nhìn thấy và cầm vô lăng THẬT của xe.)
-  // Đèn chớp nòng tạo SẴN (cường độ 0). Số lượng đèn trong scene phải cố định
-  // suốt trận, nếu không mỗi lần đổi Three.js phải biên dịch lại shader.
+  // Chớp nòng chỉ dùng sprite/hình phát sáng của súng — KHÔNG dùng đèn điểm thật:
+  // 1 PointLight trong scene bắt MỌI điểm ảnh của cả map tính thêm 1 nguồn sáng
+  // mỗi khung hình (tốn GPU suốt trận dù chỉ loé vài ms). Giữ đối tượng (không
+  // thêm vào scene) để code cũ đặt intensity không lỗi.
   muzzleFlash = new THREE.PointLight(0xffc66b, 0, 3);
-  muzzleFlash.position.set(0.28, -0.22, -1);
-  camera.add(muzzleFlash);
   scene.add(camera);
   // weatherActive = false; // weather sync disabled for performance profiling
   planeObject = buildPlane();
@@ -5040,10 +5089,10 @@ function initWorld() {
   // Đèn tín hiệu nhảy dù tách khỏi máy bay và luôn nằm trong scene (cường độ 0
   // khi không dùng). Đèn nằm trong nhóm bị ẩn sẽ bị bỏ khỏi danh sách đèn →
   // mỗi lần máy bay hiện/ẩn toàn bộ vật liệu phải biên dịch lại shader (khựng).
+  // KHÔNG còn đèn điểm thật nào trong scene (số đèn = hằng số 0 suốt trận →
+  // không biên dịch lại shader, không tốn thêm 1 nguồn sáng cho mọi điểm ảnh).
   const planeLight = planeObject.userData.jumpPointLight;
-  planeObject.remove(planeLight);
   planeLight.intensity = 0;
-  scene.add(planeLight);
   planeCloudField = buildPlaneCloudField();
   scene.add(planeCloudField);
   for (const item of lootItems.values()) {
@@ -6221,11 +6270,11 @@ function addLootMesh(item) {
   if (Number.isFinite(item.y)) restY = item.y; // tầng trên thành chính
   root.position.set(item.x, restY, item.z);
 
-  root.visible = false;
-  scene.add(root);
-
-  item.mesh = root;
-  item.body = body;
+  // Loot đứng yên: tính ma trận 1 lần rồi tắt tự cập nhật — 1320 món × 2 vật không
+  // còn bị Three.js tính lại ma trận MỖI khung hình (tốn ~0.5 ms CPU / khung).
+  root.updateMatrixWorld(true);
+  root.matrixAutoUpdate = false;
+  body.matrixAutoUpdate = false;
   // Chỉ bật khi người chơi tới gần (updateLootVisibility).
   root.visible = false;
   scene.add(root);
@@ -11024,9 +11073,11 @@ function buildPlane() {
   );
   jumpRing.position.copy(jumpLight.position);
   g.add(jumpRing);
+  // Đèn cửa nhảy: KHÔNG thêm PointLight thật (đèn con của máy bay — máy bay ẩn đi
+  // làm số đèn thay đổi → biên dịch lại toàn bộ shader, khựng lúc đang rơi).
+  // Quầng sáng / vòng đèn phát sáng (MeshBasic) đã đủ thấy rõ đèn xanh / đỏ.
   const jumpPointLight = new THREE.PointLight(0xff3028, 10, 24, 2);
   jumpPointLight.position.copy(jumpLight.position);
-  g.add(jumpPointLight);
   g.userData = { props, jumpLight, jumpGlow, jumpRing, jumpPointLight };
   return g;
 }
