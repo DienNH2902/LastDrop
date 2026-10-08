@@ -3,7 +3,7 @@
 // đứng, đi chậm, chạy, ngồi (khom), nằm, peek, bơi, rơi tự do, dù và ngồi xe.
 // Vẫn giữ đầu mèo + nón + giáp.
 //
-// HITBOX: các hộp dưới đây là NGUỒN SỰ THẬT, server (server.js) dùng đúng các
+// HITBOX dính: các hộp dưới đây là NGUỒN SỰ THẬT, server (server.js) dùng đúng các
 // số này. Hộp đã bao trọn nón và áo giáp đang hiển thị → bắn trúng nón = trúng
 // đầu, trúng giáp = trúng thân. Toạ độ cục bộ: chân ở y = 0, mặt nhìn về -Z.
 import * as THREE from "three";
