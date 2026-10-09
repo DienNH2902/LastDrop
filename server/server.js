@@ -599,7 +599,7 @@ function vehicleSeatPosition(vehicle, seat = 0) {
 // ---- Vật phẩm rơi trên map: đạn và bịch máu ----
 const PICKUP_RADIUS = 2.5; // mét; client hiện gợi ý F ở 2 m, server dư 0.5 m để bù độ trễ vị trí
 const AMMO_PER_BOX = 30;
-const AMMO_BOX_COUNT = 560; // ~1/5 đi kèm súng, còn lại rải thưa
+const AMMO_BOX_COUNT = 760; // ~1/5 đi kèm súng, còn lại rải thưa
 const MEDKIT_COUNT = 320;
 const HEAL_AMOUNT = 20;
 const HEAL_DURATION_MS = 5000;
@@ -874,7 +874,7 @@ const WEAPON_STATS = {
   sniper: { name: "KAR98K", mag: 5, cooldown: 1500, head: 100, body: 60, range: 420 },
 };
 // Số súng rải trong các khu nhà mỗi trận (sniper tăng từ 2 lên 7 cho dễ tìm hơn).
-const WEAPON_SPAWNS = { ranger: 32, beryl: 24, sniper: 16 };
+const WEAPON_SPAWNS = { ranger: 64, beryl: 50, sniper: 32 }; // gấp đôi: gần như nhà nào cũng có súng
 const weaponStats = (player) => WEAPON_STATS[player.weapon] || WEAPON_STATS.none;
 // Thời gian nạp đạn (ms): Kar98k mở khóa nòng, ấn kẹp đạn, đóng khóa nòng —
 // lâu hơn nhịp lên đạn giữa 2 phát; súng trường thay băng 1.8 s. Khớp client.

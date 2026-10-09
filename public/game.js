@@ -1,5 +1,6 @@
 // Client prototype: Three.js scene, FPS controls and WebSocket room connection.
 import * as THREE from "three";
+import { createSky } from "./sky.js?v=sky-2";
 import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import {
   buildAug,
@@ -124,6 +125,7 @@ let socket = null,
   camera,
   renderer,
   sunLight = null,
+  skyDome = null,
   clock,
   gun,
   local = {
@@ -1958,6 +1960,7 @@ function send(data) {
     showLootToast("MẤT KẾT NỐI VỚI SERVER");
   return false;
 }
+const LOBBY_MAX_PLAYERS = 6; // khớp MAX_PLAYERS ở server
 let lastLobbyKey = "";
 function renderLobby() {
   if (!gameState) return;
@@ -1970,7 +1973,7 @@ function renderLobby() {
   lastLobbyKey = lobbyKey;
   const slots = $("#slots");
   slots.innerHTML = "";
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < LOBBY_MAX_PLAYERS; i++) {
     const p = gameState.players[i],
       el = document.createElement("div");
     el.className = "slot " + (p ? "filled" : "");
@@ -1980,7 +1983,7 @@ function renderLobby() {
     slots.append(el);
   }
   $("#lobbyHint").textContent =
-    `${gameState.players.length}/6 người chơi · MAP ${MAP_INFO[mapId].label}`;
+    `${gameState.players.length}/${LOBBY_MAX_PLAYERS} người chơi · MAP ${MAP_INFO[mapId].label}`;
   $("#startBtn").classList.toggle("hidden", !isHost);
   $("#leaveLobbyBtn")?.classList.remove("hidden");
 }
@@ -4962,6 +4965,9 @@ function initWorld() {
   sun.target.position.set(0, 0, 0);
   scene.add(sun, sun.target);
   sunLight = sun;
+  // Mặt trời trên trời đặt đúng hướng ánh nắng đổ bóng (SUN_DIR) của map.
+  skyDome = createSky(SUN_DIR, renderer); // trời + mây vẽ sẵn 1 lần vào cube map
+  scene.add(skyDome.mesh);
   configureSunShadow();
 
   if (!mapObstacles.length) {
@@ -12524,6 +12530,10 @@ function frame() {
     camera.lookAt(deathView.x, deathView.y, deathView.z);
   }
   const rolling = applyRollCamera(dt);
+  if (skyDome) {
+    skyDome.mesh.visible = !(local.underwater && local.state === "ground");
+    skyDome.update(camera, scene.fog.color, performance.now() / 1000, envBlend);
+  }
   if (screenShake > 0 && camera) {
     const sx = (Math.random() - 0.5) * screenShake * 0.12,
       sy = (Math.random() - 0.5) * screenShake * 0.12;

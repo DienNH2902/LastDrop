@@ -373,7 +373,7 @@ h2 {
 }
 .slots {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 9px;
   margin: 18px 0;
 }
@@ -3602,3 +3602,9 @@ textarea {
 /* GIAO DIỆN ĐẬM NÉT: chữ HUD trắng sáng có viền tối để rõ trên mọi nền (trời, cát, cỏ). */
 #game { color: #ffffff; }
 #game .hud-top, #game .flight-hud, #game #lootHud, #game #ammo, #game .hp, #game [id*="Hud"] { text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85), 0 0 1px rgba(0, 0, 0, 0.9); }
+
+@media (max-width: 720px) {
+  .slots {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
