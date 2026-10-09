@@ -3182,8 +3182,9 @@ wss.on("connection", (ws) => {
       p.slowWalking = Boolean(m.slowWalking);
       // Chạy nhanh (Shift): chỉ khi đứng, không đi chậm; hết chạy khi ngồi/nằm.
       p.sprinting = Boolean(m.sprinting) && !p.prone && !p.slowWalking; // ngồi + Shift = đi khom nhanh
-      p.jumpY = Math.max(0, Math.min(1.7, Number(m.jumpY) || 0));
-      p.jumping = p.jumpY > 0.02;
+      const reqJump = Math.max(0, Number(m.jumpY) || 0);
+      const reqFeet = Number(m.feetY); // độ cao chân TUYỆT ĐỐI khi đang nhảy / rơi
+      const airborneMove = reqJump > 0.02;
       p.pitch = Math.max(-1.4, Math.min(1.4, Number(m.pitch) || 0)); // người xem trực tiếp thấy đúng góc nhìn
       p.yaw = Number(m.yaw) || 0;
       p.peek =
@@ -3285,7 +3286,17 @@ wss.on("connection", (ws) => {
         )
           p.z = nextZ;
       }
-      p.groundY = standingHeightAt(room, p.x, p.z, p.groundY);
+      const prevFeetY = (p.groundY || 0) + (p.jumpY || 0);
+      p.groundY = standingHeightAt(room, p.x, p.z, airborneMove ? prevFeetY : p.groundY);
+      // Nhảy / rơi tự do: hitbox ở ĐÚNG độ cao chân thật (rơi từ đỉnh núi vẫn trúng
+      // chuẩn). Chống gian lận: không cao hơn đỉnh cú nhảy từ chỗ đứng gần nhất.
+      if (!airborneMove) p.airTop = p.groundY + 1.75;
+      {
+        const feet = airborneMove && Number.isFinite(reqFeet) ? reqFeet : p.groundY + reqJump;
+        const top = Math.max(p.groundY + 1.7, p.airTop ?? p.groundY + 1.75);
+        p.jumpY = Math.max(0, Math.min(top, feet) - p.groundY);
+        p.jumping = p.jumpY > 0.02;
+      }
       const water = waterAt(room, p.x, p.z);
       if (water) {
         p.swimming = true;
@@ -3312,7 +3323,8 @@ wss.on("connection", (ws) => {
       // The client sends the item targeted by the crosshair; validate that exact item here.
       if (p.healingUntil > Date.now() || p.swimming) return;
       const best = (room.loot || []).find((item) => item.id === m.itemId);
-      if (!best || Math.hypot(best.x - p.x, best.z - p.z) > PICKUP_RADIUS)
+      // Nhặt từ balo (Tab) với tới 5 m; phím F 2.5 m.
+      if (!best || Math.hypot(best.x - p.x, best.z - p.z) > (m.tab ? 5 : PICKUP_RADIUS))
         return;
       if (Number.isFinite(best.y) && Math.abs((p.groundY || 0) - best.y) > 1.6) return; // khác tầng
       // Keep the active magazine size stable for the duration of a reload.

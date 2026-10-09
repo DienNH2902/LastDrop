@@ -88,9 +88,15 @@ void main() {
   #include <colorspace_fragment>
 }`;
 
-let bakedTarget = null; // dùng lại cho các trận sau (mặt trời cố định)
+// Ảnh nền GẮN VỚI renderer đã vẽ nó: mỗi trận game tạo renderer (WebGL) MỚI —
+// dùng lại texture của renderer cũ là texture rỗng → trời ĐEN (lỗi "lâu lâu trời tối").
+let bakedTarget = null,
+  bakedFor = null;
 function bakeSky(renderer, sunDirection) {
-  if (bakedTarget) return bakedTarget;
+  if (bakedTarget && bakedFor === renderer) return bakedTarget;
+  // KHÔNG gọi dispose(): renderer cũ đã bị huỷ (bộ nhớ GPU của nó đã được giải phóng cùng
+  // context) — gọi dispose lúc này làm Three.js lỗi → dừng giữa chừng lúc dựng map (màn hình 1 màu).
+  bakedTarget = null;
   // 8-bit (UnsignedByte): MỌI card đồ hoạ đều vẽ được vào loại này. Bản trước dùng
   // HalfFloat — máy không hỗ trợ vẽ vào texture float thì ảnh nền ra ĐEN (chỉ còn mặt trời).
   const target = new THREE.WebGLCubeRenderTarget(256, { type: THREE.UnsignedByteType, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
@@ -125,6 +131,7 @@ function bakeSky(renderer, sunDirection) {
     target.ok = false;
   }
   bakedTarget = target;
+  bakedFor = renderer;
   return target;
 }
 
