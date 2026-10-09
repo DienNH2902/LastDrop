@@ -1,6 +1,6 @@
 // Client prototype: Three.js scene, FPS controls and WebSocket room connection.
 import * as THREE from "three";
-import { createSky } from "./sky.js?v=sky-3";
+import { createSky } from "./sky.js?v=sky-5";
 import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import {
   buildAug,
@@ -238,7 +238,7 @@ const AIR = {
   diveFall: 52, // m/s khi lao xuống
   chuteFall: 5.5, // m/s khi đã bung dù (hạ từ từ)
   gravity: 24, // m/s² tăng tốc khi rơi
-  autoDeployAlt: 35, // dưới độ cao này (m) mà chưa bung dù thì tự bung
+  autoDeployAlt: 60, // dưới độ cao này (m) so với đất (kể cả đất phía trước) mà chưa bung dù thì tự bung
 };
 let inMatch = false, // đã vào màn hình trận (phòng chờ trong map, máy bay, mặt đất)
   plane = null, // đường bay server gửi: { sx, sz, dx, dz, speed, alt, tEnter, tExit, startedAt }
@@ -7827,6 +7827,7 @@ function onKeyDown(e) {
     verticalSpeed = 8;
     jumpOffset = 0;
     grounded = false;
+    airFeetY = local.groundY; // độ cao chân TUYỆT ĐỐI lúc bật nhảy
 
     local.jumping = true;
 
@@ -9846,7 +9847,11 @@ function updateAir(dt) {
   local.x = clamp(local.x + airState.vx * dt, -MAP_HALF + 0.5, MAP_HALF - 0.5);
   local.z = clamp(local.z + airState.vz * dt, -MAP_HALF + 0.5, MAP_HALF - 0.5);
   const previousY = local.y;
-  const approachGround = landingHeightAt(local.x, local.z, previousY);
+  // Mặt đất PHÍA TRƯỚC theo hướng đang bay (đỉnh núi sắp lướt qua) cũng tính:
+  // tự bung dù sớm trước khi lao vào sườn núi cao.
+  let approachGround = landingHeightAt(local.x, local.z, previousY);
+  for (const t of [0.6, 1.2, 1.8])
+    approachGround = Math.max(approachGround, landingHeightAt(clamp(local.x + airState.vx * t, -MAP_HALF, MAP_HALF), clamp(local.z + airState.vz * t, -MAP_HALF, MAP_HALF), previousY));
   if (
     !chute &&
     local.y - approachGround <= AIR.autoDeployAlt + airState.fall * CHUTE_PULL_AT &&
@@ -12226,6 +12231,7 @@ function playJumpReadyBell() {
     oscillator.stop(start + 0.75);
   }
 }
+let airFeetY = 0;
 function frame() {
   if (!renderer || !$("#game").classList.contains("active")) return;
   noteFrameStart(performance.now());
@@ -12485,17 +12491,31 @@ function frame() {
       local.swimming = false;
       local.swimDepth = 0;
       local.swimY = null;
+      const prevFeet = local.groundY;
+      // Đang trên không: dò mặt đứng theo độ cao chân thật (đáp được lên mái / mỏm đá).
+      local.groundY = standingHeightAt(local.x, local.z, grounded ? local.groundY : airFeetY);
+      // Bước hụt khỏi mép dốc / vách / mái (mặt đất tụt > 0.8 m): RƠI tự do thật,
+      // không còn "trượt bám" theo mặt đất.
+      if (grounded && !isProne && prevFeet - local.groundY > 0.8) {
+        grounded = false;
+        verticalSpeed = 0;
+        airFeetY = prevFeet;
+        local.jumping = true;
+      }
       const targetHeight =
-        (local.groundY = standingHeightAt(local.x, local.z, local.groundY)) +
-        (isProne ? PRONE_HEIGHT : isCrouching ? CROUCH_HEIGHT : STAND_HEIGHT);
+        local.groundY + (isProne ? PRONE_HEIGHT : isCrouching ? CROUCH_HEIGHT : STAND_HEIGHT);
       if (!grounded) {
-        verticalSpeed -= 20 * dt;
-        jumpOffset += verticalSpeed * dt;
+        // NHẢY / RƠI theo độ cao TUYỆT ĐỐI: nhảy từ đỉnh núi xuống thì bay theo
+        // quỹ đạo rồi rơi xuống chỗ thấp, không bị "kéo dính" theo mặt đất.
+        verticalSpeed = Math.max(-40, verticalSpeed - 20 * dt);
+        airFeetY += verticalSpeed * dt;
+        jumpOffset = airFeetY - local.groundY;
         if (jumpOffset <= 0) {
           jumpOffset = 0;
           verticalSpeed = 0;
           grounded = true;
           local.jumping = false;
+          cameraBaseY = targetHeight; // chạm đất: mắt đúng độ cao, không trôi lại
           playJumpLand(local.x, local.groundY, local.z, true);
         }
       }
@@ -12560,6 +12580,7 @@ function frame() {
           slowWalking: isSlowWalking,
           sprinting: isSprinting,
           jumpY: jumpOffset,
+          feetY: grounded ? undefined : Math.round(airFeetY * 100) / 100, // độ cao chân thật khi nhảy / rơi
           peek: local.peek,
         });
         lastMove = nowMove;

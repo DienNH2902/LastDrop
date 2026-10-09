@@ -3182,8 +3182,9 @@ wss.on("connection", (ws) => {
       p.slowWalking = Boolean(m.slowWalking);
       // Chạy nhanh (Shift): chỉ khi đứng, không đi chậm; hết chạy khi ngồi/nằm.
       p.sprinting = Boolean(m.sprinting) && !p.prone && !p.slowWalking; // ngồi + Shift = đi khom nhanh
-      p.jumpY = Math.max(0, Math.min(1.7, Number(m.jumpY) || 0));
-      p.jumping = p.jumpY > 0.02;
+      const reqJump = Math.max(0, Number(m.jumpY) || 0);
+      const reqFeet = Number(m.feetY); // độ cao chân TUYỆT ĐỐI khi đang nhảy / rơi
+      const airborneMove = reqJump > 0.02;
       p.pitch = Math.max(-1.4, Math.min(1.4, Number(m.pitch) || 0)); // người xem trực tiếp thấy đúng góc nhìn
       p.yaw = Number(m.yaw) || 0;
       p.peek =
@@ -3285,7 +3286,17 @@ wss.on("connection", (ws) => {
         )
           p.z = nextZ;
       }
-      p.groundY = standingHeightAt(room, p.x, p.z, p.groundY);
+      const prevFeetY = (p.groundY || 0) + (p.jumpY || 0);
+      p.groundY = standingHeightAt(room, p.x, p.z, airborneMove ? prevFeetY : p.groundY);
+      // Nhảy / rơi tự do: hitbox ở ĐÚNG độ cao chân thật (rơi từ đỉnh núi vẫn trúng
+      // chuẩn). Chống gian lận: không cao hơn đỉnh cú nhảy từ chỗ đứng gần nhất.
+      if (!airborneMove) p.airTop = p.groundY + 1.75;
+      {
+        const feet = airborneMove && Number.isFinite(reqFeet) ? reqFeet : p.groundY + reqJump;
+        const top = Math.max(p.groundY + 1.7, p.airTop ?? p.groundY + 1.75);
+        p.jumpY = Math.max(0, Math.min(top, feet) - p.groundY);
+        p.jumping = p.jumpY > 0.02;
+      }
       const water = waterAt(room, p.x, p.z);
       if (water) {
         p.swimming = true;
