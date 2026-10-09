@@ -1,7 +1,7 @@
 /* Font có ĐỦ bộ chữ tiếng Việt (JetBrains Mono cũ thiếu dấu tiếng Việt → chữ có dấu bị vỡ / lẫn font). */
 @import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap&subset=vietnamese");
 :root {
-  --acid: #d6ff45;
+  --acid: #c8ff1a;
   --ink: #11130f;
   --panel: #191c17;
   --muted: #85897d;
@@ -150,7 +150,7 @@ main {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(130deg, transparent 44%, #d6ff4508),
+    linear-gradient(130deg, transparent 44%, #c8ff1a08),
     repeating-linear-gradient(
       125deg,
       transparent 0 55px,
@@ -276,7 +276,7 @@ h2 em {
   border-radius: 50%;
   left: 44%;
   top: 22%;
-  box-shadow: 0 0 35px #d6ff4522;
+  box-shadow: 0 0 35px #c8ff1a22;
 }
 .pin {
   position: absolute;
@@ -704,7 +704,7 @@ h2 {
   position: absolute;
   /* Nằm giữa thanh HUD dưới (~25–80px) và ô "F NHẶT ĐỒ" (từ 118px) — không bị đè. */
   bottom: 90px;
-  color: #d6ff45;
+  color: #c8ff1a;
   font: 9px "JetBrains Mono";
   letter-spacing: 1px;
 }
@@ -743,7 +743,7 @@ h2 {
   position: absolute;
   width: min(70vw, 560px);
   height: min(70vw, 560px);
-  border: 1px solid #d6ff451c;
+  border: 1px solid #c8ff1a1c;
   border-radius: 50%;
   animation: companyOrbit 12s linear infinite;
 }
@@ -758,12 +758,12 @@ h2 {
   place-items: center;
   width: 76px;
   height: 76px;
-  border: 1px solid #d6ff45;
-  color: #d6ff45;
+  border: 1px solid #c8ff1a;
+  color: #c8ff1a;
   font-weight: 900;
   font-size: 48px;
   line-height: 1;
-  box-shadow: 0 0 34px #d6ff452c;
+  box-shadow: 0 0 34px #c8ff1a2c;
   animation: companyPulse 1.8s ease-in-out infinite;
 }
 .company-name {
@@ -777,8 +777,8 @@ h2 {
 .company-rule {
   width: 90px;
   height: 2px;
-  background: #d6ff45;
-  box-shadow: 0 0 14px #d6ff45;
+  background: #c8ff1a;
+  box-shadow: 0 0 14px #c8ff1a;
 }
 .company-splash small,
 .company-splash span {
@@ -786,7 +786,7 @@ h2 {
     10px "JetBrains Mono",
     monospace;
   letter-spacing: 2px;
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 .company-splash span {
   font-size: 8px;
@@ -801,7 +801,7 @@ h2 {
 }
 @keyframes companyPulse {
   50% {
-    box-shadow: 0 0 48px #d6ff4570;
+    box-shadow: 0 0 48px #c8ff1a70;
     transform: scale(1.04);
   }
 }
@@ -855,18 +855,18 @@ h2 {
     10px "JetBrains Mono",
     monospace;
   letter-spacing: 3px;
-  color: #d6ff45;
+  color: #c8ff1a;
   margin-bottom: 16px;
 }
 .company-image {
   width: clamp(170px, 22vw, 250px);
   height: clamp(190px, 26vw, 270px);
   overflow: hidden;
-  border: 1px solid #d6ff4566;
+  border: 1px solid #c8ff1a66;
   background: #f6f6f2;
   box-shadow:
     0 12px 48px #0008,
-    0 0 28px #d6ff4512;
+    0 0 28px #c8ff1a12;
 }
 .company-image img {
   display: block;
@@ -893,7 +893,7 @@ h2 {
   font-weight: 900;
   letter-spacing: 0.25em;
   padding-left: 0.25em;
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 .studio-card p {
   font:
@@ -908,8 +908,8 @@ h2 {
 .company-x {
   font-size: clamp(42px, 7vw, 76px);
   font-weight: 300;
-  color: #d6ff45;
-  text-shadow: 0 0 24px #d6ff4570;
+  color: #c8ff1a;
+  text-shadow: 0 0 24px #c8ff1a70;
   flex: none;
   margin-top: 12px;
 }
@@ -969,9 +969,9 @@ h2 {
 }
 .map-select button:hover,
 .map-select button.selected {
-  border-color: #d6ff45;
-  color: #d6ff45;
-  background: #d6ff4510;
+  border-color: #c8ff1a;
+  color: #c8ff1a;
+  background: #c8ff1a10;
 }
 .map-art.desert-preview {
   background-image:
@@ -1169,7 +1169,7 @@ h2 {
   outline: none;
 }
 .home-player-name input:focus {
-  border-color: #d6ff45;
+  border-color: #c8ff1a;
 }
 .pause-card {
   max-height: 88vh;
@@ -1193,13 +1193,13 @@ h2 {
 }
 .pause-settings label span {
   float: right;
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 .pause-settings input[type="range"] {
   display: block;
   width: 100%;
   margin-top: 9px;
-  accent-color: #d6ff45;
+  accent-color: #c8ff1a;
 }
 .pause-settings select {
   float: right;
@@ -1297,7 +1297,7 @@ h2 {
 }
 .kill-feed-row {
   background: #10130ec9;
-  border-right: 3px solid #d6ff45;
+  border-right: 3px solid #c8ff1a;
   padding: 8px 11px;
   color: #f3f3ed;
   animation: kill-feed-in 0.18s ease-out;
@@ -1308,7 +1308,7 @@ h2 {
   left: 50%;
   transform: translate(-50%, -50%);
   background: #15190fe8;
-  border: 1px solid #d6ff45;
+  border: 1px solid #c8ff1a;
   padding: 13px 22px;
   color: #f3f3ed;
   font:
@@ -1358,7 +1358,7 @@ h2 {
   margin-top: 18px;
   padding: 10px;
   background: #111c;
-  border-left: 2px solid #d6ff45;
+  border-left: 2px solid #c8ff1a;
 }
 
 /* Khi đang chơi: game chiếm toàn bộ màn hình */
@@ -1489,7 +1489,7 @@ body:has(#game.active) #game {
   right: 4vw;
   bottom: 24px;
   margin: 0;
-  color: #d6ff45;
+  color: #c8ff1a;
   text-shadow: 0 2px 8px #000;
 }
 .header-settings {
@@ -1635,7 +1635,7 @@ body:has(#game.active) #game {
 .vehicle-hud > span {
   grid-column: 1;
   text-align: left;
-  color: #d6ff45;
+  color: #c8ff1a;
   font:
     9px "JetBrains Mono",
     monospace;
@@ -1736,11 +1736,11 @@ body:has(#game.active) #game {
 .slots .slot.filled {
   position: relative;
   background: linear-gradient(145deg, #39452d, #222a1d);
-  border: 2px solid #d6ff45;
+  border: 2px solid #c8ff1a;
   color: #fff;
   box-shadow:
-    inset 0 0 0 1px #d6ff4533,
-    0 0 18px #d6ff4526;
+    inset 0 0 0 1px #c8ff1a33,
+    0 0 18px #c8ff1a26;
 }
 .slots .slot.filled b {
   display: inline-grid;
@@ -1749,10 +1749,10 @@ body:has(#game.active) #game {
   height: 30px;
   margin: 0 auto 5px;
   border-radius: 50%;
-  background: #d6ff45;
+  background: #c8ff1a;
   color: #192012;
   font-size: 17px;
-  box-shadow: 0 0 14px #d6ff4566;
+  box-shadow: 0 0 14px #c8ff1a66;
 }
 .slots .slot.filled strong {
   font:
@@ -1771,7 +1771,7 @@ body:has(#game.active) #game {
   margin-top: 7px;
   padding: 3px 7px;
   background: #111a;
-  color: #d6ff45;
+  color: #c8ff1a;
   font-size: 8px;
   letter-spacing: 1px;
   border-radius: 2px;
@@ -1931,7 +1931,7 @@ body:has(#game.active) #game {
   background: conic-gradient(
     from 0deg,
     transparent,
-    #d6ff4512,
+    #c8ff1a12,
     transparent 30%
   );
   animation: ldSpin 14s linear infinite;
@@ -1943,7 +1943,7 @@ body:has(#game.active) #game {
     20px "JetBrains Mono",
     monospace;
   letter-spacing: 6px;
-  color: #d6ff45;
+  color: #c8ff1a;
   opacity: 0;
   animation: ldRise 0.7s 0.2s ease-out forwards;
   margin-bottom: 10px;
@@ -1974,9 +1974,9 @@ body:has(#game.active) #game {
   aspect-ratio: 1;
   border-radius: 5%;
   overflow: hidden;
-  border: 2px solid #d6ff45;
+  border: 2px solid #c8ff1a;
   box-shadow:
-    0 0 0 8px #d6ff4512,
+    0 0 0 8px #c8ff1a12,
     0 20px 60px #000c;
 }
 .ld-splash-photo img {
@@ -2011,7 +2011,7 @@ body:has(#game.active) #game {
   letter-spacing: 0.02em;
 }
 .ld-splash-card .ld-studio {
-  color: #d6ff45;
+  color: #c8ff1a;
   letter-spacing: 0.3em;
   padding-left: 0.3em;
   font-weight: 900;
@@ -2026,8 +2026,8 @@ body:has(#game.active) #game {
 .ld-splash-x {
   font-size: clamp(36px, 6vw, 64px);
   font-weight: 300;
-  color: #d6ff45;
-  text-shadow: 0 0 24px #d6ff4570;
+  color: #c8ff1a;
+  text-shadow: 0 0 24px #c8ff1a70;
   opacity: 0;
   animation: ldFade 0.6s 0.6s forwards;
 }
@@ -2035,15 +2035,15 @@ body:has(#game.active) #game {
   position: relative;
   width: min(420px, 70vw);
   height: 2px;
-  background: #d6ff4522;
+  background: #c8ff1a22;
   overflow: hidden;
 }
 .ld-splash-line:after {
   content: "";
   position: absolute;
   inset: 0;
-  background: #d6ff45;
-  box-shadow: 0 0 12px #d6ff45;
+  background: #c8ff1a;
+  box-shadow: 0 0 12px #c8ff1a;
   transform: scaleX(0);
   transform-origin: left;
   animation: ldGrow 3.6s 0.3s ease-in-out forwards;
@@ -2086,7 +2086,7 @@ body:has(#game.active) #game {
 }
 .ld-loader-logo {
   width: 78px;
-  filter: drop-shadow(0 0 20px #d6ff4560);
+  filter: drop-shadow(0 0 20px #c8ff1a60);
 }
 .ld-loader-title {
   font-weight: 900;
@@ -2104,7 +2104,7 @@ body:has(#game.active) #game {
     12px "JetBrains Mono",
     monospace;
   letter-spacing: 6px;
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 .ld-loader-bottom {
   position: relative;
@@ -2122,7 +2122,7 @@ body:has(#game.active) #game {
   margin-bottom: 10px;
 }
 .ld-loader-status b {
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 .ld-loader-bar {
   height: 4px;
@@ -2133,8 +2133,8 @@ body:has(#game.active) #game {
   display: block;
   height: 100%;
   width: 0;
-  background: linear-gradient(90deg, #9bc92f, #d6ff45);
-  box-shadow: 0 0 14px #d6ff45;
+  background: linear-gradient(90deg, #9bc92f, #c8ff1a);
+  box-shadow: 0 0 14px #c8ff1a;
 }
 .ld-loader-tip {
   margin: 16px 0 0;
@@ -2222,7 +2222,7 @@ body:has(#game.active) #game {
     11px "JetBrains Mono",
     monospace;
   letter-spacing: 4px;
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 .ld-home-hero h1 {
   font-size: clamp(42px, 5.3vw, 84px);
@@ -2233,7 +2233,7 @@ body:has(#game.active) #game {
 }
 .ld-home-hero h1 em {
   font-style: normal;
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 .ld-home-hero p {
   max-width: 620px;
@@ -2261,7 +2261,7 @@ body:has(#game.active) #game {
   color: #d9dccf;
 }
 .ld-chips b {
-  color: #d6ff45;
+  color: #c8ff1a;
   font-size: 14px;
   margin-right: 4px;
 }
@@ -2278,7 +2278,7 @@ body:has(#game.active) #game {
 .ld-controls kbd {
   font: inherit;
   color: #11130f;
-  background: #d6ff45;
+  background: #c8ff1a;
   padding: 3px 6px;
   margin-right: 6px;
 }
@@ -2306,7 +2306,7 @@ body:has(#game.active) #game {
   color: #a4a899;
 }
 .ld-field > span b {
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 .ld-field input {
   background: #0f110d;
@@ -2317,7 +2317,7 @@ body:has(#game.active) #game {
   outline: none;
 }
 .ld-field input:focus {
-  border-color: #d6ff45;
+  border-color: #c8ff1a;
 }
 .ld-map-art {
   height: 150px;
@@ -2674,13 +2674,13 @@ body:has(#game.active) #game {
   height: 30px;
   padding: 0 10px;
   background: #171a14;
-  color: #d6ff45;
+  color: #c8ff1a;
   border: 1px solid #555b48;
   font: inherit;
   cursor: pointer;
 }
 #bigMap .bm-bar button:hover {
-  border-color: #d6ff45;
+  border-color: #c8ff1a;
 }
 #bigMap .bm-bar span {
   min-width: 40px;
@@ -2715,7 +2715,7 @@ body:has(#game.active) #game {
   margin: 0 0 8px;
   font: 900 17px "Barlow Condensed", Arial, sans-serif;
   letter-spacing: 2px;
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 .inv-col[data-zone="ground"] h4 {
   color: #ff922f;
@@ -2746,7 +2746,7 @@ body:has(#game.active) #game {
   touch-action: none;
 }
 .inv-item:hover {
-  border-color: #d6ff45;
+  border-color: #c8ff1a;
   background: #262b20;
 }
 .inv-item.gun {
@@ -2783,7 +2783,7 @@ body:has(#game.active) #game {
 }
 .inv-img b {
   font-size: 22px;
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 .inv-name {
   font-size: 12px;
@@ -2798,7 +2798,7 @@ body:has(#game.active) #game {
 }
 .inv-count {
   font-size: 20px;
-  color: #d6ff45;
+  color: #c8ff1a;
   white-space: nowrap;
 }
 .inv-count small {
@@ -2811,7 +2811,7 @@ body:has(#game.active) #game {
   left: 4px;
   min-width: 15px;
   padding: 1px 3px;
-  background: #d6ff45;
+  background: #c8ff1a;
   color: #14170f;
   font: bold 10px "JetBrains Mono", monospace;
   text-align: center;
@@ -2833,11 +2833,11 @@ body:has(#game.active) #game {
 #backpack.is-dragging.from-pack .inv-col[data-zone="ground"],
 #backpack.is-dragging.from-equip .inv-col[data-zone="ground"] {
   border-style: dashed;
-  border-color: #d6ff4588;
+  border-color: #c8ff1a88;
 }
 .inv-col.drop-hover {
-  border-color: #d6ff45 !important;
-  background: #d6ff4514;
+  border-color: #c8ff1a !important;
+  background: #c8ff1a14;
 }
 @media (max-width: 760px) {
   .inv-grid {
@@ -3011,11 +3011,11 @@ body:has(#game.active) #game {
   top: 70px;
   padding: 8px 16px;
   background: #0d100bcc;
-  border: 1px solid #d6ff4566;
+  border: 1px solid #c8ff1a66;
 }
 .death-view-overlay.spectating b {
   font-size: 20px;
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 
 #game.spectating #flightInfo,
@@ -3070,7 +3070,7 @@ body:has(#game.active) #game {
   display: block;
   font: 900 24px "Barlow Condensed", Arial, sans-serif;
   letter-spacing: 3px;
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 #keybindPanel .kb-head small {
   font-size: 9px;
@@ -3098,14 +3098,14 @@ body:has(#game.active) #game {
   text-align: left;
 }
 #keybindPanel .kb-row:hover {
-  border-color: #d6ff45;
+  border-color: #c8ff1a;
 }
 #keybindPanel .kb-row kbd {
   min-width: 46px;
   padding: 3px 7px;
   background: #2c3226;
   border: 1px solid #555b48;
-  color: #d6ff45;
+  color: #c8ff1a;
   font: bold 11px "JetBrains Mono", monospace;
   text-align: center;
 }
@@ -3196,14 +3196,14 @@ textarea,
   z-index: 2;
   padding: 8px 16px;
   background: #171a14e6;
-  border: 1px solid #d6ff4599;
-  color: #d6ff45;
+  border: 1px solid #c8ff1a99;
+  color: #c8ff1a;
   font: bold 11px "JetBrains Mono", monospace;
   letter-spacing: 2px;
   cursor: pointer;
 }
 .ld-skin-btn:hover {
-  background: #d6ff45;
+  background: #c8ff1a;
   color: #14170f;
 }
 .ld-skin-panel {
@@ -3227,7 +3227,7 @@ textarea,
   margin-bottom: 8px;
   font: 900 15px "Barlow Condensed", Arial, sans-serif;
   letter-spacing: 2px;
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 .ld-skin-list {
   display: grid;
@@ -3253,8 +3253,8 @@ textarea,
 }
 .ld-skin-list button:hover,
 .ld-skin-list button.active {
-  border-color: #d6ff45;
-  color: #d6ff45;
+  border-color: #c8ff1a;
+  color: #c8ff1a;
 }
 /* Balo: tên chủ hòm xác */
 .inv-sub.crate-owner {
@@ -3301,15 +3301,15 @@ textarea,
   gap: 3px;
   margin-top: 12px;
   padding: 11px 14px;
-  border: 1px dashed #d6ff4580;
-  color: #d6ff45;
+  border: 1px dashed #c8ff1a80;
+  color: #c8ff1a;
   font: bold 12px "JetBrains Mono", monospace;
   letter-spacing: 1px;
   text-align: center;
   text-decoration: none;
 }
 .ld-download:hover {
-  background: #d6ff4514;
+  background: #c8ff1a14;
   border-style: solid;
 }
 .ld-download small {
@@ -3338,13 +3338,13 @@ textarea,
 .ld-boot-logo {
   width: 96px;
   height: 96px;
-  filter: drop-shadow(0 0 18px #d6ff4566);
+  filter: drop-shadow(0 0 18px #c8ff1a66);
   animation: ldBootPulse 2.4s ease-in-out infinite;
 }
 .ld-boot-title {
   font: 900 46px "Barlow Condensed", Arial, sans-serif;
   letter-spacing: 10px;
-  color: #d6ff45;
+  color: #c8ff1a;
 }
 .ld-boot-sub {
   font: 11px "JetBrains Mono", monospace;
@@ -3430,12 +3430,12 @@ textarea,
   cursor: pointer;
 }
 .ps-tabs button:hover {
-  border-color: #d6ff4588;
+  border-color: #c8ff1a88;
   color: #e6ead9;
 }
 .ps-tabs button.active {
-  background: #d6ff45;
-  border-color: #d6ff45;
+  background: #c8ff1a;
+  border-color: #c8ff1a;
   color: #14170f;
 }
 .ps-page {
@@ -3484,14 +3484,14 @@ textarea {
   cursor: pointer;
 }
 .settings-tabs .kb-row:hover {
-  border-color: #d6ff45;
+  border-color: #c8ff1a;
 }
 .settings-tabs .kb-row kbd {
   min-width: 40px;
   padding: 2px 6px;
   background: #2c3226;
   border: 1px solid #555b48;
-  color: #d6ff45;
+  color: #c8ff1a;
   font: bold 10px "JetBrains Mono", monospace;
   text-align: center;
 }
@@ -3598,3 +3598,7 @@ textarea {
 /* Sắp chạm đất: buông dây điều khiển dù (tay 2D) — tay 3D bắt chéo trước ngực thay thế. */
 .chute-overlay { transition: opacity 0.18s ease-out; }
 .chute-overlay.bracing { opacity: 0 !important; }
+
+/* GIAO DIỆN ĐẬM NÉT: chữ HUD trắng sáng có viền tối để rõ trên mọi nền (trời, cát, cỏ). */
+#game { color: #ffffff; }
+#game .hud-top, #game .flight-hud, #game #lootHud, #game #ammo, #game .hp, #game [id*="Hud"] { text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85), 0 0 1px rgba(0, 0, 0, 0.9); }
