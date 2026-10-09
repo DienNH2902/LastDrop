@@ -1,6 +1,6 @@
 // Client prototype: Three.js scene, FPS controls and WebSocket room connection.
 import * as THREE from "three";
-import { createSky } from "./sky.js?v=sky-2";
+import { createSky } from "./sky.js?v=sky-3";
 import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import {
   buildAug,
@@ -9781,6 +9781,31 @@ function updatePlane() {
   camera.rotation.z = 0;
   setLoopGain(audioLoops.plane, 0.75 * sfxLevel(), 0.2);
 }
+const gustState = { next: 2, t: -1, len: 0.8, k: 1, out: { x: 0, y: 0, roll: 0 } };
+function airGust(dt, strength) {
+  const g = gustState,
+    o = g.out;
+  g.next -= dt;
+  if (g.t < 0 && g.next <= 0) {
+    g.t = 0;
+    g.len = 0.55 + Math.random() * 0.6;
+    g.k = 0.7 + Math.random() * 0.6;
+    g.next = 2 + Math.random() * 3.5; // đợt kế tiếp sau 2–5.5 s
+  }
+  o.x = o.y = o.roll = 0;
+  if (g.t < 0) return o;
+  g.t += dt;
+  if (g.t >= g.len) {
+    g.t = -1;
+    return o;
+  }
+  const env = Math.sin((Math.PI * g.t) / g.len) * g.k * strength; // lên rồi tắt dần
+  const t = g.t;
+  o.roll = env * (Math.sin(t * 31) * 0.022 + Math.sin(t * 53 + 1.3) * 0.012);
+  o.x = env * Math.sin(t * 41 + 0.7) * 0.03;
+  o.y = env * Math.sin(t * 37 + 2.1) * 0.035;
+  return o;
+}
 // Rơi tự do và dù: WASD bay ngang theo hướng nhìn, Shift lao nhanh, Space bung dù.
 function updateAir(dt) {
   if (deathView) return; // đã bị hạ: không mô phỏng rơi / dù của mình nữa
@@ -9843,10 +9868,13 @@ function updateAir(dt) {
     landNow();
     return;
   }
-  camera.position.set(local.x, local.y + STAND_HEIGHT, local.z);
-  camera.rotation.z = chute
-    ? Math.sin(performance.now() / 900) * 0.03 - r * 0.05
-    : -r * 0.08;
+  // NHIỄU ĐỘNG KHÔNG KHÍ: cách vài giây gặp 1 đợt gió giật → góc nhìn rung lắc
+  // qua lại, giật giật vài trăm ms rồi êm lại. Lao nhanh (Shift) rung mạnh hơn, đã
+  // bung dù thì nhẹ. Chỉ là độ lệch tính lại mỗi khung hình (không cộng dồn vào góc nhìn).
+  const gust = airGust(dt, chute ? 0.45 : dive ? 1.4 : 1);
+  camera.position.set(local.x + gust.x, local.y + STAND_HEIGHT + gust.y, local.z);
+  camera.rotation.z =
+    (chute ? Math.sin(performance.now() / 900) * 0.03 - r * 0.05 : -r * 0.08) + gust.roll;
   const targetFov = chute ? baseFov : baseFov + (dive ? 18 : 9);
   camera.fov += (targetFov - camera.fov) * Math.min(1, 5 * dt);
   camera.updateProjectionMatrix();
@@ -11260,32 +11288,53 @@ function buildChuteOverlay() {
     `</svg>`
   );
 }
+// Dù LƯỢN chữ nhật (kiểu PUBG): cánh dù cong vòm gồm 9 ô đỏ / cam / vàng xen kẽ,
+// dây dù chụm về 2 vai. Hình học + vật liệu tạo 1 lần, MỌI người chơi dùng chung.
+let chuteShared = null;
 function buildChute() {
-  const g = new THREE.Group();
-  const canopy = new THREE.Mesh(
-    new THREE.SphereGeometry(1.9, 14, 7, 0, Math.PI * 2, 0, Math.PI / 2),
-    new THREE.MeshLambertMaterial({
-      color: "#e8622c",
-      side: THREE.DoubleSide,
-    }),
-  );
-  canopy.scale.y = 0.62;
-  canopy.position.y = 3.9;
-  g.add(canopy);
-  const points = [];
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2;
-    points.push(
-      new THREE.Vector3(Math.cos(a) * 1.9, 3.9, Math.sin(a) * 1.9),
-      new THREE.Vector3(0, 1.5, 0),
-    );
+  if (!chuteShared) {
+    const parts = [];
+    const cols = ["#d8322a", "#f07a1c", "#f5c623"];
+    const CELLS = 9,
+      R = 6.2,
+      span = 1.0, // tổng góc vòm (rad)
+      chord = 2.3,
+      thick = 0.34;
+    const tint = new THREE.Color();
+    const lines = [];
+    for (let i = 0; i < CELLS; i++) {
+      const th = -span / 2 + (span * (i + 0.5)) / CELLS;
+      const w = (2 * R * Math.sin(span / CELLS / 2)) * 1.02;
+      const g = new THREE.BoxGeometry(w, thick, chord);
+      // mép trước dày, mép sau mỏng (dáng cánh dù)
+      const p = g.attributes.position;
+      for (let k = 0; k < p.count; k++) if (p.getZ(k) > 0) p.setY(k, p.getY(k) * 0.45);
+      g.rotateZ(-th).translate(R * Math.sin(th), 3.9 + R * Math.cos(th) - R, 0);
+      g.deleteAttribute("uv");
+      tint.set(cols[i % 3]);
+      const c = new Float32Array(p.count * 3);
+      for (let k = 0; k < p.count; k++) c.set([tint.r, tint.g, tint.b], k * 3);
+      g.setAttribute("color", new THREE.BufferAttribute(c, 3));
+      parts.push(g);
+      // dây: từ đáy mỗi ô (trước + sau) về vai trái / phải
+      const bx = (R - thick / 2) * Math.sin(th),
+        by = 3.9 + (R - thick / 2) * Math.cos(th) - R;
+      const sx = bx < 0 ? -0.22 : 0.22;
+      for (const z of [-chord * 0.4, chord * 0.35]) lines.push(new THREE.Vector3(bx, by, z), new THREE.Vector3(sx, 1.5, 0));
+    }
+    chuteShared = {
+      geo: mergeGeometries(parts, false),
+      mat: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
+      lineGeo: new THREE.BufferGeometry().setFromPoints(lines),
+      lineMat: new THREE.LineBasicMaterial({ color: 0xf1f1e6 }),
+    };
+    for (const g of parts) g.dispose();
+    sharedMaterials.add(chuteShared.mat);
+    sharedMaterials.add(chuteShared.lineMat);
   }
-  g.add(
-    new THREE.LineSegments(
-      new THREE.BufferGeometry().setFromPoints(points),
-      new THREE.LineBasicMaterial({ color: 0xf1f1e6 }),
-    ),
-  );
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(chuteShared.geo, chuteShared.mat));
+  g.add(new THREE.LineSegments(chuteShared.lineGeo, chuteShared.lineMat));
   return g;
 }
 // Máy bay vận tải đơn giản: khoang hở hai bên (thấp) để nhìn ra map, cánh cao, hai cánh quạt.

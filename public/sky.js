@@ -64,12 +64,14 @@ uniform vec3 uSunDir;
 uniform vec3 uFog;
 uniform float uHaze;
 uniform float uSpin;
+uniform float uUseTex;
 void main() {
   vec3 dir = normalize(vDir);
   // Mây trôi rất chậm: chỉ xoay hướng đọc texture (miễn phí), mặt trời đứng yên.
   float c = cos(uSpin), s = sin(uSpin);
   vec3 sd = vec3(c * dir.x - s * dir.z, dir.y, s * dir.x + c * dir.z);
-  vec3 col = textureCube(uSky, sd).rgb;
+  vec3 col = uUseTex > 0.5 ? textureCube(uSky, sd).rgb
+    : mix(vec3(0.05, 0.25, 0.75), vec3(0.47, 0.72, 0.93), pow(1.0 - clamp(dir.y, 0.0, 1.0), 3.0)); // dự phòng
   vec3 sun = normalize(uSunDir);
   float mu = clamp(dot(dir, sun), -1.0, 1.0);
   float el = dir.y, up = clamp(el, 0.0, 1.0);
@@ -89,7 +91,9 @@ void main() {
 let bakedTarget = null; // dùng lại cho các trận sau (mặt trời cố định)
 function bakeSky(renderer, sunDirection) {
   if (bakedTarget) return bakedTarget;
-  const target = new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
+  // 8-bit (UnsignedByte): MỌI card đồ hoạ đều vẽ được vào loại này. Bản trước dùng
+  // HalfFloat — máy không hỗ trợ vẽ vào texture float thì ảnh nền ra ĐEN (chỉ còn mặt trời).
+  const target = new THREE.WebGLCubeRenderTarget(256, { type: THREE.UnsignedByteType, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
   const bakeScene = new THREE.Scene();
   const mat = new THREE.ShaderMaterial({
     uniforms: {
@@ -111,6 +115,15 @@ function bakeSky(renderer, sunDirection) {
   renderer.toneMapping = prevTone;
   geo.dispose();
   mat.dispose();
+  // Kiểm tra ảnh nền thật sự có màu (đọc 1 điểm ảnh mặt bên, 1 lần lúc tải map).
+  // Nếu vẫn đen (driver lạ) → dùng trời tính trực tiếp (gradient rẻ, không mây).
+  try {
+    const px = new Uint8Array(4);
+    renderer.readRenderTargetPixels(target, 128, 200, 1, 1, px, 0);
+    target.ok = px[0] + px[1] + px[2] > 30;
+  } catch {
+    target.ok = false;
+  }
   bakedTarget = target;
   return target;
 }
@@ -123,6 +136,7 @@ export function createSky(sunDirection, renderer) {
     uFog: { value: new THREE.Color("#879c88") },
     uHaze: { value: 0 },
     uSpin: { value: 0 },
+    uUseTex: { value: target.ok === false ? 0 : 1 },
   };
   const material = new THREE.ShaderMaterial({
     uniforms,
