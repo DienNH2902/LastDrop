@@ -5271,6 +5271,8 @@ const headAtlasCanvas = document.createElement("canvas");
 headAtlasCanvas.width = HEAD_ATLAS_CELL * 3;
 headAtlasCanvas.height = HEAD_ATLAS_CELL * 2;
 const headAtlasTexture = new THREE.CanvasTexture(headAtlasCanvas);
+let headFacesLoaded = 0,
+  headFacesTotal = 0;
 headAtlasTexture.colorSpace = THREE.SRGBColorSpace;
 [
   ["side", "none"],
@@ -5280,6 +5282,7 @@ headAtlasTexture.colorSpace = THREE.SRGBColorSpace;
   ["back-zoom", "none"],
   ["face-zoom", "none"],
 ].forEach(([name, transform], face) => {
+  headFacesTotal++;
   const img = new Image();
   img.onload = () => {
     const ctx = headAtlasCanvas.getContext("2d");
@@ -5297,6 +5300,7 @@ headAtlasTexture.colorSpace = THREE.SRGBColorSpace;
     ctx.drawImage(img, 0, 0, S, S);
     ctx.restore();
     headAtlasTexture.needsUpdate = true;
+    headFacesLoaded++;
   };
   img.src = `/cat-head-${name}.${name.endsWith("-zoom") ? "jpg" : "png"}`;
 });
@@ -6537,10 +6541,9 @@ function installLootUi() {
   panel.innerHTML = `
     <div class="bp-head"><span id="bpTitle">BALO</span><small>TAB / ESC · ĐÓNG</small></div>
     <div class="inv-grid">
-      <div class="inv-left">
-        <section class="inv-col" data-zone="ground"><h4>XUNG QUANH <small>TẦM 4.5 M · LĂN CHUỘT ĐỂ XEM THÊM</small></h4><div id="invGround" class="inv-list"></div></section>
-        <section class="inv-col" data-zone="pack"><h4>KHO ĐỒ</h4><div id="invPack" class="inv-list"></div></section>
-      </div>
+      <section class="inv-col" data-zone="ground"><h4>XUNG QUANH <small>TẦM 4.5 M · LĂN CHUỘT ĐỂ XEM THÊM</small></h4><div id="invGround" class="inv-list"></div></section>
+      <section class="inv-col" data-zone="pack"><h4>KHO ĐỒ</h4><div id="invPack" class="inv-list"></div></section>
+      <section class="inv-col inv-char"><h4>NHÂN VẬT <small id="invCharNote">TRANG PHỤC: THƯỜNG</small></h4><img id="invCharImg" alt=""></section>
       <section class="inv-col inv-equip" data-zone="equip"><h4>TRANG BỊ · SÚNG & LỰU ĐẠN</h4><div id="invEquip" class="inv-list"></div></section>
     </div>
     <div class="bp-foot">GIỮ CHUỘT TRÁI KÉO ĐỒ SANG KHO ĐỂ NHẶT · KÉO RA NGOÀI ĐỂ VỨT · CHUỘT PHẢI: NHẶT NHANH / DÙNG / VỨT SÚNG</div>`;
@@ -6564,6 +6567,60 @@ const GUN_SHORT = { ranger: "AUG", beryl: "BERYL", sniper: "KAR98K" };
 const attFitText = (id) => Attach.ATTACH[id].guns.map((g) => GUN_SHORT[g]).join(" / ");
 // Ảnh vật phẩm: chụp chính mô hình 3D trong game một lần (súng nghiêng ngang, lựu đạn).
 let invIcons = null;
+// ẢNH TĨNH nhân vật cho balo: dựng mô hình 1 lần, chụp ra ảnh PNG rồi bỏ bộ vẽ tạm —
+// balo chỉ hiện ảnh, không có mô hình 3D chạy liên tục. Cache theo màu + trang phục.
+const portraitCache = new Map();
+function characterPortrait(skin, outfit) {
+  const key = skin + "|" + outfit;
+  if (portraitCache.has(key)) return portraitCache.get(key);
+  if (headFacesLoaded < headFacesTotal) return null; // ảnh mặt mèo chưa tải xong: thử lại lần mở sau
+  let url = null;
+  try {
+    const W = 300,
+      H = 560;
+    const r = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
+    r.setSize(W, H);
+    r.outputColorSpace = THREE.SRGBColorSpace;
+    const sc = new THREE.Scene();
+    sc.add(new THREE.HemisphereLight(0xffffff, 0x3a3f33, 2.4));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+    sun.position.set(2, 4, 5);
+    sc.add(sun);
+    const { root } = buildAvatar(catHeadMaterials, catEarMat, SKINS[skin] ? skin : "green");
+    root.rotation.y = Math.PI - 0.35; // quay mặt về phía người xem, hơi nghiêng 3/4
+    if (outfit === "ghillie") {
+      // Bộ đồ cỏ: nhiều chùm cỏ / lá phủ kín thân (hình tĩnh).
+      const leaf = new THREE.MeshLambertMaterial({ color: "#4f6b2e" }),
+        leaf2 = new THREE.MeshLambertMaterial({ color: "#6d8a3a" });
+      for (let i = 0; i < 70; i++) {
+        const a = Math.random() * Math.PI * 2,
+          y = 0.25 + Math.random() * 1.45;
+        const rr = (y > 1.3 ? 0.2 : 0.26) + Math.random() * 0.06;
+        const m = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.32 + Math.random() * 0.2, 4), i % 2 ? leaf : leaf2);
+        m.position.set(Math.cos(a) * rr, y, Math.sin(a) * rr);
+        m.rotation.set((Math.random() - 0.5) * 1.2 + Math.PI, a, (Math.random() - 0.5) * 0.8);
+        root.add(m);
+      }
+    }
+    sc.add(root);
+    root.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(root);
+    const c = box.getCenter(new THREE.Vector3()),
+      size = box.getSize(new THREE.Vector3());
+    const cam = new THREE.PerspectiveCamera(24, W / H, 0.1, 50);
+    const dist = (size.y * 0.62) / Math.tan((24 * Math.PI) / 360);
+    cam.position.set(c.x, c.y + 0.05, c.z + dist);
+    cam.lookAt(c);
+    r.render(sc, cam);
+    url = r.domElement.toDataURL("image/png");
+    r.dispose();
+    r.forceContextLoss?.();
+  } catch {
+    url = null;
+  }
+  if (url) portraitCache.set(key, url);
+  return url;
+}
 function inventoryIcons() {
   if (invIcons) return invIcons;
   invIcons = {};
@@ -6730,6 +6787,18 @@ function renderBackpack() {
       : '<div class="inv-item gun empty-slot"><kbd>1</kbd><span class="inv-name">CHƯA CÓ SÚNG</span></div>') +
     invItemHtml({ src: "equip", type: "frag", key: "4", count: `${local.frags || 0}<small>/${max}</small>`, cls: (local.frags || 0) ? "" : "empty" }, "equip") +
     invItemHtml({ src: "equip", type: "flash", key: "5", count: `${local.flashes || 0}<small>/${max}</small>`, cls: (local.flashes || 0) ? "" : "empty" }, "equip");
+  // Ảnh nhân vật: chụp 1 lần cho mỗi (màu + trang phục), đổi trang phục mới chụp lại.
+  const outfit = local.outfit === "ghillie" ? "ghillie" : "normal";
+  const charKey = mySkin + "|" + outfit;
+  const charImg = $("#invCharImg");
+  if (charImg && charImg.dataset.key !== charKey) {
+    const url = characterPortrait(mySkin, outfit);
+    if (url) {
+      charImg.src = url;
+      charImg.dataset.key = charKey;
+      setText($("#invCharNote"), outfit === "ghillie" ? "TRANG PHỤC: ĐỒ CỎ" : "TRANG PHỤC: THƯỜNG");
+    }
+  }
   // Chỉ ghi DOM khi nội dung đổi (state tới 20 lần/giây).
   for (const [el, html] of [[$("#invGround"), groundHtml], [$("#invPack"), packHtml], [$("#invEquip"), equipHtml]])
     if (el && el.dataset.html !== html) {
