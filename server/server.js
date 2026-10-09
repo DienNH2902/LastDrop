@@ -2592,6 +2592,12 @@ function traceShot(room, p, origin, dir, maxDist, melee) {
             const d = rayBox({ x: o.x + c * b.x + sn * b.z, y: baseY + b.y, z: o.z - sn * b.x + c * b.z }, o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz });
             if (d !== null && (wallDistance === undefined || wallDistance === null || d < wallDistance)) wallDistance = d;
           }
+          // Cầu thang trong thành chính cũng chặn đạn.
+          const ramp = sampleRay(origin, dir, nearest, 0.2, (x, y, z) => {
+            const [lx, lz] = Structures.toLocal(o, x, z);
+            return Structures.keepRampSolid(lx, y - baseY, lz);
+          });
+          if (ramp !== null && (wallDistance === undefined || wallDistance === null || ramp < wallDistance)) wallDistance = ramp;
         } else if (o.type === "manor") {
           // Nhà to: từng đoạn tường / mái (cửa sổ, cửa ra vào bắn xuyên được).
           const c = Math.cos(o.yaw || 0),
@@ -2604,6 +2610,15 @@ function traceShot(room, p, origin, dir, maxDist, melee) {
           continue; // bàn không chặn đạn
         } else if (o.type === "house" || o.type === "hut") {
           wallDistance = rayBuilding(o);
+          // MÁI NHÀ: 2 tấm mái nghiêng cũng chặn đạn (trước đây đạn xuyên mái).
+          const roof = sampleRay(origin, dir, nearest, 0.15, (x, y, z) => roofSolid(room, o, x, y, z));
+          if (roof !== null && (wallDistance === null || roof < wallDistance)) wallDistance = roof;
+        } else if (o.type === "fortramp") {
+          // Cầu thang đá lên tháp: khối nêm đặc.
+          wallDistance = sampleRay(origin, dir, nearest, 0.2, (x, y, z) => {
+            const [lx, lz] = Structures.toLocal(o, x, z);
+            return Structures.fortRampSolid(o, lx, y - baseY, lz, (gx, gz) => groundHeightAt(room, gx, gz));
+          });
         } else if (o.type === "tree") {
           // Only the visible trunk blocks shots; foliage is not a solid wall.
           wallDistance = rayBox({ x: o.x, y: baseY + o.h * 0.31, z: o.z }, 0, {
@@ -2716,6 +2731,30 @@ function traceShot(room, p, origin, dir, maxDist, melee) {
           }
         }
       return { nearest, target, targetPart, struckVehicle, blockerDistance, surface };
+}
+// Điểm đầu tiên trên tia (bước `step`) thoả solid(x, y, z); null nếu không có.
+function sampleRay(origin, dir, len, step, solid) {
+  for (let t = step * 0.5; t < len; t += step)
+    if (solid(origin.x + dir.x * t, origin.y + dir.y * t, origin.z + dir.z * t)) return t;
+  return null;
+}
+// Điểm nằm trong 1 trong 2 tấm mái nghiêng của nhà / chòi (khớp hình vẽ ở client).
+function roofSolid(room, o, x, y, z) {
+  const [lx, lz] = Structures.toLocal(o, x, z);
+  const w = o.w;
+  if (Math.abs(lz) > (w + 0.55) / 2) return false;
+  const wallH = o.h * 0.72;
+  const ry = y - (obstacleBaseY(room, o) + (o.lift || 0));
+  if (ry < wallH - 0.3 || ry > wallH + w * 0.3) return false;
+  for (const side of [-1, 1]) {
+    const cx = lx - side * w * 0.245,
+      cy = ry - (wallH + w * 0.16);
+    const a = side * 0.48; // ngược lại phép nghiêng -side·0.48 của tấm mái
+    const px = Math.cos(a) * cx - Math.sin(a) * cy,
+      py = Math.sin(a) * cx + Math.cos(a) * cy;
+    if (Math.abs(px) < w * 0.29 && Math.abs(py) < 0.14) return true;
+  }
+  return false;
 }
 // Vật cản có thể nằm trên đoạn [origin, origin + dir·len] (lấy theo lưới 16 m,
 // không quét cả ~6000 vật trên map cho mỗi viên đạn).

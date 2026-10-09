@@ -612,6 +612,8 @@ export function wallMaterials() {
       polygonOffsetUnits: -2,
     }),
   };
+  // Trong nhà khuất sáng: gỗ ốp trong tối hơn ngoài trời (ánh sáng trời không bị che bởi mái).
+  cache.intWood.color.setScalar(0.72);
   return cache;
 }
 // UV phẳng theo mét (chiếu theo pháp tuyến mặt) → texture lặp liền mạch qua các

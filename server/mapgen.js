@@ -827,7 +827,8 @@ function createObstacles(seed, mapId) {
       x,
       z,
       w,
-      h: hut ? rand(3, 3.8) : rand(4.2, 5.4),
+      // Chòi đủ cao: tường = 0.72·h ≥ 2.9 m → khung cửa cao 2.25 m, trên tầm mắt (1.8 m).
+      h: hut ? rand(4.0, 4.6) : rand(4.3, 5.4),
       yaw,
       solid: true,
       lift: stilt ? STILT_LIFT : undefined,
