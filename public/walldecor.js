@@ -371,7 +371,7 @@ function drawDecalCell(g, idx, r) {
     case DECAL.graffiti2: {
       // Chữ phun sơn có viền + vệt sơn chảy.
       const words = idx === DECAL.graffiti1 ? ["DROP", "ZONE"] : ["SỐNG", "SÓT"];
-      const fill = idx === DECAL.graffiti1 ? "#d6ff45" : "#ff4fa3",
+      const fill = idx === DECAL.graffiti1 ? "#c8ff1a" : "#ff4fa3",
         edge = idx === DECAL.graffiti1 ? "#1b3a8a" : "#202020";
       g.translate(m, m);
       g.rotate(-0.12 + r() * 0.1);
@@ -511,7 +511,7 @@ function drawDecalCell(g, idx, r) {
       g.lineTo(x, y + h);
       g.closePath();
       g.fill();
-      g.strokeStyle = "#d6ff45";
+      g.strokeStyle = "#c8ff1a";
       g.lineWidth = 9;
       g.beginPath();
       for (let k = 0; k <= 6; k++) {
@@ -522,13 +522,13 @@ function drawDecalCell(g, idx, r) {
         else g.lineTo(px, py);
       }
       g.stroke();
-      g.fillStyle = "#d6ff45";
+      g.fillStyle = "#c8ff1a";
       g.fillRect(m - 10, y + 52, 20, 20);
       g.textAlign = "center";
       g.fillStyle = "#f3f3ed";
       g.font = "900 40px Impact, 'Arial Black', sans-serif";
       g.fillText("LAST DROP", m, y + 146);
-      g.fillStyle = "#d6ff45";
+      g.fillStyle = "#c8ff1a";
       g.font = "bold 13px Arial, sans-serif";
       g.fillText("ĐẤU TRƯỜNG SINH TỒN", m, y + 170);
       g.fillStyle = "#9aa08e";

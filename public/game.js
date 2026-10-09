@@ -1,5 +1,6 @@
 // Client prototype: Three.js scene, FPS controls and WebSocket room connection.
 import * as THREE from "three";
+import { createSky } from "./sky.js?v=sky-3";
 import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import {
   buildAug,
@@ -124,6 +125,7 @@ let socket = null,
   camera,
   renderer,
   sunLight = null,
+  skyDome = null,
   clock,
   gun,
   local = {
@@ -224,6 +226,7 @@ const PLANE_SEATS = [
   [-0.9, 0.6],
   [0.9, 0.6],
   [-0.9, -1.0],
+  [0.9, -1.0],
 ];
 const MAP_HALF = 300; // map 600 × 600 m (khớp terrain.js / server)
 const MAP_SCALE = MAP_HALF / 50;
@@ -1791,6 +1794,8 @@ function connect(message) {
     if (m.type === "lootAdded" && m.item) addLootItem(m.item);
     if (m.type === "toast") showLootToast(m.text);
     if (m.type === "explosion") onExplosion(m);
+    if (m.type === "bullet" && Array.isArray(m.b)) onBulletSpawn(m.b);
+    if (m.type === "impacts" && Array.isArray(m.list)) onBulletImpacts(m.list);
     if (m.type === "lootSfx" && typeof m.sound === "string")
       playLootSound(
         m.sound,
@@ -1955,6 +1960,7 @@ function send(data) {
     showLootToast("MẤT KẾT NỐI VỚI SERVER");
   return false;
 }
+const LOBBY_MAX_PLAYERS = 6; // khớp MAX_PLAYERS ở server
 let lastLobbyKey = "";
 function renderLobby() {
   if (!gameState) return;
@@ -1967,7 +1973,7 @@ function renderLobby() {
   lastLobbyKey = lobbyKey;
   const slots = $("#slots");
   slots.innerHTML = "";
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < LOBBY_MAX_PLAYERS; i++) {
     const p = gameState.players[i],
       el = document.createElement("div");
     el.className = "slot " + (p ? "filled" : "");
@@ -1977,7 +1983,7 @@ function renderLobby() {
     slots.append(el);
   }
   $("#lobbyHint").textContent =
-    `${gameState.players.length}/5 người chơi · MAP ${MAP_INFO[mapId].label}`;
+    `${gameState.players.length}/${LOBBY_MAX_PLAYERS} người chơi · MAP ${MAP_INFO[mapId].label}`;
   $("#startBtn").classList.toggle("hidden", !isHost);
   $("#leaveLobbyBtn")?.classList.remove("hidden");
 }
@@ -2100,6 +2106,13 @@ function bucketAdd(key, color, geometry, build) {
 // màu theo đỉnh: mỗi khu MERGE_CHUNK m chỉ còn 1 draw call thay vì 1 call / màu
 // (trước đây ~770 mesh, ~560 call mỗi khung hình). Hình ảnh không đổi.
 let solidVertexMat = null;
+// MÀU TƯƠI: tăng độ bão hoà mọi màu tĩnh (địa hình, cỏ, nhà, cây, đá...) ngay lúc
+// dựng map — miễn phí khi chơi (không thêm bước hậu kỳ nào cho mỗi khung hình).
+const vividHSL = { h: 0, s: 0, l: 0 };
+function vividColor(c) {
+  c.getHSL(vividHSL);
+  return c.setHSL(vividHSL.h, Math.min(1, vividHSL.s * 1.25 + 0.03), Math.min(1, vividHSL.l * 1.03));
+}
 function flushMergeBuckets() {
   if (!solidVertexMat) sharedMaterials.add((solidVertexMat = new THREE.MeshLambertMaterial({ vertexColors: true })));
   const solid = new Map();
@@ -2113,7 +2126,7 @@ function flushMergeBuckets() {
     const bucket = mergeBuckets[key];
     if (!bucket.parts.length) continue;
     if (!BUCKET_MATERIALS[key] && !key.startsWith("tex-")) {
-      tint.set(bucket.color); // đổi sang không gian màu tuyến tính như vật liệu thường
+      vividColor(tint.set(bucket.color)); // màu tươi hơn + đổi sang không gian màu tuyến tính
       for (const g of bucket.parts) {
         for (const name of Object.keys(g.attributes)) if (name !== "position" && name !== "normal") g.deleteAttribute(name);
         if (!g.attributes.normal) g.computeVertexNormals();
@@ -2489,6 +2502,7 @@ function createGroundMesh(forest) {
             (2 * CELL)
           : 0;
       terrainColor(forest, x, z, h, slope, bed, swamp, seed, color);
+      vividColor(color);
       colors[k * 3] = color.r;
       colors[k * 3 + 1] = color.g;
       colors[k * 3 + 2] = color.b;
@@ -3800,7 +3814,7 @@ function addGrass(forest) {
     const chunks = kinds[kind].chunks;
     if (!chunks.has(key)) chunks.set(key, { matrices: [], colors: [] });
     chunks.get(key).matrices.push(dummy.matrix.clone());
-    chunks.get(key).colors.push(color.clone());
+    chunks.get(key).colors.push(vividColor(color.clone()));
   };
   const jungleGrass = isJungleMap();
   // Thành Cổ: cỏ dày hơn (~1.5×) và cao hơn, mọc cả lên sườn núi.
@@ -4951,6 +4965,9 @@ function initWorld() {
   sun.target.position.set(0, 0, 0);
   scene.add(sun, sun.target);
   sunLight = sun;
+  // Mặt trời trên trời đặt đúng hướng ánh nắng đổ bóng (SUN_DIR) của map.
+  skyDome = createSky(SUN_DIR, renderer); // trời + mây vẽ sẵn 1 lần vào cube map
+  scene.add(skyDome.mesh);
   configureSunShadow();
 
   if (!mapObstacles.length) {
@@ -5082,6 +5099,7 @@ function initWorld() {
   // thêm vào scene) để code cũ đặt intensity không lỗi.
   muzzleFlash = new THREE.PointLight(0xffc66b, 0, 3);
   scene.add(camera);
+  ensureBulletFx(); // vệt đạn + bụi tóe dựng SẴN, chỉ cập nhật vị trí khi bắn
   // weatherActive = false; // weather sync disabled for performance profiling
   planeObject = buildPlane();
   planeObject.visible = false;
@@ -5222,7 +5240,7 @@ function brightnessExposure() {
   const raw = Number($("#brightness")?.value);
   const v = clamp(Number.isFinite(raw) ? raw : 50, 0, 100);
   const k = v <= 50 ? 0.45 + (v / 50) * 0.55 : 1 + ((v - 50) / 50) * 0.6; // 0.45× → 1× → 1.6×
-  return 1.08 * k;
+  return 1.18 * k; // nền sáng hơn trước (1.08) một chút
 }
 function applyBrightness() {
   if (renderer) renderer.toneMappingExposure = brightnessExposure();
@@ -6468,35 +6486,35 @@ function installLootUi() {
     style.textContent = `
 #backpack{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(760px,94vw);max-height:88vh;overflow:auto;pointer-events:auto;background:#171a14ed;border:1px solid #555b48;box-shadow:0 15px 60px #0009;padding:22px;color:#f3f3ed;font-family:'JetBrains Mono',monospace;z-index:5}
 #backpack .bp-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px}
-#backpack .bp-head span{font:900 26px 'Barlow Condensed',Arial,sans-serif;letter-spacing:3px;color:#d6ff45}
+#backpack .bp-head span{font:900 26px 'Barlow Condensed',Arial,sans-serif;letter-spacing:3px;color:#c8ff1a}
 #backpack .bp-head small,#backpack .bp-foot{font-size:9px;letter-spacing:1px;color:#85897d}
 #backpack .bp-foot{margin-top:14px}
 #backpack .bp-row{display:flex;align-items:center;gap:14px;border:1px solid #373b31;padding:13px 15px;margin:9px 0;user-select:none}
-#backpack .bp-row>b{font-size:22px;color:#d6ff45;width:24px;text-align:center}
+#backpack .bp-row>b{font-size:22px;color:#c8ff1a;width:24px;text-align:center}
 #backpack .bp-row strong{display:block;font-size:13px;letter-spacing:1px}
 #backpack .bp-row small{display:block;margin-top:5px;font-size:9px;letter-spacing:1px;color:#929688}
-#backpack .bp-count{margin-left:auto;font-size:26px;color:#d6ff45;white-space:nowrap}
+#backpack .bp-count{margin-left:auto;font-size:26px;color:#c8ff1a;white-space:nowrap}
 #backpack .bp-count small{display:inline;margin:0 0 0 3px;font-size:12px;color:#929688}
 #backpack .bp-count.full{color:#ff7a5c}
 #backpack .bp-usable{cursor:pointer}
-#backpack .bp-usable:hover{border-color:#d6ff45;background:#d6ff4514}
+#backpack .bp-usable:hover{border-color:#c8ff1a;background:#c8ff1a14}
 #backpack .bp-usable.empty{opacity:.45;cursor:not-allowed}
 #backpack .bp-usable.empty:hover{border-color:#373b31;background:none}
 #backpack .bp-row{flex-wrap:wrap}
 #backpack .bp-actions{display:flex;align-items:center;gap:6px;margin-left:auto}
 #backpack .bp-actions input{width:72px;padding:7px;background:#252920;border:1px solid #454b3d;color:#fff;font:12px 'JetBrains Mono',monospace}
-#backpack .bp-actions button{padding:8px 10px;background:#d6ff45;color:#14170f;font:bold 10px 'JetBrains Mono',monospace}
+#backpack .bp-actions button{padding:8px 10px;background:#c8ff1a;color:#14170f;font:bold 10px 'JetBrains Mono',monospace}
 #backpack .bp-actions button.secondary-action{background:#30352b;color:#f2f2e9;border:1px solid #555b48}
 #backpack .bp-actions button:disabled{opacity:.4;cursor:not-allowed}
 #backpack .bp-section{margin-top:16px;padding-top:12px;border-top:1px solid #454b3d}
 #backpack .bp-section h3{margin:0 0 8px;color:#ff922f;font:900 20px 'Barlow Condensed',Arial,sans-serif;letter-spacing:2px}
 #lootHud{position:absolute;left:50%;bottom:118px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;font-family:'JetBrains Mono',monospace;text-shadow:0 1px 4px #000;z-index:4}
-#lootHud .lh-prompt{background:#111c;border:1px solid #d6ff4599;padding:8px 14px;font-size:12px;letter-spacing:1px;color:#fff}
-#lootHud .lh-prompt b{color:#d6ff45;margin-right:8px}
+#lootHud .lh-prompt{background:#111c;border:1px solid #c8ff1a99;padding:8px 14px;font-size:12px;letter-spacing:1px;color:#fff}
+#lootHud .lh-prompt b{color:#c8ff1a;margin-right:8px}
 #lootHud .lh-heal{width:260px;text-align:center;font-size:11px;letter-spacing:1px;color:#fff}
 #lootHud .lh-heal div{height:7px;margin-top:6px;background:#111a;border:1px solid #ffffff33}
-#lootHud .lh-heal i{display:block;height:100%;width:0;background:#d6ff45}
-#lootHud .lh-toast{background:#111d;padding:7px 14px;font-size:11px;letter-spacing:1px;color:#d6ff45;transition:opacity .25s}`;
+#lootHud .lh-heal i{display:block;height:100%;width:0;background:#c8ff1a}
+#lootHud .lh-toast{background:#111d;padding:7px 14px;font-size:11px;letter-spacing:1px;color:#c8ff1a;transition:opacity .25s}`;
     document.head.append(style);
   }
   const panel = document.createElement("div");
@@ -7369,7 +7387,7 @@ function installReloadHud() {
     justifyContent: "flex-end",
     gap: "8px",
     margin: "4px 0 2px",
-    color: "#d6ff45",
+    color: "#c8ff1a",
     font: "bold 11px 'JetBrains Mono', monospace",
     letterSpacing: "1px",
     textShadow: "0 1px 4px #000",
@@ -7381,10 +7399,10 @@ function installReloadHud() {
     display: "block",
     borderRadius: "50%",
     background:
-      "repeating-conic-gradient(#d6ff45 0deg 20deg, transparent 20deg 36deg)",
+      "repeating-conic-gradient(#c8ff1a 0deg 20deg, transparent 20deg 36deg)",
     mask: "radial-gradient(farthest-side, transparent 54%, #000 58%)",
     animation: "ldReloadSpin .7s linear infinite",
-    filter: "drop-shadow(0 0 4px #d6ff45)",
+    filter: "drop-shadow(0 0 4px #c8ff1a)",
   });
   reloadHud.append(spinner, document.createTextNode("ĐANG NẠP ĐẠN"));
   $(".weapon").insertBefore(reloadHud, $("#ammo"));
@@ -7459,7 +7477,7 @@ function updateZoneHud() {
         ? Math.ceil(Math.max(0, plane.tExit - planeTime()))
         : 0;
     setText(hud, planeLeft > 0 ? `VÒNG BO BẮT ĐẦU KHI MÁY BAY RỜI MAP · ${planeLeft}S` : "");
-    if (planeLeft > 0) setStyle(hud, "color", "#d6ff45");
+    if (planeLeft > 0) setStyle(hud, "color", "#c8ff1a");
     return;
   }
   const circle = zoneCircleNow();
@@ -7943,6 +7961,8 @@ function cleanupGame() {
   nearbyLoot.clear();
   grassChunks = [];
   tracerPool.length = 0;
+  bulletFx = null;
+  liveBullets.length = 0;
   bloodParticles.length = 0;
   bloodPool.length = 0;
   muzzleFlash = null;
@@ -8486,7 +8506,10 @@ function shootOnce() {
   // Use Three.js's actual camera ray for both the visible tracer and server hit test.
   camera.getWorldDirection(shotAim);
   camera.getWorldPosition(shotEye);
-  makeTracer(shotEye, shotAim);
+  // ĐẠN BAY: vẽ viên đạn của mình NGAY (dự đoán, cùng vật lý với server) —
+  // không chờ mạng; server xác nhận trúng / chạm khi đạn thật sự bay tới.
+  const sid = ++localShotSeq;
+  spawnOwnBullet(sid, shotEye, shotAim, key);
   // Trước đây mỗi phát gửi HAI gói "shoot" giống nhau (gói thứ hai luôn bị
   // server từ chối vì cooldown) → gấp đôi băng thông lúc bắn auto.
   send({
@@ -8495,7 +8518,7 @@ function shootOnce() {
     x: shotEye.x,
     z: shotEye.z,
     eyeY: shotEye.y,
-    hit: findAimedPlayer(shotEye, shotAim),
+    sid,
   });
   // This shot follows the current reticle exactly; recoil is applied just
   // afterward so it moves the aim for the next shot instead of deflecting this one.
@@ -8929,6 +8952,349 @@ function makeTracer(eye, direction) {
   tracer.userData.hideAt = performance.now() + TRACER_LIFE_MS;
 }
 const tracerMuzzle = new THREE.Vector3();
+// ======================= ĐẠN BAY (vẽ + âm thanh) =======================
+// Khớp server: vận tốc đầu nòng + trọng lực kéo đạn rơi.
+const BULLET_SPEED = { ranger: 300, beryl: 280, sniper: 480 };
+const BULLET_GRAVITY = 6;
+const BULLET_MAX = 96,
+  DUST_MAX = 280;
+// Vệt sáng không chiếu sáng môi trường (vật liệu tự phát sáng, không phải đèn) →
+// bắn không làm vẽ lại / biên dịch lại gì. 3 draw call cố định cho MỌI viên đạn.
+let bulletFx = null,
+  localShotSeq = 0;
+const liveBullets = [];
+const ignoredImpacts = new Set(),
+  endedOwnSids = new Set();
+const SURF = { GROUND: 0, WOOD: 1, STONE: 2, METAL: 3, FLESH: 4, PLANT: 5 };
+function glowTexture(size, stops) {
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  const gr = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  for (const [t, col] of stops) gr.addColorStop(t, col);
+  g.fillStyle = gr;
+  g.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(c);
+}
+function ensureBulletFx() {
+  if (bulletFx || !scene) return bulletFx;
+  const dyn = (arr, n) => new THREE.BufferAttribute(arr, n).setUsage(THREE.DynamicDrawUsage);
+  // Đuôi vệt đạn: 1 LineSegments chung (đầu sáng → đuôi tắt dần).
+  const tg = new THREE.BufferGeometry();
+  tg.setAttribute("position", dyn(new Float32Array(BULLET_MAX * 6), 3));
+  tg.setAttribute("color", dyn(new Float32Array(BULLET_MAX * 6), 3));
+  tg.setDrawRange(0, 0);
+  const tails = new THREE.LineSegments(
+    tg,
+    new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }),
+  );
+  // Đầu đạn loé sáng: 1 Points chung (sprite quầng sáng).
+  const hg = new THREE.BufferGeometry();
+  hg.setAttribute("position", dyn(new Float32Array(BULLET_MAX * 3), 3));
+  hg.setDrawRange(0, 0);
+  const heads = new THREE.Points(
+    hg,
+    new THREE.PointsMaterial({
+      map: glowTexture(64, [[0, "rgba(255,255,235,1)"], [0.25, "rgba(255,210,120,0.9)"], [1, "rgba(255,150,40,0)"]]),
+      size: 0.5,
+      sizeAttenuation: true,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    }),
+  );
+  // Bụi / mảnh vụn khi đạn chạm: 1 Points với kích thước + độ mờ riêng từng hạt.
+  const dg = new THREE.BufferGeometry();
+  dg.setAttribute("position", dyn(new Float32Array(DUST_MAX * 3), 3));
+  dg.setAttribute("aColor", dyn(new Float32Array(DUST_MAX * 3), 3));
+  dg.setAttribute("aSize", dyn(new Float32Array(DUST_MAX), 1));
+  dg.setAttribute("aAlpha", dyn(new Float32Array(DUST_MAX), 1));
+  const dustMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: { uScale: { value: 600 } },
+    vertexShader: `attribute float aSize; attribute float aAlpha; attribute vec3 aColor;
+      uniform float uScale; varying float vA; varying vec3 vC;
+      void main() { vA = aAlpha; vC = aColor; vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = aAlpha > 0.0 ? aSize * uScale / max(0.1, -mv.z) : 0.0; gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `varying float vA; varying vec3 vC;
+      void main() { vec2 d = gl_PointCoord - 0.5; float r = dot(d, d) * 4.0;
+        float a = vA * (1.0 - smoothstep(0.25, 1.0, r)); if (a < 0.01) discard; gl_FragColor = vec4(vC, a); }`,
+  });
+  const dust = new THREE.Points(dg, dustMat);
+  for (const o of [tails, heads, dust]) {
+    o.frustumCulled = false;
+    o.renderOrder = 7;
+    o.matrixAutoUpdate = false;
+    scene.add(o);
+  }
+  bulletFx = {
+    tails,
+    heads,
+    dust,
+    dustMat,
+    dustLife: new Float32Array(DUST_MAX),
+    dustMax: new Float32Array(DUST_MAX),
+    dustVel: new Float32Array(DUST_MAX * 3),
+    dustGrow: new Float32Array(DUST_MAX),
+    dustNext: 0,
+  };
+  return bulletFx;
+}
+const ownMuzzle = new THREE.Vector3();
+function spawnOwnBullet(sid, eye, dir, key) {
+  const speed = BULLET_SPEED[key] || 300;
+  // Vệt sáng xuất phát từ đầu nòng rồi nhập vào đường đạn thật (từ mắt) trong ~0.12 s.
+  const fpFlash = gun?.userData.flashes?.[key];
+  if (!scoped && fpFlash) {
+    fpFlash.parent.updateMatrixWorld(true);
+    fpFlash.getWorldPosition(ownMuzzle);
+  } else ownMuzzle.copy(eye).addScaledVector(dir, 0.3);
+  liveBullets.push({
+    sid,
+    sv: 0,
+    own: true,
+    sniper: key === "sniper",
+    x: eye.x,
+    y: eye.y,
+    z: eye.z,
+    vx: dir.x * speed,
+    vy: dir.y * speed,
+    vz: dir.z * speed,
+    ox: ownMuzzle.x - eye.x,
+    oy: ownMuzzle.y - eye.y,
+    oz: ownMuzzle.z - eye.z,
+    age: 0,
+    run: 0,
+    end: null,
+    whizzed: true,
+  });
+  if (liveBullets.length > BULLET_MAX) liveBullets.shift();
+}
+function onBulletSpawn([sv, owner, x, y, z, vx, vy, vz, weapon, sid]) {
+  if (owner === playerId) {
+    const mine = liveBullets.find((b) => b.own && b.sid === sid);
+    if (mine) mine.sv = sv;
+    else if (endedOwnSids.delete(sid)) ignoredImpacts.add(sv);
+    return;
+  }
+  // Đạn người khác (kể cả bắn vào mình): vẽ + tiếng rít khi bay sát tai.
+  liveBullets.push({ sv, sid: 0, own: false, sniper: weapon === "sniper", x, y, z, vx, vy, vz, ox: 0, oy: 0, oz: 0, age: 0, run: 0, end: null, whizzed: false });
+  if (liveBullets.length > BULLET_MAX) liveBullets.shift();
+}
+function onBulletImpacts(list) {
+  for (const [sv, x, y, z, code] of list) {
+    if (ignoredImpacts.delete(sv) && code !== SURF.FLESH) continue; // đạn của mình đã tóe bụi ở client rồi
+    const b = liveBullets.find((q) => q.sv === sv);
+    if (b) {
+      if (b.localEnded) continue; // đạn của mình đã tự dừng + tóe bụi ở client
+      if (code < 0) b.end = { gone: true };
+      else b.end = { x, y, z, code, dist: Math.hypot(x - (b.x0 ?? b.x), y - (b.y0 ?? b.y), z - (b.z0 ?? b.z)) };
+      continue;
+    }
+    if (code >= 0 && camera && Math.hypot(x - camera.position.x, z - camera.position.z) < 140) spawnImpact(x, y, z, code);
+  }
+}
+// Bề mặt đoán ở client (đạn của mình chạm trước khi server trả lời).
+function guessSurface(x, y, z) {
+  for (const o of obstaclesNear(x, z)) {
+    if (o.solid === false) continue;
+    if (Math.hypot(o.x - x, o.z - z) > (o.w || 2) * 1.2 + 2) continue;
+    if (o.type === "house" || o.type === "hut" || o.type === "tree" || o.type === "deadTree" || o.type === "fence" || o.type === "palm") return SURF.WOOD;
+    if (o.type === "cactus" || o.type === "banana") return SURF.PLANT;
+    return SURF.STONE;
+  }
+  return SURF.GROUND;
+}
+const DUST_COLORS = {
+  [SURF.GROUND]: () => (mapId === "desert" ? [0.78, 0.64, 0.42] : isJungleMap() ? [0.55, 0.36, 0.24] : [0.47, 0.39, 0.29]),
+  [SURF.WOOD]: () => [0.62, 0.5, 0.36],
+  [SURF.STONE]: () => [0.62, 0.61, 0.57],
+  [SURF.METAL]: () => [1.0, 0.82, 0.45],
+  [SURF.PLANT]: () => [0.42, 0.55, 0.3],
+};
+function spawnImpact(x, y, z, code) {
+  const fx = ensureBulletFx();
+  if (!fx || code === SURF.FLESH) return;
+  const base = (DUST_COLORS[code] || DUST_COLORS[SURF.GROUND])();
+  const pos = fx.dust.geometry.attributes.position,
+    col = fx.dust.geometry.attributes.aColor,
+    size = fx.dust.geometry.attributes.aSize,
+    alpha = fx.dust.geometry.attributes.aAlpha;
+  const metal = code === SURF.METAL;
+  const n = metal ? 8 : 12;
+  for (let i = 0; i < n; i++) {
+    const k = fx.dustNext;
+    fx.dustNext = (k + 1) % DUST_MAX;
+    const debris = i < 4; // mảnh vụn bắn nhanh, nhỏ; còn lại là bụi bốc lên, nở to
+    const a = Math.random() * Math.PI * 2,
+      up = metal ? 1.5 + Math.random() * 2.5 : debris ? 2.5 + Math.random() * 3 : 0.6 + Math.random() * 1.2;
+    const spread = metal ? 2.5 : debris ? 1.8 : 0.7;
+    pos.setXYZ(k, x, y + 0.03, z);
+    fx.dustVel[k * 3] = Math.cos(a) * spread * Math.random();
+    fx.dustVel[k * 3 + 1] = up;
+    fx.dustVel[k * 3 + 2] = Math.sin(a) * spread * Math.random();
+    const shade = 0.85 + Math.random() * 0.3;
+    col.setXYZ(k, Math.min(1, base[0] * shade), Math.min(1, base[1] * shade), Math.min(1, base[2] * shade));
+    size.setX(k, metal ? 0.05 : debris ? 0.06 : 0.16 + Math.random() * 0.12);
+    fx.dustGrow[k] = metal || debris ? 0 : 0.9 + Math.random() * 0.7;
+    const life = metal ? 0.18 + Math.random() * 0.15 : debris ? 0.45 : 0.7 + Math.random() * 0.5;
+    fx.dustLife[k] = fx.dustMax[k] = life;
+    alpha.setX(k, metal ? 1 : 0.75);
+  }
+  playImpactSound({ x, y, z }, code);
+}
+const whizTmp = new THREE.Vector3();
+function updateBullets(dt) {
+  const fx = bulletFx;
+  if (!fx || !camera) return;
+  const cam = camera.position;
+  let n = 0;
+  const tp = fx.tails.geometry.attributes.position.array,
+    tc = fx.tails.geometry.attributes.color.array,
+    hp = fx.heads.geometry.attributes.position.array;
+  for (let i = liveBullets.length - 1; i >= 0; i--) {
+    const b = liveBullets[i];
+    if (b.x0 === undefined) (b.x0 = b.x), (b.y0 = b.y), (b.z0 = b.z);
+    const px = b.x,
+      py = b.y,
+      pz = b.z;
+    b.age += dt;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt - 0.5 * BULLET_GRAVITY * dt * dt;
+    b.z += b.vz * dt;
+    b.vy -= BULLET_GRAVITY * dt;
+    const step = Math.hypot(b.x - px, b.y - py, b.z - pz);
+    b.run += step;
+    let done = b.age > 3 || (b.end && b.end.gone);
+    // Server báo chỗ chạm: dừng vệt đạn đúng chỗ đó (kể cả khi đã bay lố).
+    if (!done && b.end && b.run >= b.end.dist) {
+      spawnImpact(b.end.x, b.end.y, b.end.z, b.end.code);
+      done = true;
+    }
+    // Đạn của mình: tự dò đất / vật cản dọc đoạn vừa bay → tóe bụi NGAY, không chờ mạng.
+    if (!done && b.own && !b.end) {
+      const samples = Math.max(1, Math.ceil(step / 0.6));
+      for (let k = 1; k <= samples; k++) {
+        const t = k / samples;
+        const sx = px + (b.x - px) * t,
+          sy = py + (b.y - py) * t,
+          sz = pz + (b.z - pz) * t;
+        if (sy <= groundHeightAt(sx, sz) + 0.05 || solidPointClient(sx, sy, sz)) {
+          b.localEnded = true;
+          if (b.sv) ignoredImpacts.add(b.sv);
+          else endedOwnSids.add(b.sid);
+          if (ignoredImpacts.size > 400) ignoredImpacts.clear();
+          if (endedOwnSids.size > 400) endedOwnSids.clear();
+          spawnImpact(sx, Math.max(sy, groundHeightAt(sx, sz) + 0.02), sz, guessSurface(sx, sy, sz));
+          done = true;
+          break;
+        }
+      }
+    }
+    // Đạn người khác bay sát tai mình: tiếng "xoẹt" rít ngang (chỉ 1 lần mỗi viên).
+    if (!done && !b.whizzed && local.state === "ground") {
+      const sx = b.x - px,
+        sy = b.y - py,
+        sz = b.z - pz;
+      const l2 = sx * sx + sy * sy + sz * sz;
+      const t = l2 > 0 ? clamp(((cam.x - px) * sx + (cam.y - py) * sy + (cam.z - pz) * sz) / l2, 0, 1) : 0;
+      whizTmp.set(px + sx * t, py + sy * t, pz + sz * t);
+      if (whizTmp.distanceTo(cam) < 2.6) {
+        b.whizzed = true;
+        playBulletWhiz(whizTmp);
+      }
+    }
+    if (done) {
+      liveBullets.splice(i, 1);
+      continue;
+    }
+    if (n >= BULLET_MAX) continue;
+    // Vệt sáng: đầu đạn (đã nhập dần từ đầu nòng vào đường đạn) + đuôi dài theo vận tốc.
+    const blend = Math.max(0, 1 - b.age / 0.12);
+    const hx = b.x + b.ox * blend,
+      hy = b.y + b.oy * blend,
+      hz = b.z + b.oz * blend;
+    const sp = Math.hypot(b.vx, b.vy, b.vz) || 1;
+    const tail = Math.min(b.run, b.sniper ? 7 : 4.5);
+    const k6 = n * 6;
+    tp[k6] = hx;
+    tp[k6 + 1] = hy;
+    tp[k6 + 2] = hz;
+    tp[k6 + 3] = hx - (b.vx / sp) * tail;
+    tp[k6 + 4] = hy - (b.vy / sp) * tail;
+    tp[k6 + 5] = hz - (b.vz / sp) * tail;
+    tc[k6] = 1;
+    tc[k6 + 1] = 0.86;
+    tc[k6 + 2] = 0.5;
+    tc[k6 + 3] = tc[k6 + 4] = tc[k6 + 5] = 0;
+    hp[n * 3] = hx;
+    hp[n * 3 + 1] = hy;
+    hp[n * 3 + 2] = hz;
+    n++;
+  }
+  fx.tails.geometry.setDrawRange(0, n * 2);
+  fx.heads.geometry.setDrawRange(0, n);
+  if (n) {
+    fx.tails.geometry.attributes.position.needsUpdate = true;
+    fx.tails.geometry.attributes.color.needsUpdate = true;
+    fx.heads.geometry.attributes.position.needsUpdate = true;
+  }
+  // Bụi: bay lên, chậm dần, nở to, mờ dần.
+  const g = fx.dust.geometry.attributes;
+  let any = false;
+  for (let k = 0; k < DUST_MAX; k++) {
+    if (fx.dustLife[k] <= 0) continue;
+    any = true;
+    fx.dustLife[k] -= dt;
+    const life = fx.dustLife[k];
+    if (life <= 0) {
+      g.aAlpha.setX(k, 0);
+      continue;
+    }
+    const drag = Math.pow(0.9, dt * 60);
+    fx.dustVel[k * 3] *= drag;
+    fx.dustVel[k * 3 + 2] *= drag;
+    fx.dustVel[k * 3 + 1] = fx.dustVel[k * 3 + 1] * drag - (fx.dustGrow[k] ? 0.6 : 9) * dt;
+    g.position.setXYZ(k, g.position.getX(k) + fx.dustVel[k * 3] * dt, g.position.getY(k) + fx.dustVel[k * 3 + 1] * dt, g.position.getZ(k) + fx.dustVel[k * 3 + 2] * dt);
+    g.aSize.setX(k, g.aSize.getX(k) + fx.dustGrow[k] * dt);
+    g.aAlpha.setX(k, (life / fx.dustMax[k]) * (fx.dustGrow[k] ? 0.7 : 1));
+  }
+  if (any || fx.dustDirty) {
+    g.position.needsUpdate = g.aSize.needsUpdate = g.aAlpha.needsUpdate = g.aColor.needsUpdate = true;
+    fx.dustDirty = any;
+  }
+  fx.dustMat.uniforms.uScale.value = (renderer?.domElement.height || 800) / (2 * Math.tan((camera.fov * Math.PI) / 360));
+}
+// Tiếng đạn chạm theo bề mặt — chỉ nghe được khi đứng gần chỗ tóe bụi.
+function playImpactSound(pos, code) {
+  const a = spatialAudio(pos, { volume: 0.8, ref: 2.5, max: 32 });
+  if (!a) return;
+  if (code === SURF.GROUND || code === SURF.PLANT) {
+    noiseBurst(a, { duration: 0.07, filter: "lowpass", freq: 700, gain: 0.9 }); // phập vào đất
+    noiseBurst(a, { at: 0.01, duration: 0.16, filter: code === SURF.PLANT ? "highpass" : "bandpass", freq: code === SURF.PLANT ? 3200 : 1600, q: 0.8, gain: 0.35 }); // đất / lá văng
+  } else if (code === SURF.WOOD) {
+    toneBurst(a, { duration: 0.06, from: 520, to: 210, gain: 0.5 }); // "cộc" vào gỗ
+    noiseBurst(a, { duration: 0.08, filter: "bandpass", freq: 1100, q: 1.2, gain: 0.7 });
+    noiseBurst(a, { at: 0.03, duration: 0.12, filter: "highpass", freq: 2600, gain: 0.25 }); // dăm gỗ
+  } else if (code === SURF.STONE) {
+    noiseBurst(a, { duration: 0.035, filter: "highpass", freq: 2800, gain: 1 }); // "chát" vào đá
+    noiseBurst(a, { at: 0.01, duration: 0.14, filter: "bandpass", freq: 1300, q: 0.9, gain: 0.35 }); // đá vụn
+    if (Math.random() < 0.4) toneBurst(a, { at: 0.02, duration: 0.22, type: "triangle", from: 2600 + Math.random() * 800, to: 1100, gain: 0.05 }); // đạn nảy "viu"
+  } else if (code === SURF.METAL) {
+    toneBurst(a, { duration: 0.3, type: "triangle", from: 1900, to: 1500, gain: 0.12 }); // "keng" kim loại
+    noiseBurst(a, { duration: 0.05, filter: "bandpass", freq: 3200, q: 2, gain: 0.7 });
+  }
+}
+// Đạn bay sát tai: tiếng rít "xoẹt" ngắn + tiếng nổ siêu thanh, hơi trầm dần (Doppler).
+function playBulletWhiz(pos) {
+  const a = spatialAudio(pos, { volume: 1, ref: 1.2, max: 9 });
+  if (!a) return;
+  noiseBurst(a, { duration: 0.018, filter: "highpass", freq: 3500, gain: 0.9 }); // "tách" siêu thanh
+  noiseBurst(a, { at: 0.005, duration: 0.13, filter: "bandpass", freq: 2400, q: 1.4, gain: 0.85 });
+  toneBurst(a, { at: 0.005, duration: 0.12, from: 1500, to: 650, gain: 0.07 });
+}
 // Gọi mỗi khung hình: tắt vệt đạn / chớp nòng đã hết hạn (không cần setTimeout).
 function updateShotEffects() {
   const now = performance.now();
@@ -9415,6 +9781,31 @@ function updatePlane() {
   camera.rotation.z = 0;
   setLoopGain(audioLoops.plane, 0.75 * sfxLevel(), 0.2);
 }
+const gustState = { next: 2, t: -1, len: 0.8, k: 1, out: { x: 0, y: 0, roll: 0 } };
+function airGust(dt, strength) {
+  const g = gustState,
+    o = g.out;
+  g.next -= dt;
+  if (g.t < 0 && g.next <= 0) {
+    g.t = 0;
+    g.len = 0.55 + Math.random() * 0.6;
+    g.k = 0.7 + Math.random() * 0.6;
+    g.next = 2 + Math.random() * 3.5; // đợt kế tiếp sau 2–5.5 s
+  }
+  o.x = o.y = o.roll = 0;
+  if (g.t < 0) return o;
+  g.t += dt;
+  if (g.t >= g.len) {
+    g.t = -1;
+    return o;
+  }
+  const env = Math.sin((Math.PI * g.t) / g.len) * g.k * strength; // lên rồi tắt dần
+  const t = g.t;
+  o.roll = env * (Math.sin(t * 31) * 0.022 + Math.sin(t * 53 + 1.3) * 0.012);
+  o.x = env * Math.sin(t * 41 + 0.7) * 0.03;
+  o.y = env * Math.sin(t * 37 + 2.1) * 0.035;
+  return o;
+}
 // Rơi tự do và dù: WASD bay ngang theo hướng nhìn, Shift lao nhanh, Space bung dù.
 function updateAir(dt) {
   if (deathView) return; // đã bị hạ: không mô phỏng rơi / dù của mình nữa
@@ -9477,10 +9868,13 @@ function updateAir(dt) {
     landNow();
     return;
   }
-  camera.position.set(local.x, local.y + STAND_HEIGHT, local.z);
-  camera.rotation.z = chute
-    ? Math.sin(performance.now() / 900) * 0.03 - r * 0.05
-    : -r * 0.08;
+  // NHIỄU ĐỘNG KHÔNG KHÍ: cách vài giây gặp 1 đợt gió giật → góc nhìn rung lắc
+  // qua lại, giật giật vài trăm ms rồi êm lại. Lao nhanh (Shift) rung mạnh hơn, đã
+  // bung dù thì nhẹ. Chỉ là độ lệch tính lại mỗi khung hình (không cộng dồn vào góc nhìn).
+  const gust = airGust(dt, chute ? 0.45 : dive ? 1.4 : 1);
+  camera.position.set(local.x + gust.x, local.y + STAND_HEIGHT + gust.y, local.z);
+  camera.rotation.z =
+    (chute ? Math.sin(performance.now() / 900) * 0.03 - r * 0.05 : -r * 0.08) + gust.roll;
   const targetFov = chute ? baseFov : baseFov + (dive ? 18 : 9);
   camera.fov += (targetFov - camera.fov) * Math.min(1, 5 * dt);
   camera.updateProjectionMatrix();
@@ -9561,7 +9955,7 @@ function indicatorAssets() {
   indicatorCache = {
     ring: mergeGeometries(dashes, false),
     ringMat: new THREE.MeshBasicMaterial({
-      color: 0xd6ff45,
+      color: 0xc8ff1a,
       toneMapped: false,
     }),
     cross: mergeGeometries(cross, false),
@@ -10603,7 +10997,7 @@ function drawBigMap(force = false) {
         : null;
     if (next) {
       ctx.setLineDash([6 * dpr, 5 * dpr]);
-      ctx.strokeStyle = gameState.zone.phase === "wait" ? "#d6ff45" : "#ffffff";
+      ctx.strokeStyle = gameState.zone.phase === "wait" ? "#c8ff1a" : "#ffffff";
       ctx.lineWidth = 1.8 * dpr;
       ctx.beginPath();
       ctx.arc(X(next.c.x), Y(next.c.z), Math.max(0, next.r * K), 0, Math.PI * 2);
@@ -10717,7 +11111,7 @@ function drawFlightMap() {
         ty = Y(nextZone.center.z),
         tr = Math.max(0, nextZone.radius * k);
       ctx.setLineDash([4, 4]);
-      ctx.strokeStyle = gameState.zone.phase === "wait" ? "#d6ff45" : "#ffffff";
+      ctx.strokeStyle = gameState.zone.phase === "wait" ? "#c8ff1a" : "#ffffff";
       ctx.lineWidth = 1.7;
       ctx.beginPath();
       ctx.arc(tx, ty, tr, 0, Math.PI * 2);
@@ -10894,32 +11288,53 @@ function buildChuteOverlay() {
     `</svg>`
   );
 }
+// Dù LƯỢN chữ nhật (kiểu PUBG): cánh dù cong vòm gồm 9 ô đỏ / cam / vàng xen kẽ,
+// dây dù chụm về 2 vai. Hình học + vật liệu tạo 1 lần, MỌI người chơi dùng chung.
+let chuteShared = null;
 function buildChute() {
-  const g = new THREE.Group();
-  const canopy = new THREE.Mesh(
-    new THREE.SphereGeometry(1.9, 14, 7, 0, Math.PI * 2, 0, Math.PI / 2),
-    new THREE.MeshLambertMaterial({
-      color: "#e8622c",
-      side: THREE.DoubleSide,
-    }),
-  );
-  canopy.scale.y = 0.62;
-  canopy.position.y = 3.9;
-  g.add(canopy);
-  const points = [];
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2;
-    points.push(
-      new THREE.Vector3(Math.cos(a) * 1.9, 3.9, Math.sin(a) * 1.9),
-      new THREE.Vector3(0, 1.5, 0),
-    );
+  if (!chuteShared) {
+    const parts = [];
+    const cols = ["#d8322a", "#f07a1c", "#f5c623"];
+    const CELLS = 9,
+      R = 6.2,
+      span = 1.0, // tổng góc vòm (rad)
+      chord = 2.3,
+      thick = 0.34;
+    const tint = new THREE.Color();
+    const lines = [];
+    for (let i = 0; i < CELLS; i++) {
+      const th = -span / 2 + (span * (i + 0.5)) / CELLS;
+      const w = (2 * R * Math.sin(span / CELLS / 2)) * 1.02;
+      const g = new THREE.BoxGeometry(w, thick, chord);
+      // mép trước dày, mép sau mỏng (dáng cánh dù)
+      const p = g.attributes.position;
+      for (let k = 0; k < p.count; k++) if (p.getZ(k) > 0) p.setY(k, p.getY(k) * 0.45);
+      g.rotateZ(-th).translate(R * Math.sin(th), 3.9 + R * Math.cos(th) - R, 0);
+      g.deleteAttribute("uv");
+      tint.set(cols[i % 3]);
+      const c = new Float32Array(p.count * 3);
+      for (let k = 0; k < p.count; k++) c.set([tint.r, tint.g, tint.b], k * 3);
+      g.setAttribute("color", new THREE.BufferAttribute(c, 3));
+      parts.push(g);
+      // dây: từ đáy mỗi ô (trước + sau) về vai trái / phải
+      const bx = (R - thick / 2) * Math.sin(th),
+        by = 3.9 + (R - thick / 2) * Math.cos(th) - R;
+      const sx = bx < 0 ? -0.22 : 0.22;
+      for (const z of [-chord * 0.4, chord * 0.35]) lines.push(new THREE.Vector3(bx, by, z), new THREE.Vector3(sx, 1.5, 0));
+    }
+    chuteShared = {
+      geo: mergeGeometries(parts, false),
+      mat: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
+      lineGeo: new THREE.BufferGeometry().setFromPoints(lines),
+      lineMat: new THREE.LineBasicMaterial({ color: 0xf1f1e6 }),
+    };
+    for (const g of parts) g.dispose();
+    sharedMaterials.add(chuteShared.mat);
+    sharedMaterials.add(chuteShared.lineMat);
   }
-  g.add(
-    new THREE.LineSegments(
-      new THREE.BufferGeometry().setFromPoints(points),
-      new THREE.LineBasicMaterial({ color: 0xf1f1e6 }),
-    ),
-  );
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(chuteShared.geo, chuteShared.mat));
+  g.add(new THREE.LineSegments(chuteShared.lineGeo, chuteShared.lineMat));
   return g;
 }
 // Máy bay vận tải đơn giản: khoang hở hai bên (thấp) để nhìn ra map, cánh cao, hai cánh quạt.
@@ -11838,6 +12253,7 @@ function frame() {
   updateCorpses(dt);
   updateAutoFire();
   updateShotEffects();
+  updateBullets(dt);
   updateGrenadeWorld(dt);
   // Trên máy bay / đang nhảy dù thì mô phỏng riêng; chỉ ở phòng chờ hoặc mặt đất mới đi bộ.
   if (local.state === "plane") updatePlane();
@@ -12163,6 +12579,10 @@ function frame() {
     camera.lookAt(deathView.x, deathView.y, deathView.z);
   }
   const rolling = applyRollCamera(dt);
+  if (skyDome) {
+    skyDome.mesh.visible = !(local.underwater && local.state === "ground");
+    skyDome.update(camera, scene.fog.color, performance.now() / 1000, envBlend);
+  }
   if (screenShake > 0 && camera) {
     const sx = (Math.random() - 0.5) * screenShake * 0.12,
       sy = (Math.random() - 0.5) * screenShake * 0.12;
@@ -12397,7 +12817,7 @@ $("#trophyHomeBtn").onclick = () => show("menu");
     const key = new THREE.DirectionalLight(0xfff0d6, 1.6);
     key.position.set(2, 4, 3);
     scene3.add(key);
-    const rim = new THREE.DirectionalLight(0xd6ff45, 0.9);
+    const rim = new THREE.DirectionalLight(0xc8ff1a, 0.9);
     rim.position.set(-3, 2, -2);
     scene3.add(rim);
     cam3 = new THREE.PerspectiveCamera(30, 1, 0.1, 50);

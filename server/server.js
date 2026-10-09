@@ -78,6 +78,7 @@ const PLANE_SEATS = [
   [-0.9, 0.6],
   [0.9, 0.6],
   [-0.9, -1.0],
+  [0.9, -1.0],
 ];
 // Giới hạn tốc độ để server chặn gian lận thô (client dùng các số nhỏ hơn một chút).
 const AIR = {
@@ -598,7 +599,7 @@ function vehicleSeatPosition(vehicle, seat = 0) {
 // ---- Vật phẩm rơi trên map: đạn và bịch máu ----
 const PICKUP_RADIUS = 2.5; // mét; client hiện gợi ý F ở 2 m, server dư 0.5 m để bù độ trễ vị trí
 const AMMO_PER_BOX = 30;
-const AMMO_BOX_COUNT = 560; // ~1/5 đi kèm súng, còn lại rải thưa
+const AMMO_BOX_COUNT = 760; // ~1/5 đi kèm súng, còn lại rải thưa
 const MEDKIT_COUNT = 320;
 const HEAL_AMOUNT = 20;
 const HEAL_DURATION_MS = 5000;
@@ -860,14 +861,20 @@ function createLoot(room) {
   return items;
 }
 // Thông số vũ khí (server là nơi quyết định). "none" = tay không.
+const MAX_PLAYERS = 6;
+// ĐẠN BAY THẬT: vận tốc đầu nòng (m/s) + trọng lực kéo đạn rơi dần. Server mô
+// phỏng từng viên theo nhịp tick (mỗi nhịp 1 đoạn thẳng → dò va chạm đoạn đó).
+const BULLET_SPEED = { ranger: 300, beryl: 280, sniper: 480 };
+const BULLET_GRAVITY = 6; // m/s² (nhẹ hơn thực tế để giao tranh xa vẫn dễ chơi)
+const BULLET_MAX_AGE = 3000; // ms
 const WEAPON_STATS = {
   none: { name: "TAY KHÔNG", mag: 0, cooldown: 450, head: 50, body: 5, range: 1.9 },
-  ranger: { name: "AUG", mag: 30, cooldown: 55, head: 50, body: 10, range: 140 },
-  beryl: { name: "BERYL M762", mag: 30, cooldown: 65, head: 60, body: 13, range: 140 },
-  sniper: { name: "KAR98K", mag: 5, cooldown: 1500, head: 100, body: 60, range: 140 },
+  ranger: { name: "AUG", mag: 30, cooldown: 55, head: 50, body: 10, range: 260 },
+  beryl: { name: "BERYL M762", mag: 30, cooldown: 65, head: 60, body: 13, range: 260 },
+  sniper: { name: "KAR98K", mag: 5, cooldown: 1500, head: 100, body: 60, range: 420 },
 };
 // Số súng rải trong các khu nhà mỗi trận (sniper tăng từ 2 lên 7 cho dễ tìm hơn).
-const WEAPON_SPAWNS = { ranger: 32, beryl: 24, sniper: 16 };
+const WEAPON_SPAWNS = { ranger: 64, beryl: 50, sniper: 32 }; // gấp đôi: gần như nhà nào cũng có súng
 const weaponStats = (player) => WEAPON_STATS[player.weapon] || WEAPON_STATS.none;
 // Thời gian nạp đạn (ms): Kar98k mở khóa nòng, ấn kẹp đạn, đóng khóa nòng —
 // lâu hơn nhịp lên đạn giữa 2 phát; súng trường thay băng 1.8 s. Khớp client.
@@ -2206,6 +2213,7 @@ function tickRoom(room) {
   if (room.phase === "playing" || room.phase === "plane")
     tickVehicles(room, now);
   if (room.phase === "playing" && tickGrenades(room, now)) broadcast(room);
+  if (room.phase === "playing" || room.phase === "finished") tickBullets(room, now);
   const players = [...room.players.values()];
   /* Weather start/end polling disabled for performance testing.
   const w = room.weather;
@@ -2276,6 +2284,470 @@ function tickRoom(room) {
     broadcast(room);
   }
 }
+// Kết quả 1 phát trúng (đấm hoặc đạn bay): xe mất máu / người mất máu / bị hạ.
+function applyShotResult(room, p, stats, origin, dir, nearest, target, targetPart, struckVehicle) {
+  if (struckVehicle && !struckVehicle.destroyed) {
+    struckVehicle.hits++;
+    struckVehicle.hp = Math.max(0, 60 - struckVehicle.hits);
+    struckVehicle.smoke = struckVehicle.hits >= 50 ? 2 : struckVehicle.hits >= 30 ? 1 : 0;
+    if (struckVehicle.hits >= 60) {
+      struckVehicle.destroyed = true;
+      struckVehicle.speed = 0;
+      struckVehicle.blastPending = true;
+      struckVehicle.controls = { throttle: 0, steer: 0, brake: false };
+    }
+  }
+  if (!target || !target.alive) return;
+  room.hitSequence = (room.hitSequence || 0) + 1;
+  room.lastHit = {
+    id: room.hitSequence,
+    targetId: target.id,
+    shooterId: p.id,
+    point: { x: origin.x + dir.x * nearest, y: origin.y + dir.y * nearest, z: origin.z + dir.z * nearest },
+  };
+  target.hp = Math.max(0, target.hp - (targetPart === "head" ? stats.head : stats.body));
+  if (!target.hp) {
+    target.alive = false;
+    detachFromVehicle(room, target);
+    target.placement = [...room.players.values()].filter((player) => player.alive).length + 1;
+    p.kills++;
+    room.eliminationSequence = (room.eliminationSequence || 0) + 1;
+    room.lastElimination = {
+      id: room.eliminationSequence,
+      victimId: target.id,
+      victimName: target.name,
+      killerId: p.id,
+      killerName: p.name,
+      weapon: stats.name,
+      headshot: targetPart === "head",
+      distance: Math.round(Math.hypot(target.x - p.x, target.z - p.z)),
+    };
+    dropDeathLoot(room, target);
+    if ([...room.players.values()].filter((player) => player.alive).length <= 1) {
+      room.finishAt = Date.now() + MATCH_END_DELAY_MS;
+      if (p.ws?.readyState === 1) send(p.ws, { type: "toast", text: "CHIẾN THẮNG! BẠN ĐÃ GÕ ĐẦU TẤT CẢ" });
+    }
+  }
+}
+// Bay 1 viên đạn tới thời điểm `until`: 1 đoạn thẳng (đã cộng trọng lực), dò va chạm.
+const SURFACE_CODE = { ground: 0, wood: 1, stone: 2, metal: 3, flesh: 4, plant: 5 };
+function stepBullet(room, b, until) {
+  if (b.dead) return;
+  const dt = Math.max(0, Math.min(0.1, (until - b.lastAt) / 1000));
+  if (dt <= 0) return;
+  b.lastAt = until;
+  const nx = b.x + b.vx * dt,
+    ny = b.y + b.vy * dt - 0.5 * BULLET_GRAVITY * dt * dt,
+    nz = b.z + b.vz * dt;
+  const dx = nx - b.x,
+    dy = ny - b.y,
+    dz = nz - b.z;
+  const len = Math.hypot(dx, dy, dz);
+  b.vy -= BULLET_GRAVITY * dt;
+  if (len < 1e-6) return;
+  const dir = { x: dx / len, y: dy / len, z: dz / len };
+  const origin = { x: b.x, y: b.y, z: b.z };
+  const tr = traceShot(room, b.owner, origin, dir, len, false);
+  if (tr.surface) {
+    // Chạm: áp sát thương (nếu trúng người / xe) + báo vị trí chạm cho hiệu ứng.
+    applyShotResult(room, b.owner, b.stats, origin, dir, tr.nearest, tr.target, tr.targetPart, tr.struckVehicle);
+    const r2 = (v) => Math.round(v * 100) / 100;
+    (room.impacts ||= []).push([b.id, r2(origin.x + dir.x * tr.nearest), r2(origin.y + dir.y * tr.nearest), r2(origin.z + dir.z * tr.nearest), SURFACE_CODE[tr.surface] ?? 0]);
+    b.dead = true;
+    if (tr.target || tr.struckVehicle) room.dirty = true;
+    return;
+  }
+  b.x = nx;
+  b.y = ny;
+  b.z = nz;
+  b.travelled += len;
+  if (b.travelled > b.range || until - b.bornAt > BULLET_MAX_AGE || Math.abs(b.x) > MAP_HALF + 20 || Math.abs(b.z) > MAP_HALF + 20 || b.y < -30) {
+    b.dead = true; // bay hết tầm: rơi mất, không bụi
+    (room.impacts ||= []).push([b.id, 0, 0, 0, -1]);
+  }
+}
+function flushImpacts(room) {
+  if (!room.impacts?.length) return;
+  broadcastRaw(room, { type: "impacts", list: room.impacts });
+  room.impacts = [];
+}
+function tickBullets(room, now) {
+  if (!room.bullets?.length) return;
+  for (const b of room.bullets) stepBullet(room, b, now);
+  room.bullets = room.bullets.filter((b) => !b.dead);
+  flushImpacts(room);
+}
+// Dò 1 tia (đấm) hoặc 1 đoạn đường đạn (đạn bay): mặt đất, vật cản, xe, người.
+function traceShot(room, p, origin, dir, maxDist, melee) {
+      // Ray tests cover the full playable map (the previous 32-unit cap made
+      // correctly aimed shots at distant players silently miss).
+      let target = null,
+        targetPart = null,
+        struckVehicle = null,
+        nearest = maxDist,
+        surface = null;
+      const rayBox = (center, yaw, half) => {
+        const c = Math.cos(yaw),
+          s = Math.sin(yaw);
+        const relX = origin.x - center.x,
+          relZ = origin.z - center.z;
+        // Transform ray into the player's local coordinates (inverse Y rotation).
+        const o = [
+          c * relX - s * relZ,
+          origin.y - center.y,
+          s * relX + c * relZ,
+        ];
+        const d = [c * dir.x - s * dir.z, dir.y, s * dir.x + c * dir.z];
+        const h = [half.x, half.y, half.z];
+        let lo = 0,
+          hi = nearest;
+        for (let i = 0; i < 3; i++) {
+          if (Math.abs(d[i]) < 1e-8) {
+            if (o[i] < -h[i] || o[i] > h[i]) return null;
+            continue;
+          }
+          let a = (-h[i] - o[i]) / d[i],
+            b = (h[i] - o[i]) / d[i];
+          if (a > b) [a, b] = [b, a];
+          lo = Math.max(lo, a);
+          hi = Math.min(hi, b);
+          if (lo > hi) return null;
+        }
+        return hi >= 0 ? Math.max(0, lo) : null;
+      };
+      const raySphere = (center, radius, scaleY = 1) => {
+        const ox = origin.x - center.x;
+        const oy = (origin.y - center.y) / scaleY;
+        const oz = origin.z - center.z;
+        const dy = dir.y / scaleY;
+
+        const b = ox * dir.x + oy * dy + oz * dir.z;
+        const c = ox * ox + oy * oy + oz * oz - radius * radius;
+        const disc = b * b - c;
+
+        if (disc < 0) return null;
+
+        const t = -b - Math.sqrt(disc);
+        return t >= 0 && t <= nearest ? t : null;
+      };
+      const rayBuilding = (o) => {
+        const baseY = obstacleBaseY(room, o) + (o.lift || 0); // nhà sàn: tường đứng trên sàn cao
+        const half = o.w / 2;
+        const wallHeight = o.h * 0.72;
+        const thickness = 0.16;
+        const doorHalf = 1.05;
+        const centerAt = (lx, lz, y) => ({
+          x: o.x + Math.cos(o.yaw || 0) * lx + Math.sin(o.yaw || 0) * lz,
+          y: baseY + y,
+          z: o.z - Math.sin(o.yaw || 0) * lx + Math.cos(o.yaw || 0) * lz,
+        });
+        // Tường hông có CỬA SỔ trống (khớp đúng khung vẽ ở client: bệ cửa
+        // 34% → đỉnh cửa 73% chiều cao tường, rộng ±0.72 m): đạn bay xuyên qua
+        // ô cửa, chỉ phần tường quanh nó chặn đạn. Cửa ra vào có lanh tô phía trên.
+        const sill = wallHeight * 0.34;
+        const windowTop = wallHeight * 0.73;
+        const windowHalf = 0.72;
+        const doorH = Math.min(2.25, wallHeight * 0.78);
+        const sideWalls = [];
+        for (const side of [-1, 1]) {
+          const lx = side * (half - thickness / 2);
+          const hx = thickness / 2;
+          sideWalls.push(
+            rayBox(centerAt(lx, 0, sill / 2), o.yaw || 0, { x: hx, y: sill / 2, z: half }),
+            rayBox(
+              centerAt(lx, 0, (wallHeight + windowTop) / 2),
+              o.yaw || 0,
+              { x: hx, y: (wallHeight - windowTop) / 2, z: half },
+            ),
+            ...[-1, 1].map((end) =>
+              rayBox(
+                centerAt(lx, (end * (half + windowHalf)) / 2, (sill + windowTop) / 2),
+                o.yaw || 0,
+                { x: hx, y: (windowTop - sill) / 2, z: (half - windowHalf) / 2 },
+              ),
+            ),
+          );
+        }
+        // Tường hồi (ngũ giác dưới mái ở mặt cửa ra vào và mặt đối diện — khớp
+        // tường hồi vẽ ở client): xấp xỉ bằng 3 tấm xếp chồng, hẹp dần lên nóc.
+        const eave = o.w * 0.027,
+          ridge = o.w * 0.2876;
+        for (const end of [-1, 1])
+          for (let k = 0; k < 3; k++) {
+            const y0 = (ridge * k) / 3,
+              y1 = (ridge * (k + 1)) / 3,
+              mid = (y0 + y1) / 2;
+            const halfWidth = mid <= eave ? half : (half * (ridge - mid)) / (ridge - eave);
+            sideWalls.push(
+              rayBox(
+                centerAt(0, end * (half - thickness / 2), wallHeight + mid),
+                o.yaw || 0,
+                { x: halfWidth, y: (y1 - y0) / 2, z: thickness / 2 },
+              ),
+            );
+          }
+        if (o.lift)
+          // Gầm nhà sàn: tấm sàn + 9 cột gỗ chặn đạn, khoảng giữa các cột bắn xuyên được.
+          for (const b of Structures.stiltBulletBoxes(o))
+            sideWalls.push(rayBox(centerAt(b.x, b.z, b.y - o.lift), o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz }));
+        const distances = [
+          ...sideWalls,
+          rayBox(
+            centerAt(0, -half + thickness / 2, (wallHeight + doorH) / 2),
+            o.yaw || 0,
+            { x: doorHalf, y: (wallHeight - doorH) / 2, z: thickness / 2 },
+          ),
+          rayBox(
+            centerAt(0, half - thickness / 2, wallHeight / 2),
+            o.yaw || 0,
+            { x: half, y: wallHeight / 2, z: thickness / 2 },
+          ),
+          rayBox(
+            centerAt(
+              -(half + doorHalf) / 2,
+              -half + thickness / 2,
+              wallHeight / 2,
+            ),
+            o.yaw || 0,
+            { x: (half - doorHalf) / 2, y: wallHeight / 2, z: thickness / 2 },
+          ),
+          rayBox(
+            centerAt(
+              (half + doorHalf) / 2,
+              -half + thickness / 2,
+              wallHeight / 2,
+            ),
+            o.yaw || 0,
+            { x: (half - doorHalf) / 2, y: wallHeight / 2, z: thickness / 2 },
+          ),
+        ].filter((distance) => distance !== null);
+        return distances.length ? Math.min(...distances) : null;
+      };
+      // Mặt đất / đồi chắn đạn. Trước đây vòng dò 0.5 m này bị lặp lại cho
+      // TỪNG ngọn đồi (18 lần, mỗi bước lại quét toàn bộ vật cản để tìm cầu)
+      // → vài triệu phép tính cho MỖI viên đạn, bắn auto là server đứng hình.
+      // Dò đúng một lần cho kết quả y hệt; tia đã bay lên cao hơn mọi ngọn
+      // đồi thì không thể chạm đất nữa nên dừng sớm.
+      room.terrain ||= Terrain.build(room.obstacles);
+      const terrainTop = room.terrain.maxHeight;
+      // Đoạn ngắn (đạn bay từng nhịp): dò dày hơn để không lọt qua sườn dốc.
+      const terrainStep = Math.min(0.5, Math.max(0.15, nearest / 8));
+      for (let distance = terrainStep; distance < nearest; distance += terrainStep) {
+        const y = origin.y + dir.y * distance;
+        if (dir.y >= 0 && y > terrainTop + 0.1) break;
+        const x = origin.x + dir.x * distance;
+        const z = origin.z + dir.z * distance;
+        if (y <= groundHeightAt(room, x, z) + 0.08) {
+          nearest = distance;
+          surface = "ground";
+          break;
+        }
+      }
+      // Lọc thô trên mặt phẳng XZ: vật cản cách xa đường đạn thì bỏ qua,
+      // không cần dựng các hộp va chạm chi tiết của nó.
+      const flatLength = Math.hypot(dir.x, dir.z);
+      const ux = flatLength > 1e-6 ? dir.x / flatLength : 0;
+      const uz = flatLength > 1e-6 ? dir.z / flatLength : 0;
+      const farOnRay = (o) => {
+        const r = obstacleBoundRadius(o) + 0.5;
+        const vx = o.x - origin.x,
+          vz = o.z - origin.z;
+        if (flatLength <= 1e-6) return Math.hypot(vx, vz) > r;
+        const along = vx * ux + vz * uz;
+        if (along < -r || along > nearest * flatLength + r) return true;
+        return Math.abs(vx * uz - vz * ux) > r;
+      };
+      // Hitbox người chơi theo tư thế — trùng khớp public/avatar.js (HITBOX), bao
+      // trọn nón (đầu) và áo giáp (thân). Toạ độ cục bộ: mặt nhìn về -Z.
+      const playerHitboxHit = (q, baseY) => {
+        const set = playerHitboxes(q);
+        const c = Math.cos(q.yaw || 0),
+          sn = Math.sin(q.yaw || 0);
+        let best = null;
+        for (const box of set.boxes) {
+          const [lx, ly, lz] = box.c;
+          const center = {
+            x: q.x + c * lx + sn * lz,
+            y: baseY + ly,
+            z: q.z - sn * lx + c * lz,
+          };
+          const t = rayBox(center, q.yaw || 0, { x: box.h[0], y: box.h[1], z: box.h[2] });
+          if (t !== null && (!best || t < best.distance))
+            best = { distance: t, part: box.part };
+        }
+        return best;
+      };
+      // A solid map box blocks shots to anything behind it.
+      for (const o of obstaclesAlongRay(room, origin, dir, nearest)) {
+        if (o.type === "hill" || o.solid === false) continue;
+        if (farOnRay(o)) continue;
+        const baseY = obstacleBaseY(room, o);
+        let wallDistance;
+        if (o.type === "keep") {
+          // Thành chính: từng khối tường / sàn / lan can / cột (cửa sổ, cửa bắn xuyên).
+          const c = Math.cos(o.yaw || 0),
+            sn = Math.sin(o.yaw || 0);
+          for (const b of Structures.keepParts(o)) {
+            if (b.kind === "floor") continue;
+            const d = rayBox({ x: o.x + c * b.x + sn * b.z, y: baseY + b.y, z: o.z - sn * b.x + c * b.z }, o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz });
+            if (d !== null && (wallDistance === undefined || wallDistance === null || d < wallDistance)) wallDistance = d;
+          }
+        } else if (o.type === "manor") {
+          // Nhà to: từng đoạn tường / mái (cửa sổ, cửa ra vào bắn xuyên được).
+          const c = Math.cos(o.yaw || 0),
+            sn = Math.sin(o.yaw || 0);
+          for (const b of Structures.manorParts(o)) {
+            const d = rayBox({ x: o.x + c * b.x + sn * b.z, y: baseY + b.y, z: o.z - sn * b.x + c * b.z }, o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz });
+            if (d !== null && (wallDistance === undefined || wallDistance === null || d < wallDistance)) wallDistance = d;
+          }
+        } else if (o.type === "table" || o.type === "chair" || o.type === "bed" || o.type === "shelf") {
+          continue; // bàn không chặn đạn
+        } else if (o.type === "house" || o.type === "hut") {
+          wallDistance = rayBuilding(o);
+        } else if (o.type === "tree") {
+          // Only the visible trunk blocks shots; foliage is not a solid wall.
+          wallDistance = rayBox({ x: o.x, y: baseY + o.h * 0.31, z: o.z }, 0, {
+            x: o.w * 0.25,
+            y: o.h * 0.31,
+            z: o.w * 0.25,
+          });
+        } else if (o.type === "deadTree") {
+          wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, 0, {
+            x: o.w * 0.28,
+            y: o.h / 2,
+            z: o.w * 0.28,
+          });
+        } else if (o.type === "cactus") {
+          wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, 0, {
+            x: o.w * 0.48,
+            y: o.h / 2,
+            z: o.w * 0.27,
+          });
+        } else if (o.type === "banana" || o.type === "palm") {
+          const r = o.w * (o.type === "palm" ? 0.2 : 0.14);
+          wallDistance = rayBox({ x: o.x, y: baseY + o.h * 0.35, z: o.z }, 0, { x: r, y: o.h * 0.35, z: r });
+        } else if (o.type === "fence" || o.type === "stonewall") {
+          wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, o.yaw || 0, {
+            x: o.w / 2,
+            y: o.h / 2,
+            z: o.length / 2,
+          });
+        } else if (o.type === "rock") {
+          wallDistance = rayBox(
+            { x: o.x, y: baseY + o.h * 0.42, z: o.z },
+            o.yaw || 0,
+            { x: o.w * 0.5, y: o.h * 0.5, z: o.w * 0.41 },
+          );
+        } else {
+          wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, 0, {
+            x: o.w / 2,
+            y: o.h / 2,
+            z: o.w / 2,
+          });
+        }
+        if (wallDistance !== null && wallDistance !== undefined && wallDistance < nearest) {
+          nearest = wallDistance;
+          surface = SURFACE_OF[o.type] || "stone";
+        }
+      }
+      // Car collider consists of the visible hood, trunk, side rails and wheels;
+      // the open seat area remains hittable so occupants are never made invulnerable.
+      for (const vehicle of melee ? [] : room.vehicles || []) {
+        if (vehicle.destroyed) continue;
+        const baseY = groundHeightAt(room, vehicle.x, vehicle.z);
+        const parts = [
+          [-0.0, 0.66, -1.02, 0.78, 0.28, 0.72], // hood
+          [0, 0.48, 1.28, 0.75, 0.22, 0.54], // trunk
+          [-0.88, 0.57, 0.08, 0.1, 0.25, 0.82], // driver-side rail
+          [0.88, 0.57, 0.08, 0.1, 0.25, 0.82], // passenger-side rail
+          [-0.91, 0.3, -1.08, 0.14, 0.3, 0.34],
+          [0.91, 0.3, -1.08, 0.14, 0.3, 0.34],
+          [-0.91, 0.3, 1.12, 0.14, 0.3, 0.34],
+          [0.91, 0.3, 1.12, 0.14, 0.3, 0.34],
+        ];
+        let vehicleDistance = null;
+        for (const [lx, y, lz, hx, hy, hz] of parts) {
+          const center = {
+            x:
+              vehicle.x +
+              Math.cos(vehicle.yaw) * lx +
+              Math.sin(vehicle.yaw) * lz,
+            y: baseY + y,
+            z:
+              vehicle.z -
+              Math.sin(vehicle.yaw) * lx +
+              Math.cos(vehicle.yaw) * lz,
+          };
+          const hit = rayBox(center, vehicle.yaw, { x: hx, y: hy, z: hz });
+          if (
+            hit !== null &&
+            (vehicleDistance === null || hit < vehicleDistance)
+          )
+            vehicleDistance = hit;
+        }
+        if (vehicleDistance !== null && vehicleDistance < nearest) {
+          nearest = vehicleDistance;
+          surface = "metal";
+          struckVehicle = vehicle;
+          target = null;
+          targetPart = null;
+        }
+      }
+      const blockerDistance = nearest; // tường/đá/xe gần nhất chắn giữa tia và người chơi
+      for (const q of room.players.values())
+        if (
+          q !== p &&
+          q.alive &&
+          ["ground", "freefall", "parachute"].includes(q.state)
+        ) {
+          const airborne = q.state === "freefall" || q.state === "parachute";
+          const targetBaseY = airborne
+            ? Number(q.y) || 0
+            : q.swimming
+              ? q.swimY || 0
+              : q.groundY || 0;
+          const hit = playerHitboxHit(q, targetBaseY);
+          if (hit && hit.distance < nearest) {
+            nearest = hit.distance;
+            surface = "flesh";
+            struckVehicle = null;
+            target = q;
+            targetPart = hit.part;
+          }
+        }
+      return { nearest, target, targetPart, struckVehicle, blockerDistance, surface };
+}
+// Vật cản có thể nằm trên đoạn [origin, origin + dir·len] (lấy theo lưới 16 m,
+// không quét cả ~6000 vật trên map cho mỗi viên đạn).
+function obstaclesAlongRay(room, origin, dir, len) {
+  const cells = room.obstacles.cellAt;
+  if (!cells) return room.obstacles;
+  const out = new Set();
+  const flat = Math.hypot(dir.x, dir.z) * len;
+  const steps = Math.max(1, Math.ceil(flat / (GRID_CELL / 4)));
+  for (let i = 0; i <= steps; i++) {
+    const t = (len * i) / steps;
+    for (const o of cells(origin.x + dir.x * t, origin.z + dir.z * t)) out.add(o);
+  }
+  return out;
+}
+// Loại bề mặt khi đạn chạm (client chọn bụi / âm thanh tương ứng).
+const SURFACE_OF = {
+  house: "wood",
+  hut: "wood",
+  tree: "wood",
+  deadTree: "wood",
+  banana: "plant",
+  palm: "wood",
+  cactus: "plant",
+  fence: "wood",
+  rock: "stone",
+  stonewall: "stone",
+  tower: "stone",
+  keep: "stone",
+  manor: "stone",
+  fortramp: "stone",
+};
 wss.on("connection", (ws) => {
   let room;
   const handleMessage = (raw) => {
@@ -2332,10 +2804,10 @@ wss.on("connection", (ws) => {
           flushRoomState(room);
         }, 50);
       }
-      if (room.phase !== "waiting" || room.players.size >= 5)
+      if (room.phase !== "waiting" || room.players.size >= MAX_PLAYERS)
         return send(ws, {
           type: "error",
-          message: "Phòng đã bắt đầu hoặc đã đủ 5 người.",
+          message: `Phòng đã bắt đầu hoặc đã đủ ${MAX_PLAYERS} người.`,
         });
       const id = Math.random().toString(36).slice(2, 10);
       const player = {
@@ -3260,334 +3732,40 @@ wss.on("connection", (ws) => {
               (p.prone ? 0.48 : p.crouching ? 1.34 : 1.8), // khớp độ cao mắt ở client
         z: freshPosition ? sz : p.z,
       };
-      // Ray tests cover the full playable map (the previous 32-unit cap made
-      // correctly aimed shots at distant players silently miss).
-      let target = null,
-        targetPart = null,
-        struckVehicle = null,
-        nearest = stats.range; // đấm chỉ với tới ~1.9 m
-      const rayBox = (center, yaw, half) => {
-        const c = Math.cos(yaw),
-          s = Math.sin(yaw);
-        const relX = origin.x - center.x,
-          relZ = origin.z - center.z;
-        // Transform ray into the player's local coordinates (inverse Y rotation).
-        const o = [
-          c * relX - s * relZ,
-          origin.y - center.y,
-          s * relX + c * relZ,
-        ];
-        const d = [c * dir.x - s * dir.z, dir.y, s * dir.x + c * dir.z];
-        const h = [half.x, half.y, half.z];
-        let lo = 0,
-          hi = nearest;
-        for (let i = 0; i < 3; i++) {
-          if (Math.abs(d[i]) < 1e-8) {
-            if (o[i] < -h[i] || o[i] > h[i]) return null;
-            continue;
-          }
-          let a = (-h[i] - o[i]) / d[i],
-            b = (h[i] - o[i]) / d[i];
-          if (a > b) [a, b] = [b, a];
-          lo = Math.max(lo, a);
-          hi = Math.min(hi, b);
-          if (lo > hi) return null;
-        }
-        return hi >= 0 ? Math.max(0, lo) : null;
-      };
-      const raySphere = (center, radius, scaleY = 1) => {
-        const ox = origin.x - center.x;
-        const oy = (origin.y - center.y) / scaleY;
-        const oz = origin.z - center.z;
-        const dy = dir.y / scaleY;
-
-        const b = ox * dir.x + oy * dy + oz * dir.z;
-        const c = ox * ox + oy * oy + oz * oz - radius * radius;
-        const disc = b * b - c;
-
-        if (disc < 0) return null;
-
-        const t = -b - Math.sqrt(disc);
-        return t >= 0 && t <= nearest ? t : null;
-      };
-      const rayBuilding = (o) => {
-        const baseY = obstacleBaseY(room, o) + (o.lift || 0); // nhà sàn: tường đứng trên sàn cao
-        const half = o.w / 2;
-        const wallHeight = o.h * 0.72;
-        const thickness = 0.16;
-        const doorHalf = 1.05;
-        const centerAt = (lx, lz, y) => ({
-          x: o.x + Math.cos(o.yaw || 0) * lx + Math.sin(o.yaw || 0) * lz,
-          y: baseY + y,
-          z: o.z - Math.sin(o.yaw || 0) * lx + Math.cos(o.yaw || 0) * lz,
+      if (!melee) {
+        // ĐẠN BAY: tạo viên đạn, báo NGAY cho mọi người (vẽ vệt sáng), bay
+        // 1 nhịp đầu ngay lập tức rồi tiếp tục theo tick.
+        const speed = BULLET_SPEED[p.weapon] || 300;
+        const bullet = {
+          id: (room.nextBulletId = (room.nextBulletId || 0) + 1),
+          owner: p,
+          x: origin.x,
+          y: origin.y,
+          z: origin.z,
+          vx: dir.x * speed,
+          vy: dir.y * speed,
+          vz: dir.z * speed,
+          bornAt: shotTime,
+          lastAt: shotTime,
+          travelled: 0,
+          range: stats.range,
+          stats,
+        };
+        (room.bullets ||= []).push(bullet);
+        const r2 = (v) => Math.round(v * 100) / 100;
+        broadcastRaw(room, {
+          type: "bullet",
+          b: [bullet.id, p.id, r2(origin.x), r2(origin.y), r2(origin.z), r2(bullet.vx), r2(bullet.vy), r2(bullet.vz), p.weapon, Number(m.sid) || 0],
         });
-        // Tường hông có CỬA SỔ trống (khớp đúng khung vẽ ở client: bệ cửa
-        // 34% → đỉnh cửa 73% chiều cao tường, rộng ±0.72 m): đạn bay xuyên qua
-        // ô cửa, chỉ phần tường quanh nó chặn đạn. Cửa ra vào có lanh tô phía trên.
-        const sill = wallHeight * 0.34;
-        const windowTop = wallHeight * 0.73;
-        const windowHalf = 0.72;
-        const doorH = Math.min(2.25, wallHeight * 0.78);
-        const sideWalls = [];
-        for (const side of [-1, 1]) {
-          const lx = side * (half - thickness / 2);
-          const hx = thickness / 2;
-          sideWalls.push(
-            rayBox(centerAt(lx, 0, sill / 2), o.yaw || 0, { x: hx, y: sill / 2, z: half }),
-            rayBox(
-              centerAt(lx, 0, (wallHeight + windowTop) / 2),
-              o.yaw || 0,
-              { x: hx, y: (wallHeight - windowTop) / 2, z: half },
-            ),
-            ...[-1, 1].map((end) =>
-              rayBox(
-                centerAt(lx, (end * (half + windowHalf)) / 2, (sill + windowTop) / 2),
-                o.yaw || 0,
-                { x: hx, y: (windowTop - sill) / 2, z: (half - windowHalf) / 2 },
-              ),
-            ),
-          );
-        }
-        // Tường hồi (ngũ giác dưới mái ở mặt cửa ra vào và mặt đối diện — khớp
-        // tường hồi vẽ ở client): xấp xỉ bằng 3 tấm xếp chồng, hẹp dần lên nóc.
-        const eave = o.w * 0.027,
-          ridge = o.w * 0.2876;
-        for (const end of [-1, 1])
-          for (let k = 0; k < 3; k++) {
-            const y0 = (ridge * k) / 3,
-              y1 = (ridge * (k + 1)) / 3,
-              mid = (y0 + y1) / 2;
-            const halfWidth = mid <= eave ? half : (half * (ridge - mid)) / (ridge - eave);
-            sideWalls.push(
-              rayBox(
-                centerAt(0, end * (half - thickness / 2), wallHeight + mid),
-                o.yaw || 0,
-                { x: halfWidth, y: (y1 - y0) / 2, z: thickness / 2 },
-              ),
-            );
-          }
-        if (o.lift)
-          // Gầm nhà sàn: tấm sàn + 9 cột gỗ chặn đạn, khoảng giữa các cột bắn xuyên được.
-          for (const b of Structures.stiltBulletBoxes(o))
-            sideWalls.push(rayBox(centerAt(b.x, b.z, b.y - o.lift), o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz }));
-        const distances = [
-          ...sideWalls,
-          rayBox(
-            centerAt(0, -half + thickness / 2, (wallHeight + doorH) / 2),
-            o.yaw || 0,
-            { x: doorHalf, y: (wallHeight - doorH) / 2, z: thickness / 2 },
-          ),
-          rayBox(
-            centerAt(0, half - thickness / 2, wallHeight / 2),
-            o.yaw || 0,
-            { x: half, y: wallHeight / 2, z: thickness / 2 },
-          ),
-          rayBox(
-            centerAt(
-              -(half + doorHalf) / 2,
-              -half + thickness / 2,
-              wallHeight / 2,
-            ),
-            o.yaw || 0,
-            { x: (half - doorHalf) / 2, y: wallHeight / 2, z: thickness / 2 },
-          ),
-          rayBox(
-            centerAt(
-              (half + doorHalf) / 2,
-              -half + thickness / 2,
-              wallHeight / 2,
-            ),
-            o.yaw || 0,
-            { x: (half - doorHalf) / 2, y: wallHeight / 2, z: thickness / 2 },
-          ),
-        ].filter((distance) => distance !== null);
-        return distances.length ? Math.min(...distances) : null;
-      };
-      // Mặt đất / đồi chắn đạn. Trước đây vòng dò 0.5 m này bị lặp lại cho
-      // TỪNG ngọn đồi (18 lần, mỗi bước lại quét toàn bộ vật cản để tìm cầu)
-      // → vài triệu phép tính cho MỖI viên đạn, bắn auto là server đứng hình.
-      // Dò đúng một lần cho kết quả y hệt; tia đã bay lên cao hơn mọi ngọn
-      // đồi thì không thể chạm đất nữa nên dừng sớm.
-      room.terrain ||= Terrain.build(room.obstacles);
-      const terrainTop = room.terrain.maxHeight;
-      for (let distance = 0.5; distance < nearest; distance += 0.5) {
-        const y = origin.y + dir.y * distance;
-        if (dir.y >= 0 && y > terrainTop + 0.1) break;
-        const x = origin.x + dir.x * distance;
-        const z = origin.z + dir.z * distance;
-        if (y <= groundHeightAt(room, x, z) + 0.08) {
-          nearest = distance;
-          break;
-        }
+        stepBullet(room, bullet, shotTime + 50); // 1 nhịp đầu (~15 m) ngay khi bắn
+        flushImpacts(room);
+        if (bullet.dead) room.bullets = room.bullets.filter((x) => x !== bullet);
+        broadcast(room);
+        return;
       }
-      // Lọc thô trên mặt phẳng XZ: vật cản cách xa đường đạn thì bỏ qua,
-      // không cần dựng các hộp va chạm chi tiết của nó.
-      const flatLength = Math.hypot(dir.x, dir.z);
-      const ux = flatLength > 1e-6 ? dir.x / flatLength : 0;
-      const uz = flatLength > 1e-6 ? dir.z / flatLength : 0;
-      const farOnRay = (o) => {
-        const r = obstacleBoundRadius(o) + 0.5;
-        const vx = o.x - origin.x,
-          vz = o.z - origin.z;
-        if (flatLength <= 1e-6) return Math.hypot(vx, vz) > r;
-        const along = vx * ux + vz * uz;
-        if (along < -r || along > nearest * flatLength + r) return true;
-        return Math.abs(vx * uz - vz * ux) > r;
-      };
-      // Hitbox người chơi theo tư thế — trùng khớp public/avatar.js (HITBOX), bao
-      // trọn nón (đầu) và áo giáp (thân). Toạ độ cục bộ: mặt nhìn về -Z.
-      const playerHitboxHit = (q, baseY) => {
-        const set = playerHitboxes(q);
-        const c = Math.cos(q.yaw || 0),
-          sn = Math.sin(q.yaw || 0);
-        let best = null;
-        for (const box of set.boxes) {
-          const [lx, ly, lz] = box.c;
-          const center = {
-            x: q.x + c * lx + sn * lz,
-            y: baseY + ly,
-            z: q.z - sn * lx + c * lz,
-          };
-          const t = rayBox(center, q.yaw || 0, { x: box.h[0], y: box.h[1], z: box.h[2] });
-          if (t !== null && (!best || t < best.distance))
-            best = { distance: t, part: box.part };
-        }
-        return best;
-      };
-      // A solid map box blocks shots to anything behind it.
-      for (const o of room.obstacles) {
-        if (o.type === "hill" || o.solid === false) continue;
-        if (farOnRay(o)) continue;
-        const baseY = obstacleBaseY(room, o);
-        let wallDistance;
-        if (o.type === "keep") {
-          // Thành chính: từng khối tường / sàn / lan can / cột (cửa sổ, cửa bắn xuyên).
-          const c = Math.cos(o.yaw || 0),
-            sn = Math.sin(o.yaw || 0);
-          for (const b of Structures.keepParts(o)) {
-            if (b.kind === "floor") continue;
-            const d = rayBox({ x: o.x + c * b.x + sn * b.z, y: baseY + b.y, z: o.z - sn * b.x + c * b.z }, o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz });
-            if (d !== null && (wallDistance === undefined || wallDistance === null || d < wallDistance)) wallDistance = d;
-          }
-        } else if (o.type === "manor") {
-          // Nhà to: từng đoạn tường / mái (cửa sổ, cửa ra vào bắn xuyên được).
-          const c = Math.cos(o.yaw || 0),
-            sn = Math.sin(o.yaw || 0);
-          for (const b of Structures.manorParts(o)) {
-            const d = rayBox({ x: o.x + c * b.x + sn * b.z, y: baseY + b.y, z: o.z - sn * b.x + c * b.z }, o.yaw || 0, { x: b.hx, y: b.hy, z: b.hz });
-            if (d !== null && (wallDistance === undefined || wallDistance === null || d < wallDistance)) wallDistance = d;
-          }
-        } else if (o.type === "table" || o.type === "chair" || o.type === "bed" || o.type === "shelf") {
-          continue; // bàn không chặn đạn
-        } else if (o.type === "house" || o.type === "hut") {
-          wallDistance = rayBuilding(o);
-        } else if (o.type === "tree") {
-          // Only the visible trunk blocks shots; foliage is not a solid wall.
-          wallDistance = rayBox({ x: o.x, y: baseY + o.h * 0.31, z: o.z }, 0, {
-            x: o.w * 0.25,
-            y: o.h * 0.31,
-            z: o.w * 0.25,
-          });
-        } else if (o.type === "deadTree") {
-          wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, 0, {
-            x: o.w * 0.28,
-            y: o.h / 2,
-            z: o.w * 0.28,
-          });
-        } else if (o.type === "cactus") {
-          wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, 0, {
-            x: o.w * 0.48,
-            y: o.h / 2,
-            z: o.w * 0.27,
-          });
-        } else if (o.type === "banana" || o.type === "palm") {
-          const r = o.w * (o.type === "palm" ? 0.2 : 0.14);
-          wallDistance = rayBox({ x: o.x, y: baseY + o.h * 0.35, z: o.z }, 0, { x: r, y: o.h * 0.35, z: r });
-        } else if (o.type === "fence" || o.type === "stonewall") {
-          wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, o.yaw || 0, {
-            x: o.w / 2,
-            y: o.h / 2,
-            z: o.length / 2,
-          });
-        } else if (o.type === "rock") {
-          wallDistance = rayBox(
-            { x: o.x, y: baseY + o.h * 0.42, z: o.z },
-            o.yaw || 0,
-            { x: o.w * 0.5, y: o.h * 0.5, z: o.w * 0.41 },
-          );
-        } else {
-          wallDistance = rayBox({ x: o.x, y: baseY + o.h / 2, z: o.z }, 0, {
-            x: o.w / 2,
-            y: o.h / 2,
-            z: o.w / 2,
-          });
-        }
-        if (wallDistance !== null && wallDistance < nearest)
-          nearest = wallDistance;
-      }
-      // Car collider consists of the visible hood, trunk, side rails and wheels;
-      // the open seat area remains hittable so occupants are never made invulnerable.
-      for (const vehicle of melee ? [] : room.vehicles || []) {
-        if (vehicle.destroyed) continue;
-        const baseY = groundHeightAt(room, vehicle.x, vehicle.z);
-        const parts = [
-          [-0.0, 0.66, -1.02, 0.78, 0.28, 0.72], // hood
-          [0, 0.48, 1.28, 0.75, 0.22, 0.54], // trunk
-          [-0.88, 0.57, 0.08, 0.1, 0.25, 0.82], // driver-side rail
-          [0.88, 0.57, 0.08, 0.1, 0.25, 0.82], // passenger-side rail
-          [-0.91, 0.3, -1.08, 0.14, 0.3, 0.34],
-          [0.91, 0.3, -1.08, 0.14, 0.3, 0.34],
-          [-0.91, 0.3, 1.12, 0.14, 0.3, 0.34],
-          [0.91, 0.3, 1.12, 0.14, 0.3, 0.34],
-        ];
-        let vehicleDistance = null;
-        for (const [lx, y, lz, hx, hy, hz] of parts) {
-          const center = {
-            x:
-              vehicle.x +
-              Math.cos(vehicle.yaw) * lx +
-              Math.sin(vehicle.yaw) * lz,
-            y: baseY + y,
-            z:
-              vehicle.z -
-              Math.sin(vehicle.yaw) * lx +
-              Math.cos(vehicle.yaw) * lz,
-          };
-          const hit = rayBox(center, vehicle.yaw, { x: hx, y: hy, z: hz });
-          if (
-            hit !== null &&
-            (vehicleDistance === null || hit < vehicleDistance)
-          )
-            vehicleDistance = hit;
-        }
-        if (vehicleDistance !== null && vehicleDistance < nearest) {
-          nearest = vehicleDistance;
-          struckVehicle = vehicle;
-          target = null;
-          targetPart = null;
-        }
-      }
-      const blockerDistance = nearest; // tường/đá/xe gần nhất chắn giữa tia và người chơi
-      for (const q of room.players.values())
-        if (
-          q !== p &&
-          q.alive &&
-          ["ground", "freefall", "parachute"].includes(q.state)
-        ) {
-          const airborne = q.state === "freefall" || q.state === "parachute";
-          const targetBaseY = airborne
-            ? Number(q.y) || 0
-            : q.swimming
-              ? q.swimY || 0
-              : q.groundY || 0;
-          const hit = playerHitboxHit(q, targetBaseY);
-          if (hit && hit.distance < nearest) {
-            nearest = hit.distance;
-            struckVehicle = null;
-            target = q;
-            targetPart = hit.part;
-          }
-        }
+      const tr = traceShot(room, p, origin, dir, stats.range, melee);
+      let { nearest, target, targetPart, struckVehicle } = tr;
+      const blockerDistance = tr.blockerDistance;
       // Red dot dính địch trên màn hình = chắc chắn trúng: nếu cách xét cũ trượt
       // (địch đang di chuyển/trễ mạng) nhưng client báo trúng và tia thật sự đi
       // qua địch trong cửa sổ trễ, không bị vật cản che, thì vẫn tính trúng.
@@ -3609,67 +3787,7 @@ wss.on("connection", (ws) => {
           }
         }
       }
-      if (struckVehicle) {
-        struckVehicle.hits++;
-        struckVehicle.hp = Math.max(0, 60 - struckVehicle.hits);
-        struckVehicle.smoke =
-          struckVehicle.hits >= 50 ? 2 : struckVehicle.hits >= 30 ? 1 : 0;
-        if (struckVehicle.hits >= 60) {
-          struckVehicle.destroyed = true;
-          struckVehicle.speed = 0;
-          struckVehicle.blastPending = true;
-          struckVehicle.controls = { throttle: 0, steer: 0, brake: false };
-        }
-      }
-      if (target) {
-        room.hitSequence = (room.hitSequence || 0) + 1;
-        room.lastHit = {
-          id: room.hitSequence,
-          targetId: target.id,
-          shooterId: p.id,
-          point: {
-            x: origin.x + dir.x * nearest,
-            y: origin.y + dir.y * nearest,
-            z: origin.z + dir.z * nearest,
-          },
-        };
-        target.hp = Math.max(0, target.hp - (targetPart === "head" ? stats.head : stats.body));
-        if (!target.hp) {
-          target.alive = false;
-          detachFromVehicle(room, target);
-          // Place eliminated players by elimination order; the last survivor is first.
-          target.placement =
-            [...room.players.values()].filter((player) => player.alive).length +
-            1;
-          p.kills++;
-          room.eliminationSequence = (room.eliminationSequence || 0) + 1;
-          room.lastElimination = {
-            id: room.eliminationSequence,
-            victimId: target.id,
-            victimName: target.name,
-            killerId: p.id,
-            killerName: p.name,
-            // Cho màn Chiến tích: hạ bằng súng gì, headshot, khoảng cách.
-            weapon: stats.name,
-            headshot: targetPart === "head",
-            distance: Math.round(nearest),
-          };
-          dropDeathLoot(room, target);
-        }
-      }
-      // Không kết thúc trận ngay: giữ phase "playing" thêm vài giây để người
-      // thắng còn cơ hội nhặt hòm tiếp tế vừa rơi ra từ đối thủ cuối cùng.
-      if (
-        target &&
-        !target.alive &&
-        [...room.players.values()].filter((player) => player.alive).length <= 1
-      ) {
-        room.finishAt = Date.now() + MATCH_END_DELAY_MS;
-        send(ws, {
-          type: "toast",
-          text: `CHIẾN THẮNG! BẠN ĐÃ GÕ ĐẦU TẤT CẢ`,
-        });
-      }
+      applyShotResult(room, p, stats, origin, dir, nearest, target, targetPart, struckVehicle);
       broadcast(room);
       return;
     }
