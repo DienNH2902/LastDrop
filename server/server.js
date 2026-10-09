@@ -3323,7 +3323,8 @@ wss.on("connection", (ws) => {
       // The client sends the item targeted by the crosshair; validate that exact item here.
       if (p.healingUntil > Date.now() || p.swimming) return;
       const best = (room.loot || []).find((item) => item.id === m.itemId);
-      if (!best || Math.hypot(best.x - p.x, best.z - p.z) > PICKUP_RADIUS)
+      // Nhặt từ balo (Tab) với tới 5 m; phím F 2.5 m.
+      if (!best || Math.hypot(best.x - p.x, best.z - p.z) > (m.tab ? 5 : PICKUP_RADIUS))
         return;
       if (Number.isFinite(best.y) && Math.abs((p.groundY || 0) - best.y) > 1.6) return; // khác tầng
       // Keep the active magazine size stable for the duration of a reload.

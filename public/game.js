@@ -293,6 +293,7 @@ const tmpColorB = new THREE.Color();
 
 // Vật phẩm / balo / hồi máu (server quyết định kết quả, khớp với server.js)
 const PICKUP_RADIUS = 2;
+const TAB_LOOT_RADIUS = 4.5; // mở balo (Tab): thấy + nhặt đồ trong 4.5 m (server cho 5 m)
 const PICKUP_ANIM_MS = 700; // động tác cúi xuống nhặt đồ
 // Độ cúi khi nhặt (0 → 1 → 0).
 function pickupDip() {
@@ -5924,6 +5925,16 @@ function renderPlayers(state) {
       mesh.userData.footstepDistance = 0;
       mesh.userData.gaitDistance = 0;
     }
+    // Người khác bơi gần mình: nghe tiếng khua nước theo từng sải tay.
+    if (p.alive && p.swimming && motionDistance < 1.5) {
+      mesh.userData.swimDistance = (mesh.userData.swimDistance || 0) + motionDistance;
+      while (mesh.userData.swimDistance >= 1.3) {
+        mesh.userData.swimDistance -= 1.3;
+        const w = waterAt(p.x, p.z);
+        const sy = Number.isFinite(p.swimY) ? p.swimY : p.groundY || 0;
+        playSwimStroke({ x: p.x, y: sy + 1.2, z: p.z }, Boolean(w && sy < w.surfaceY - 1.9), 1);
+      }
+    } else mesh.userData.swimDistance = 0;
     mesh.userData.lastMotionX = p.x;
     mesh.userData.lastMotionZ = p.z;
     // Đếm số phát mới theo shotId của server (mỗi phát bắn tăng 1).
@@ -6526,9 +6537,11 @@ function installLootUi() {
   panel.innerHTML = `
     <div class="bp-head"><span id="bpTitle">BALO</span><small>TAB / ESC · ĐÓNG</small></div>
     <div class="inv-grid">
-      <section class="inv-col" data-zone="ground"><h4>XUNG QUANH</h4><div id="invGround" class="inv-list"></div></section>
-      <section class="inv-col" data-zone="pack"><h4>KHO ĐỒ</h4><div id="invPack" class="inv-list"></div></section>
-      <section class="inv-col inv-equip" data-zone="equip"><h4>TRANG BỊ</h4><div id="invEquip" class="inv-list"></div></section>
+      <div class="inv-left">
+        <section class="inv-col" data-zone="ground"><h4>XUNG QUANH <small>TẦM 4.5 M · LĂN CHUỘT ĐỂ XEM THÊM</small></h4><div id="invGround" class="inv-list"></div></section>
+        <section class="inv-col" data-zone="pack"><h4>KHO ĐỒ</h4><div id="invPack" class="inv-list"></div></section>
+      </div>
+      <section class="inv-col inv-equip" data-zone="equip"><h4>TRANG BỊ · SÚNG & LỰU ĐẠN</h4><div id="invEquip" class="inv-list"></div></section>
     </div>
     <div class="bp-foot">GIỮ CHUỘT TRÁI KÉO ĐỒ SANG KHO ĐỂ NHẶT · KÉO RA NGOÀI ĐỂ VỨT · CHUỘT PHẢI: NHẶT NHANH / DÙNG / VỨT SÚNG</div>`;
   $(".hud").append(panel);
@@ -6622,7 +6635,7 @@ function groundEntries() {
   if (local.state !== "ground" || local.swimming) return out;
   for (const item of lootItems.values()) {
     const d = Math.hypot(item.x - local.x, item.z - local.z);
-    if (d > PICKUP_RADIUS + 0.4) continue;
+    if (d > TAB_LOOT_RADIUS) continue; // Tab: tầm nhặt rộng hơn phím F
     if (Number.isFinite(item.y) && Math.abs((local.groundY || 0) - item.y) > 1.6) continue;
     out.push({ src: "loot", id: item.id, type: item.type, weapon: item.weapon, att: item.att, amount: item.amount || 1, d });
   }
@@ -6728,7 +6741,7 @@ function renderBackpack() {
 function pickupLoot(item) {
   if (!item) return;
   if (!packHasRoom(item.type)) return showLootToast(`BALO ĐẦY ${INV_NAMES[item.type] || ""}`.trim());
-  if (send({ type: "pickup", itemId: item.id })) playPickupAnim();
+  if (send({ type: "pickup", itemId: item.id, tab: backpackOpen })) playPickupAnim();
 }
 function invPickup(el) {
   if (el.dataset.src === "loot") {
@@ -7956,8 +7969,50 @@ function cleanupGame() {
   inMatch = false;
   plane = null;
   planeObject = null;
-  renderer?.dispose();
+  stopLoop("underwater", 0.05);
+  underwaterOn = false;
+  // DỌN SẠCH GPU + RAM của trận cũ: mọi hình học / vật liệu / texture trong scene
+  // (map gộp, cỏ, đồ, bóng, trời...) được giải phóng, mất ngữ cảnh WebGL ngay để
+  // trình duyệt / bản .exe trả bộ nhớ đồ hoạ — trận mới bắt đầu "sạch", không ì.
+  if (scene) {
+    const mats = new Set(),
+      texs = new Set();
+    scene.traverse((o) => {
+      o.geometry?.dispose();
+      for (const m of Array.isArray(o.material) ? o.material : o.material ? [o.material] : []) mats.add(m);
+    });
+    for (const m of mats) {
+      for (const v of Object.values(m)) if (v?.isTexture) texs.add(v);
+      if (m.uniforms) for (const u of Object.values(m.uniforms)) if (u?.value?.isTexture) texs.add(u.value);
+      m.dispose();
+    }
+    for (const t of texs) t.dispose();
+    scene.clear();
+  }
+  try {
+    renderer?.renderLists?.dispose();
+    renderer?.forceContextLoss?.();
+  } catch {}
+  try {
+    renderer?.dispose();
+  } catch {}
+  renderer?.domElement?.remove();
   renderer = null;
+  skyDome = null;
+  mergeBuckets = null;
+  // Các đối tượng gắn vào camera / scene cũ: tạo lại ở trận mới (không dùng lại cái cũ).
+  braceHands = null;
+  braceBlend = 0;
+  pullHand = null;
+  chutePull = null;
+  airRush = null;
+  rushLevel = 0;
+  landRoll = null;
+  gustState.t = -1;
+  gustState.next = 2;
+  ignoredImpacts.clear();
+  endedOwnSids.clear();
+  localSwimDistance = 0;
   remoteMeshes.clear();
   // Trạng thái nội suy / dự đoán / các bể đối tượng thuộc về scene cũ.
   vehicleSnaps.clear();
@@ -12044,6 +12099,74 @@ function startPlaneSound() {
   setLoopGain(audioLoops.plane, 0.55 * sfxLevel(), 0.4);
 }
 // Tiếng gió: nhiễu trắng qua bộ lọc dải, càng rơi nhanh càng to và chói; dù bung thì dịu lại.
+// ---- Âm thanh dưới nước ----
+let localSwimDistance = 0,
+  underwaterOn = false;
+// Sải tay bơi: mặt nước = tiếng khua + bắn nước + nhỏ giọt; lặn = nước dồn trầm + bọt khí.
+function playSwimStroke(pos, under, intensity = 1) {
+  const a = spatialAudio(pos, { volume: (pos ? 0.85 : 0.6) * intensity, ref: 2.5, max: under ? 16 : 30 });
+  if (!a) return;
+  if (!under) {
+    noiseBurst(a, { duration: 0.2, filter: "bandpass", freq: 1100 + Math.random() * 300, q: 0.7, gain: 0.55 }); // tay khua nước
+    noiseBurst(a, { at: 0.04, duration: 0.28, filter: "lowpass", freq: 420, gain: 0.45 }); // nước dồn
+    noiseBurst(a, { at: 0.14, duration: 0.09, filter: "highpass", freq: 3000, gain: 0.18 }); // giọt nước rơi lại
+    noiseBurst(a, { at: 0.24, duration: 0.07, filter: "highpass", freq: 3400, gain: 0.12 });
+  } else {
+    noiseBurst(a, { duration: 0.34, filter: "lowpass", freq: 480, gain: 0.6 }); // nước dồn qua tai
+    for (let i = 0; i < 3; i++) {
+      const f = 380 + Math.random() * 300;
+      toneBurst(a, { at: 0.05 + i * 0.07 + Math.random() * 0.03, duration: 0.05, from: f, to: f * 2.1, gain: 0.05 }); // bọt khí nổi lên
+    }
+  }
+}
+// Tiếng ù ù dưới nước khi lặn: 1 vòng lặp duy nhất, tạo 1 lần, chỉ bật / tắt âm lượng
+// khi trạng thái lặn THAY ĐỔI (không đặt lại mỗi khung hình).
+function updateUnderwaterAudio() {
+  const want = Boolean(local.underwater && local.state === "ground" && !deathView);
+  if (want === underwaterOn) return;
+  underwaterOn = want;
+  if (want && !audioLoops.underwater) {
+    const ctx = ensureAudio();
+    const master = ctx.createGain();
+    master.gain.value = 0;
+    master.connect(ctx.destination);
+    const src = ctx.createBufferSource();
+    src.buffer = loopBuffer("white");
+    src.loop = true;
+    const low = ctx.createBiquadFilter();
+    low.type = "lowpass";
+    low.frequency.value = 240;
+    low.Q.value = 0.9;
+    const low2 = ctx.createBiquadFilter();
+    low2.type = "lowpass";
+    low2.frequency.value = 320;
+    // "ù ù": âm lượng phập phồng chậm như nước dồn quanh tai.
+    const swell = ctx.createGain();
+    swell.gain.value = 0.75;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 0.23;
+    const lfoDepth = ctx.createGain();
+    lfoDepth.gain.value = 0.25;
+    lfo.connect(lfoDepth);
+    lfoDepth.connect(swell.gain);
+    const hum = ctx.createOscillator(); // tiếng trầm nền
+    hum.type = "sine";
+    hum.frequency.value = 58;
+    const humGain = ctx.createGain();
+    humGain.gain.value = 0.05;
+    hum.connect(humGain);
+    humGain.connect(swell);
+    src.connect(low);
+    low.connect(low2);
+    low2.connect(swell);
+    swell.connect(master);
+    src.start();
+    lfo.start();
+    hum.start();
+    audioLoops.underwater = { master, sources: [src, lfo, hum] };
+  }
+  if (audioLoops.underwater) setLoopGain(audioLoops.underwater, want ? 1.4 * sfxLevel() : 0, want ? 0.25 : 0.15);
+}
 function startWind() {
   if (audioLoops.wind) return;
   const ctx = ensureAudio();
@@ -12270,6 +12393,7 @@ function frame() {
   else if (local.state === "freefall" || local.state === "parachute")
     updateAir(dt);
   updateEnvironment(dt);
+  updateUnderwaterAudio();
   updateGrassVisibility();
   // updateWeather(dt); // weather particle update disabled for performance testing
   updateFlightHud();
@@ -12464,6 +12588,14 @@ function frame() {
       if (!isMoving)
         localFootstepDistance = Math.min(localFootstepDistance, 0.4);
     }
+    // Bơi: mỗi sải tay ~1.3 m một tiếng khua nước (lặn thì tiếng nước trầm + bọt khí).
+    if (isMoving && currentlyInWater) {
+      localSwimDistance += traveled;
+      while (localSwimDistance >= 1.3) {
+        localSwimDistance -= 1.3;
+        playSwimStroke(null, Boolean(local.underwater), keys.ShiftLeft || keys.ShiftRight ? 1.2 : 0.85);
+      }
+    } else if (!currentlyInWater) localSwimDistance = 0;
     const water = waterAt(local.x, local.z);
     $("#swimHint")?.classList.toggle("hidden", !water);
     if (water) {
