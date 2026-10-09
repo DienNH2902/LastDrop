@@ -3085,6 +3085,9 @@ function drawMapObject(o, forest) {
         }
       };
       wall(0, 0.04, 0, w, 0.08, w, "#594834"); // interior floor slab
+      // TRẦN NHÀ (gỗ tối) ngay đỉnh tường: bịt khe giữa đỉnh tường và mái — nắng
+      // không còn lọt vào trong, nhìn lên không thấy mặt dưới mái sáng trưng.
+      wall(0, wallH - 0.03, 0, w - 0.05, 0.06, w - 0.05, "#3a2c1f");
       // Split front wall leaves a real doorway; the back remains fully covered.
       wall(
         -(half + doorHalf) / 2,
@@ -11291,6 +11294,7 @@ function buildChuteOverlay() {
 // Dù LƯỢN chữ nhật (kiểu PUBG): cánh dù cong vòm gồm 9 ô đỏ / cam / vàng xen kẽ,
 // dây dù chụm về 2 vai. Hình học + vật liệu tạo 1 lần, MỌI người chơi dùng chung.
 let chuteShared = null;
+const CANOPY_Y = 7.4; // cánh dù cao hơn đầu ~5.6 m → dây dù dài như dù lượn thật
 function buildChute() {
   if (!chuteShared) {
     const parts = [];
@@ -11309,7 +11313,7 @@ function buildChute() {
       // mép trước dày, mép sau mỏng (dáng cánh dù)
       const p = g.attributes.position;
       for (let k = 0; k < p.count; k++) if (p.getZ(k) > 0) p.setY(k, p.getY(k) * 0.45);
-      g.rotateZ(-th).translate(R * Math.sin(th), 3.9 + R * Math.cos(th) - R, 0);
+      g.rotateZ(-th).translate(R * Math.sin(th), CANOPY_Y + R * Math.cos(th) - R, 0);
       g.deleteAttribute("uv");
       tint.set(cols[i % 3]);
       const c = new Float32Array(p.count * 3);
@@ -11318,7 +11322,7 @@ function buildChute() {
       parts.push(g);
       // dây: từ đáy mỗi ô (trước + sau) về vai trái / phải
       const bx = (R - thick / 2) * Math.sin(th),
-        by = 3.9 + (R - thick / 2) * Math.cos(th) - R;
+        by = CANOPY_Y + (R - thick / 2) * Math.cos(th) - R;
       const sx = bx < 0 ? -0.22 : 0.22;
       for (const z of [-chord * 0.4, chord * 0.35]) lines.push(new THREE.Vector3(bx, by, z), new THREE.Vector3(sx, 1.5, 0));
     }
