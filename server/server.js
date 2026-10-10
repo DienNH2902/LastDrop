@@ -1682,6 +1682,22 @@ function refillMapPool() {
   mapPool[missing].push(buildMap(missing)); // mỗi lần 1 map để không giữ CPU lâu
   scheduleMapRefill(1000);
 }
+// Điểm thả xuống map chờ: ngẫu nhiên trên ĐẤT LIỀN (không nước, không trong vật cản),
+// các người chơi cách nhau ≥ 25 m.
+const STAGING_DROP_ALT = 10; // rơi tự do ngắn ~10 m, không cần bung dù
+const STAGING_DROP_TIMEOUT_MS = 45000;
+function stagingDropSpot(room, used) {
+  for (let i = 0; i < 400; i++) {
+    const x = (Math.random() * 2 - 1) * MAP_HALF * 0.75,
+      z = (Math.random() * 2 - 1) * MAP_HALF * 0.75;
+    if (waterAt(room, x, z) || isOnBridge(room.obstacles, x, z, 3)) continue;
+    if (blockedPosition(room, x, z, null, null, true, 1.5)) continue;
+    if (i < 300 && used.some((u) => Math.hypot(u.x - x, u.z - z) < 25)) continue;
+    used.push({ x, z });
+    return { x, z };
+  }
+  return { x: 0, z: 8 };
+}
 function startPlane(room) {
   room.phase = "plane";
   room.plane = { ...createFlight(), startedAt: Date.now() };
@@ -1690,11 +1706,25 @@ function startPlane(room) {
     Math.max(0, ...room.loot.map((item) => Number(item.id) || 0)) + 1;
   let seat = 0;
   for (const p of room.players.values()) {
+    // Lên máy bay: TẮT mọi trạng thái ở map chờ (bơi, ngồi, nằm, nhảy, chạy, trèo, xe...).
+    detachFromVehicle(room, p);
     p.state = "plane";
     p.seat = seat++;
     p.y = room.plane.alt;
     p.healingUntil = 0;
     p.reloadingUntil = 0;
+    p.swimming = false;
+    p.swimY = null;
+    p.jumpY = 0;
+    p.jumping = false;
+    p.prone = false;
+    p.pbAt = undefined;
+    p.crouching = false;
+    p.sprinting = false;
+    p.slowWalking = false;
+    p.peek = 0;
+    p.vault = null;
+    p.cook = null;
   }
   broadcastRaw(room, {
     type: "loot",
@@ -2576,8 +2606,9 @@ function tickRoom(room) {
     recordPositionHistory(room, now);
   if (room.phase === "staging") {
     if (
-      players.every((p) => p.ready) ||
-      now - room.stagingStartedAt > STAGING_TIMEOUT_MS
+      // Đợi mọi người dựng xong map VÀ đã tiếp đất sau cú thả (tối đa 45 s).
+      players.every((p) => p.ready && p.state === "lobby") ||
+      now - room.stagingStartedAt > STAGING_DROP_TIMEOUT_MS
     ) {
       room.phase = "countdown";
       room.countdownEndsAt = now + COUNTDOWN_MS;
@@ -3372,8 +3403,19 @@ wss.on("connection", (ws) => {
         active: false,
       };
       */
+      const dropUsed = [];
+      const dropAt = Date.now();
       for (const q of room.players.values()) {
-        q.state = "lobby";
+        // Vào map chờ: THẢ từ trên cao xuống (rơi tự do → bung dù → tiếp đất), không rơi xuống nước.
+        const spot = stagingDropSpot(room, dropUsed);
+        q.x = spot.x;
+        q.z = spot.z;
+        q.y = groundHeightAt(room, spot.x, spot.z) + STAGING_DROP_ALT;
+        q.state = "freefall";
+        q.lastAirAt = dropAt;
+        q.swimming = false;
+        q.swimY = null;
+        q.jumpY = 0;
         q.ready = false;
         q.placement = 0;
         q.knocked = false;
@@ -3426,6 +3468,13 @@ wss.on("connection", (ws) => {
       broadcast(room);
       return;
     }
+    // Trên máy bay: chỉ xoay nhìn (người khác thấy mặt + thân xoay theo).
+    if (m.type === "look" && p.state === "plane") {
+      p.yaw = Number(m.yaw) || 0;
+      p.pitch = Math.max(-1.4, Math.min(1.4, Number(m.pitch) || 0));
+      broadcast(room);
+      return;
+    }
     // Client báo đã dựng xong map trong phòng chờ.
     if (m.type === "ready" && room.phase === "staging") {
       p.ready = true;
@@ -3443,7 +3492,7 @@ wss.on("connection", (ws) => {
     // Bung dù.
     if (
       m.type === "chute" &&
-      (room.phase === "plane" || room.phase === "playing") &&
+      room.phase !== "waiting" && room.phase !== "finished" &&
       p.state === "freefall"
     ) {
       p.state = "parachute";
@@ -3453,7 +3502,7 @@ wss.on("connection", (ws) => {
     // Vị trí khi đang bay trên không (client mô phỏng, server chặn tốc độ bất thường).
     if (
       m.type === "air" &&
-      (room.phase === "plane" || room.phase === "playing") &&
+      room.phase !== "waiting" && room.phase !== "finished" &&
       (p.state === "freefall" || p.state === "parachute")
     ) {
       const now = Date.now();
@@ -3487,7 +3536,7 @@ wss.on("connection", (ws) => {
     // Tiếp đất: từ giờ mới được cầm súng.
     if (
       m.type === "land" &&
-      (room.phase === "plane" || room.phase === "playing") &&
+      room.phase !== "waiting" && room.phase !== "finished" &&
       (p.state === "freefall" || p.state === "parachute")
     ) {
       // Độ cao server ghi nhận có thể trễ hơn client (giới hạn tốc độ rơi): vẫn cho
@@ -3520,7 +3569,8 @@ wss.on("connection", (ws) => {
       p.z = spot.z;
       p.groundY = landingHeightAt(room, p.x, p.z, landingY);
       p.y = null;
-      p.state = "ground";
+      // Map chờ: tiếp đất về trạng thái "lobby" (tay không, chưa đánh nhau).
+      p.state = room.phase === "staging" || room.phase === "countdown" ? "lobby" : "ground";
       p.peek = 0;
       p.jumpY = 0;
       p.swimming = false;
@@ -3771,7 +3821,10 @@ wss.on("connection", (ws) => {
       // tường): mọi bước đều "chạm" → kẹt cứng. Khi đó chỉ chặn nếu TÂM người
       // chơi lọt vào vật rắn → bước ra được, vẫn không đi xuyên tường.
       const stuck = blockedPosition(room, p.x, p.z, p.id);
-      const blockedStep = (x, z) => blockedPosition(room, x, z, p.id, null, false, stuck ? 0.05 : null);
+      // Kẹt SÂU (tâm đã lọt vào vật rắn mỏng: lan can, rào, bậc thang sau cú nhảy):
+      // cho bước ra theo bất kỳ hướng nào (vẫn giới hạn bởi tốc độ) — khớp client.
+      const deepStuck = stuck && blockedPosition(room, p.x, p.z, p.id, null, true, 0.05);
+      const blockedStep = (x, z) => !deepStuck && blockedPosition(room, x, z, p.id, null, false, stuck ? 0.05 : null);
       const waterOk = (x, z) =>
         !stayInWaterWhileSubmerged || waterAt(room, x, z) || isOnBridge(room.obstacles, x, z, 0.8);
       for (let i = 0; i < steps; i++) {

@@ -1839,7 +1839,7 @@ function connect(message) {
     if (m.type === "horn" && m.senderId !== playerId)
       playCarHorn({ x: m.x, y: m.y, z: m.z });
     // Server sửa lại chỗ tiếp đất (ví dụ trúng cây / đá).
-    if (m.type === "landed" && local.state === "ground") {
+    if (m.type === "landed" && (local.state === "ground" || local.state === "lobby")) {
       local.x = m.x;
       local.z = m.z;
       local.groundY = Number(m.groundY) || 0;
@@ -2018,9 +2018,10 @@ function renderLobby() {
         const slot = t * 2 + k;
         const p = gameState.players.find((q) => q.slot === slot);
         const el = document.createElement("div");
-        el.className = "slot " + (p ? "filled" : "free-slot");
+        el.className = "slot " + (p ? "filled team-slot" : "free-slot");
+        if (p) el.style.setProperty("--pc", p.color);
         el.innerHTML = p
-          ? `<b><span class="p-color" style="background:${p.color}"></span></b><strong>${escapeHtml(p.name)}</strong><small>${p.id === playerId ? "YOU" : p.id === gameState.hostId ? "HOST" : "READY"}</small>`
+          ? `<span class="p-badge">${escapeHtml((p.name || "?").trim().charAt(0).toUpperCase() || "?")}</span><strong>${escapeHtml(p.name)}</strong><small>${p.id === playerId ? "BẠN" : p.id === gameState.hostId ? "CHỦ PHÒNG" : "SẴN SÀNG"}</small>`
           : `<b>＋</b><small>BẤM ĐỂ VÀO</small>`;
         if (!p) el.onclick = () => send({ type: "moveSlot", slot });
         col.append(el);
@@ -5578,7 +5579,10 @@ function placeRemote(mesh, p) {
   }
   if (st === "plane") {
     setRemoteMotionMode(ud, "plane");
-    mesh.rotation.set(0, p.yaw, 0);
+    ud.lookYaw = Number(p.yaw) || 0;
+    ud.lookPitch = Number(p.pitch) || 0;
+    if (ud.shownYaw === undefined) ud.shownYaw = ud.lookYaw;
+    mesh.rotation.set(0, ud.shownYaw, 0);
     mesh.scale.set(1, 1, 1);
     return;
   }
@@ -5598,6 +5602,7 @@ function placeRemote(mesh, p) {
     // Rơi tự do: nằm sấp, đầu hướng về phía trước (như tư thế nhảy dù); dù bung: đứng thẳng.
     mesh.rotation.x = st === "freefall" ? -1.35 : 0;
     mesh.rotation.z = 0;
+    mesh.userData.peekRoll = mesh.userData.peekTarget = mesh.userData.peekVel = 0;
     mesh.scale.set(1, 1, 1);
     return;
   }
@@ -5617,7 +5622,10 @@ function placeRemote(mesh, p) {
   // Nằm / đứng dậy KHÔNG đổ rạp tức thì: góc thân nằm xuống do animateAvatars
   // làm dần (quỳ xuống → nằm, chống tay → quỳ → đứng).
   if (mesh.userData.proneBlend === undefined) mesh.rotation.x = p.prone ? -Math.PI / 2 : 0;
-  mesh.rotation.z = peekRoll;
+  // Nghiêng (peek): chỉ ghi góc ĐÍCH; updateRemoteMotion làm mượt mỗi khung hình
+  // (snapshot chỉ 20 lần/giây → gán thẳng sẽ giật từng nấc).
+  mesh.userData.peekTarget = peekRoll;
+  if (mesh.userData.peekRoll === undefined) mesh.rotation.z = mesh.userData.peekRoll = peekRoll;
   // Khom người là tư thế (gập gối, cúi thân) do poseAvatar dựng, không bóp dẹt mô hình.
   mesh.scale.set(1, 1, 1);
 }
@@ -8547,6 +8555,11 @@ function onKeyDown(e) {
     return;
   }
 
+  // Trên máy bay: chỉ xoay chuột để nhìn; phím khác bị khoá (trừ nhảy, bản đồ, ESC).
+  if (local.state === "plane" && !["Space", "KeyF", "KeyM", "Escape"].includes(e.code) && $("#game").classList.contains("active")) {
+    if (!paused) e.preventDefault();
+    return;
+  }
   // Trên máy bay: Space / F nhảy dù. Đang rơi tự do: Space / F bung dù.
   if (
     (e.code === "Space" || e.code === "KeyF") &&
@@ -8560,7 +8573,7 @@ function onKeyDown(e) {
     }
     if (local.state === "freefall") {
       e.preventDefault();
-      if (!e.repeat) deployChute(false);
+      if (!e.repeat && gameState?.phase !== "staging" && gameState?.phase !== "countdown") deployChute(false);
       return;
     }
     if (local.state === "parachute") {
@@ -9024,6 +9037,7 @@ function onFire(e) {
     }
   }
   if (local.knocked) return; // bị hạ gục: không dùng súng / lựu đạn
+  if (local.state === "plane") return; // trên máy bay: chỉ xoay nhìn
   if (landRoll && local.state === "ground") return; // đang lộn nhào: chưa bắn được
   if (localVault) return; // đang trèo rào: hai tay bám rào
   // Đang chạy nhanh: không bắn/ngắm được. Click (trái hoặc phải) sẽ DỪNG CHẠY
@@ -10324,6 +10338,8 @@ function setMode(state) {
 // Các bước bung dù và tiếp đất do client báo lên trước, server chỉ xác nhận lại.
 function syncLocalState(p) {
   const target = p.state || "lobby";
+  // Lên máy bay luôn được ưu tiên (kể cả đang rơi / dù / đứng sau cú thả ở map chờ).
+  if (target === "plane" && local.state !== "plane") return enterPlane(p);
   if ((STATE_ORDER[target] ?? 0) <= (STATE_ORDER[local.state] ?? 0)) return;
   if (target === "plane") enterPlane(p);
   else if (target === "freefall" || target === "parachute")
@@ -10332,6 +10348,22 @@ function syncLocalState(p) {
 function enterPlane(p) {
   if (!plane) return;
   local.seat = p.seat || 0;
+  // TẮT mọi trạng thái của map chờ: bơi / lặn, ngồi, nằm, chạy, trèo, lộn nhào...
+  local.swimming = false;
+  local.swimDepth = 0;
+  local.swimY = null;
+  local.crouchToggle = false;
+  local.sprinting = false;
+  local.slowWalking = false;
+  localVault = null;
+  landRoll = null;
+  chutePull = null;
+  $("#chuteOverlay")?.classList.add("hidden");
+  if (scoped) setScope(false);
+  for (const k of Object.keys(keys)) keys[k] = false;
+  $("#swimHint")?.classList.add("hidden");
+  $("#underwaterTint")?.classList.remove("active");
+  stopLoop("wind", 0.3);
   local.peek = 0;
   peekBlend = 0;
   keys.KeyQ = false;
@@ -10480,6 +10512,22 @@ function updatePullHand(dt) {
   p.setXYZ(1, pullTmp.x, pullTmp.y + 0.03, pullTmp.z);
   p.needsUpdate = true;
   cord.visible = t > 0.18 && t < 0.7;
+}
+// Chỗ trống gần nhất quanh (x, z) trong 1.2 m (vòng 0.1 m × 12 hướng). Chỉ gọi khi
+// ĐANG kẹt; tìm thất bại thì nghỉ 0.25 s để không tốn CPU mỗi khung hình.
+let freeSpotFailAt = 0;
+function nearestFreeSpot(x, z) {
+  const now = performance.now();
+  if (now - freeSpotFailAt < 250) return null;
+  for (let r = 0.1; r <= 1.21; r += 0.1)
+    for (let k = 0; k < 12; k++) {
+      const a = (k / 12) * Math.PI * 2 + r; // xoay nhẹ mỗi vòng: phủ đều hơn
+      const nx = x + Math.cos(a) * r,
+        nz = z + Math.sin(a) * r;
+      if (!isBlockedAt(nx, nz)) return { x: nx, z: nz };
+    }
+  freeSpotFailAt = now;
+  return null;
 }
 // Đẩy người chơi ra khỏi cây / đá / tường nếu tiếp đất trúng chúng.
 function findFreeSpotLocal(x, z, landingY = local.groundY) {
@@ -10702,7 +10750,9 @@ function landNow() {
   local.crouchToggle = false;
   local.sprinting = false;
   stopLoop("wind", 0.6);
-  setMode("ground");
+  // Map chờ (trước khi lên máy bay): tiếp đất về chế độ chờ, tay không.
+  const stagingLand = gameState?.phase === "staging" || gameState?.phase === "countdown";
+  setMode(stagingLand ? "lobby" : "ground");
   grounded = true;
   verticalSpeed = 0;
   jumpOffset = 0;
@@ -10724,9 +10774,11 @@ function landNow() {
     if (gun) gun.visible = false;
     playLandRoll();
   }
-  showLootToast("ĐÃ TIẾP ĐẤT · CẦM SÚNG SẴN SÀNG");
+  if (!stagingLand) showLootToast("ĐÃ TIẾP ĐẤT · CẦM SÚNG SẴN SÀNG"); // map chờ: không báo
 }
 // Đang ngồi trên máy bay: camera đứng đúng chỗ của mình trong khoang, tự do nhìn quanh.
+let planeLookKey = "",
+  planeLookAt = 0;
 function updatePlane() {
   if (!plane) return;
   const pos = seatWorld(local.seat, planeTime());
@@ -10737,6 +10789,14 @@ function updatePlane() {
   const shake = Math.sin(now / 38) * 0.006 + Math.sin(now / 210) * 0.012;
   camera.position.set(local.x, local.y + 1.62 + shake, local.z);
   camera.rotation.z = 0;
+  // Hướng nhìn → server (≤ 10 lần/giây, chỉ khi đổi) để người khác thấy mặt + thân xoay theo.
+  local.yaw = camera.rotation.y;
+  const lk = `${camera.rotation.y.toFixed(2)}|${camera.rotation.x.toFixed(2)}`;
+  if (lk !== planeLookKey && now - planeLookAt > 100) {
+    planeLookKey = lk;
+    planeLookAt = now;
+    send({ type: "look", yaw: camera.rotation.y, pitch: camera.rotation.x });
+  }
   setLoopGain(audioLoops.plane, 0.75 * sfxLevel(), 0.2);
 }
 const gustState = { next: 2, t: -1, len: 0.8, k: 1, out: { x: 0, y: 0, roll: 0 } };
@@ -10806,8 +10866,11 @@ function updateAir(dt) {
   let approachGround = landingHeightAt(local.x, local.z, previousY);
   for (const t of [0.6, 1.2, 1.8])
     approachGround = Math.max(approachGround, landingHeightAt(clamp(local.x + airState.vx * t, -MAP_HALF, MAP_HALF), clamp(local.z + airState.vz * t, -MAP_HALF, MAP_HALF), previousY));
+  // Map chờ: cú thả chỉ ~10 m → rơi thẳng xuống đất, không bung dù.
+  const stagingDrop = gameState?.phase === "staging" || gameState?.phase === "countdown";
   if (
     !chute &&
+    !stagingDrop &&
     local.y - approachGround <= AIR.autoDeployAlt + airState.fall * CHUTE_PULL_AT &&
     airState.time > 0.4
   )
@@ -11289,6 +11352,11 @@ function animateAvatars(dt) {
     );
     poseLandRoll(ud, now);
     poseVault(ud, now);
+    if (ud.state === "plane" && ud.lookPitch !== undefined) {
+      // Trên máy bay: đầu ngẩng / cúi theo hướng nhìn.
+      ud.headPitch = (ud.headPitch ?? 0) + (clamp(-ud.lookPitch * 0.75, -0.7, 0.7) - (ud.headPitch ?? 0)) * Math.min(1, dt * 12);
+      ud.rig.head.rotation.x = ud.headPitch;
+    }
     if (ud.knocked && !ud.swimming) poseCrawl(ud, now);
     if (now >= ud.flashUntil) {
       ud.muzzleFlash.visible = false;
@@ -11375,7 +11443,12 @@ function updateRemoteMotion(dt) {
     if (ud.state === "plane" && plane) {
       const seat = seatWorld(ud.seat || 0, t);
       mesh.position.set(seat.x, plane.alt, seat.z);
-      mesh.rotation.set(0, planeYaw(), 0);
+      // Thân xoay mượt theo hướng nhìn của người đó (góc ngắn nhất).
+      const target = ud.lookYaw ?? planeYaw();
+      let d = target - (ud.shownYaw ?? target);
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      ud.shownYaw = (ud.shownYaw ?? target) + d * Math.min(1, dt * 12);
+      mesh.rotation.set(0, ud.shownYaw, 0);
     } else if (ud.motionMode === "vehicle") {
       const car = vehicleMeshes.get(ud.vehicleId);
       if (car) {
@@ -11391,6 +11464,20 @@ function updateRemoteMotion(dt) {
       const s = sampleSnapshots(ud.snaps, renderT, remoteSample);
       mesh.position.set(s.x, s.y, s.z);
       mesh.rotation.y = s.yaw;
+      // Peek mượt: lò xo tới hạn (không vọt quá, không khựng) theo góc đích.
+      const target = ud.peekTarget || 0;
+      let roll = ud.peekRoll || 0,
+        vel = ud.peekVel || 0;
+      if (roll !== target || vel) {
+        const k = 90, c = 19; // ~0.15 s tới nơi, c ≈ 2√k (tới hạn)
+        const h = Math.min(dt, 0.05);
+        vel += ((target - roll) * k - vel * c) * h;
+        roll += vel * h;
+        if (Math.abs(target - roll) < 1e-4 && Math.abs(vel) < 1e-3) (roll = target), (vel = 0);
+        ud.peekRoll = roll;
+        ud.peekVel = vel;
+        mesh.rotation.z = roll;
+      }
     }
     if (ud.chute?.visible)
       ud.chute.rotation.z = Math.sin(performance.now() / 700 + mesh.id) * 0.06;
@@ -13508,9 +13595,28 @@ function frame() {
     // Rơi khỏi mép cầu thang xuống sát chân tường → đã nằm trong vùng đệm va
     // chạm, mọi bước đều bị chặn (kẹt, giật). Khi đó chỉ chặn nếu tâm lọt vào
     // vật rắn để bước ra được (cùng luật với server).
-    const stuck = isBlockedAt(local.x, local.z);
+    let stuck = isBlockedAt(local.x, local.z);
+    // TỰ GỠ KẸT: đang lọt vào vùng va chạm (rơi / nhảy / chạy ép vào rào, lan can,
+    // bậc thang...) → trượt nhẹ ra chỗ trống gần nhất (≤ 1.2 m) mà không cần tìm hướng.
+    // Server nhận vị trí này vì cùng luật "kẹt thì chỉ chặn khi tâm lọt vào vật rắn".
+    if (stuck && !currentlyInWater) {
+      const free = nearestFreeSpot(local.x, local.z);
+      if (free) {
+        const ex = free.x - local.x,
+          ez = free.z - local.z,
+          el = Math.hypot(ex, ez);
+        const step = Math.min(el, 2.2 * dt);
+        if (el > 1e-4) {
+          local.x += (ex / el) * step;
+          local.z += (ez / el) * step;
+        }
+        stuck = isBlockedAt(local.x, local.z);
+      }
+    }
+    // Kẹt SÂU (tâm trong vật rắn mỏng): cho bước ra mọi hướng (khớp server).
+    const deepStuck = stuck && isBlockedAt(local.x, local.z, 0.05);
     const canMoveTo = (x, z) =>
-      !isBlockedAt(x, z, stuck ? 0.05 : null) &&
+      (deepStuck || !isBlockedAt(x, z, stuck ? 0.05 : null)) &&
       (!stayInWaterWhileSubmerged || waterAt(x, z) || isOnBridgeAt(x, z, 0.8));
     if (canMoveTo(local.x + moveX, local.z + moveZ)) {
       local.x += moveX;
