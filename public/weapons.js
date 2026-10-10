@@ -89,73 +89,100 @@ export function buildBeryl() {
 // ---------------------------------------------------------------------------
 // AUG A3 (bullpup) + red dot
 // ---------------------------------------------------------------------------
+// Mặt cắt ngang (profile cạnh súng) → khối đùn dày `thick` theo trục X, có vát mép.
+// Điểm [z, y] theo toạ độ súng (nòng hướng -Z). holes: các lỗ (vòng che cò).
+function profileSolid(points, thick, bevel = 0.006, holes = []) {
+  const shape = new THREE.Shape(points.map(([z, y]) => new THREE.Vector2(-z, y)));
+  for (const h of holes) shape.holes.push(new THREE.Path(h.map(([z, y]) => new THREE.Vector2(-z, y))));
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: thick - bevel * 2, bevelEnabled: bevel > 0, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 2, curveSegments: 6 });
+  geo.translate(0, 0, -(thick - bevel * 2) / 2);
+  geo.rotateY(Math.PI / 2); // trục đùn → trục X (bề ngang súng); profile nằm trong mặt Y–Z
+  return geo;
+}
+// ---------------------------------------------------------------------------
+// Steyr AUG (bullpup): báng nhựa olive liền khối bo tròn, vòng che cò LỚN ôm cả
+// bàn tay, ray Picatinny có khía trên nóc, ống bao nòng + nòng + loa che lửa xẻ
+// rãnh, tay cầm trước gập dưới nòng, băng đạn nhựa xám đen có gân ở SAU tay cầm,
+// tay gạt lên đạn bên TRÁI. Dùng chung cho súng cầm tay / người khác / dưới đất.
+// ---------------------------------------------------------------------------
 export function buildAug() {
   const g = new THREE.Group();
-  const polymer = mat("#56613f"); // thân nhựa xanh olive đặc trưng của AUG
-  const polymerDark = mat("#444d33");
-  const metal = mat("#1c1e1b");
-  const steel = mat("#3a3d38");
-  // Thân chính dạng bullpup: khối bo tròn chạy từ báng ra tới trước cò.
-  const shell = part(
+  const polymer = mat("#5d6a43"); // nhựa olive AUG
+  const polymerDark = mat("#4a5535");
+  const rubber = mat("#2b2e27");
+  const metal = mat("#1d1f1c");
+  const steel = mat("#3c403a");
+  const magMat = mat("#34372f");
+  // Thân báng: lưng phẳng, đuôi báng vát, bụng chứa giếng băng đạn, mũi thuôn vào ống bao nòng.
+  part(
     g,
-    new THREE.CapsuleGeometry(0.055, 0.34, 6, 12).rotateX(Math.PI / 2),
+    profileSolid(
+      [
+        [0.02, 0.045], [0.3, 0.045], [0.355, 0.03], [0.372, 0.0], [0.372, -0.07], [0.35, -0.095],
+        [0.17, -0.095], [0.15, -0.062], [0.05, -0.062], [0.03, -0.05], [-0.05, -0.045], [-0.1, -0.03], [-0.12, 0.0], [-0.1, 0.03],
+      ],
+      0.074,
+      0.012,
+    ),
     polymer,
-    0,
-    -0.035,
-    0.12,
+    0, 0, 0,
   );
-  shell.scale.set(0.82, 1.2, 1);
-  part(g, box(0.085, 0.1, 0.2), polymer, 0, -0.07, 0.2); // bụng báng
-  part(g, box(0.09, 0.13, 0.03), polymerDark, 0, -0.055, 0.345); // đệm báng
-  part(g, box(0.08, 0.05, 0.26), polymerDark, 0, 0.03, 0.1); // lưng thân
-  // Ống bao nòng + nòng + loa che lửa.
-  part(g, tubeZ(0.034, 0.038, 0.16), steel, 0, 0, -0.16);
-  part(g, tubeZ(0.016, 0.016, 0.26), metal, 0, 0, -0.35);
-  part(g, tubeZ(0.022, 0.02, 0.07, 8), metal, 0, 0, -0.5);
-  for (let i = 0; i < 4; i++)
-    part(
-      g,
-      box(0.006, 0.03, 0.04),
-      metal,
-      Math.cos(i * 1.57) * 0.02,
-      Math.sin(i * 1.57) * 0.02,
-      -0.52,
-    );
-  // Báng cầm liền khung che cò lớn (đặc trưng AUG) + tay cầm trước gập.
-  part(g, box(0.04, 0.12, 0.05), polymerDark, 0, -0.11, -0.02, 0.28);
-  part(g, box(0.035, 0.02, 0.17), polymer, 0, -0.17, -0.04);
-  part(g, box(0.035, 0.1, 0.02), polymer, 0, -0.12, -0.12);
-  part(g, box(0.03, 0.12, 0.035), polymerDark, 0, -0.1, -0.2, -0.12);
-  // Băng đạn nhựa trong khói phía sau tay cầm.
-  const magazine = part(
+  part(g, box(0.078, 0.11, 0.016), rubber, 0, -0.026, 0.368); // đệm báng cao su
+  for (const side of [-1, 1]) {
+    part(g, box(0.004, 0.032, 0.075), metal, side * 0.038, 0.012, 0.16); // cửa thoát vỏ đạn 2 bên
+    part(g, box(0.004, 0.012, 0.11), polymerDark, side * 0.038, -0.03, 0.24); // gờ chống trượt
+  }
+  // Vòng che cò lớn liền tay cầm (đùn có lỗ — nhìn xuyên qua được như súng thật).
+  part(
     g,
-    box(0.034, 0.17, 0.075),
-    mat("#5b5f5c", { transparent: true, opacity: 0.85 }),
-    0,
-    -0.14,
-    0.1,
-    0.18,
+    profileSolid(
+      [[0.04, -0.052], [0.035, -0.2], [0.0, -0.215], [-0.17, -0.215], [-0.19, -0.2], [-0.19, -0.05], [-0.15, -0.045]],
+      0.034,
+      0.006,
+      [[[0.0, -0.075], [-0.005, -0.19], [-0.155, -0.19], [-0.16, -0.07], [-0.13, -0.065]]],
+    ),
+    polymer,
+    0, 0, 0,
   );
-  part(magazine, box(0.036, 0.02, 0.078), metal, 0, -0.08, 0); // đế băng
-  // Tay gài đạn (cần lên đạn) bên TRÁI thân súng như AUG thật — khi ngắm vẫn thấy
-  // ló ra ở góc dưới bên trái.
+  // Báng cầm nghiêng (bàn tay phải) + cò.
+  part(g, box(0.042, 0.13, 0.05), polymerDark, 0, -0.115, 0.005, 0.26);
+  part(g, box(0.008, 0.03, 0.012), metal, 0, -0.085, -0.045, 0.3);
+  // Khối hộp khoá nòng (kim loại) + ray Picatinny có khía.
+  part(g, box(0.05, 0.03, 0.27), steel, 0, 0.058, -0.01);
+  part(g, box(0.028, 0.012, 0.26), metal, 0, 0.078, -0.01);
+  for (let i = 0; i < 16; i++) part(g, box(0.032, 0.008, 0.008), metal, 0, 0.087, -0.135 + i * 0.0165);
+  // Ống bao nòng + nòng + loa che lửa xẻ rãnh.
+  part(g, tubeZ(0.03, 0.033, 0.17, 14), steel, 0, 0.004, -0.2);
+  part(g, tubeZ(0.034, 0.034, 0.02, 14), metal, 0, 0.004, -0.13); // khoá nòng / vòng hãm
+  part(g, tubeZ(0.015, 0.015, 0.25, 10), metal, 0, 0, -0.36);
+  part(g, tubeZ(0.021, 0.019, 0.075, 10), metal, 0, 0, -0.51);
+  for (let i = 0; i < 6; i++) part(g, box(0.004, 0.024, 0.05), steel, Math.cos(i * 1.047) * 0.02, Math.sin(i * 1.047) * 0.02, -0.51, 0, 0, i * 1.047);
+  part(g, tubeZ(0.009, 0.009, 0.16, 8), steel, 0, 0.03, -0.25); // ống trích khí trên nòng
+  // Tay cầm trước GẬP xuống (tay trái cầm ở đây) + khớp gập.
+  part(g, box(0.03, 0.03, 0.045), metal, 0, -0.03, -0.2);
+  part(g, box(0.032, 0.12, 0.038), polymerDark, 0, -0.1, -0.205, -0.08);
+  for (let i = 0; i < 4; i++) part(g, box(0.034, 0.006, 0.04), rubber, 0, -0.07 - i * 0.025, -0.207, -0.08); // gân bám
+  // Băng đạn nhựa xám đen, hơi cong, có gân — SAU tay cầm (bullpup).
+  const magazine = part(g, box(0.034, 0.17, 0.075), magMat, 0, -0.145, 0.1, 0.18);
+  for (let i = 0; i < 4; i++) part(magazine, box(0.036, 0.008, 0.078), metal, 0, 0.04 - i * 0.032, 0); // gân băng
+  part(magazine, box(0.037, 0.02, 0.08), metal, 0, -0.08, 0); // đế băng
+  part(magazine, box(0.006, 0.12, 0.03), mat("#4d5148"), 0.018, -0.005, 0.015); // khe cửa sổ đếm đạn
+  // Tay gạt lên đạn bên TRÁI thân súng như AUG thật — khi ngắm vẫn ló ra góc dưới bên trái.
   const charge = new THREE.Group(); // tách riêng để kéo lùi lên đạn sau khi nạp
   charge.position.set(-0.05, 0.045, -0.07);
   part(charge, box(0.024, 0.022, 0.1), steel, 0, 0, 0); // thanh trượt
   part(charge, box(0.075, 0.02, 0.026), steel, -0.04, 0, -0.03); // cần gạt chìa ra trái
   part(charge, new THREE.CylinderGeometry(0.016, 0.016, 0.03, 12), polymer, -0.085, 0, -0.03, 0, 0, Math.PI / 2); // núm cầm
   g.add(charge);
-  // Ray trên (gắn ống ngắm) + thước ngắm cơ khí gập: thước sau có khe chữ U,
-  // đầu ruồi có tai bảo vệ — mặc định ngắm bằng hai điểm này ở độ cao ironY.
-  part(g, box(0.03, 0.018, 0.2), metal, 0, 0.066, -0.02);
-  const ironY = 0.1;
-  for (const side of [-1, 1]) part(g, box(0.008, 0.03, 0.012), metal, side * 0.011, ironY - 0.008, 0.06); // thước sau (khe)
-  part(g, box(0.03, 0.012, 0.014), metal, 0, ironY - 0.024, 0.06);
-  part(g, box(0.004, 0.026, 0.006), metal, 0, ironY - 0.012, -0.11); // đầu ruồi
-  for (const side of [-1, 1]) part(g, box(0.005, 0.03, 0.012), metal, side * 0.014, ironY - 0.01, -0.11); // tai che
-  part(g, box(0.034, 0.012, 0.016), metal, 0, ironY - 0.028, -0.11);
+  // Thước ngắm cơ khí gập trên ray: thước sau khe chữ U, đầu ruồi có tai bảo vệ.
+  const ironY = 0.112;
+  for (const side of [-1, 1]) part(g, box(0.008, 0.03, 0.012), metal, side * 0.011, ironY - 0.008, 0.07);
+  part(g, box(0.03, 0.012, 0.014), metal, 0, ironY - 0.024, 0.07);
+  part(g, box(0.004, 0.026, 0.006), metal, 0, ironY - 0.012, -0.12);
+  for (const side of [-1, 1]) part(g, box(0.005, 0.03, 0.012), metal, side * 0.014, ironY - 0.01, -0.12);
+  part(g, box(0.034, 0.012, 0.016), metal, 0, ironY - 0.028, -0.12);
   g.userData = {
-    muzzle: new THREE.Vector3(0, 0, -0.54),
+    muzzle: new THREE.Vector3(0, 0, -0.55),
     magazine,
     sightY: ironY,
     ironY,
@@ -243,7 +270,7 @@ export function buildKar98() {
 // (tay cầm dọc) và băng đạn (băng mở rộng gắn vào băng đạn để chạy theo hoạt ảnh nạp).
 // ---------------------------------------------------------------------------
 export const MOUNTS = {
-  ranger: { rail: [0.075, -0.02], muzzle: -0.54, under: [-0.04, -0.3], magBase: [0, -0.14, 0.1, 0.18], magTip: [0, -0.115, 0, 0] },
+  ranger: { rail: [0.091, -0.02], muzzle: -0.55, under: [-0.04, -0.3], magBase: [0, -0.145, 0.1, 0.18], magTip: [0, -0.115, 0, 0] }, // khớp ray / nòng AUG mới
   beryl: { rail: [0.068, -0.01], muzzle: -0.69, under: [-0.05, -0.33], magBase: [0, -0.07, -0.05, 0], magTip: [0, -0.27, -0.12, 0.8] },
   sniper: { rail: [0.036, 0.01], muzzle: -0.96, under: [-0.06, -0.3], magBase: null, magTip: null },
 };
