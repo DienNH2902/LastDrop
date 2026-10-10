@@ -160,6 +160,13 @@ const HIT_PRONE = [
   { part: "body", c: [0, 0.35, -1.14], h: [0.31, 0.21, 0.36] },
   { part: "body", c: [0, 0.35, -0.45], h: [0.2, 0.15, 0.45] },
 ];
+// Bò bằng tay + gối (bị hạ gục) — khớp poseCrawl ở client (thân ngang ~0.5 m, đầu
+// chúi trước, gối + cẳng chân sau). Giống HITBOX.crawl trong public/avatar.js.
+const HIT_CRAWL = [
+  { part: "head", c: [0, 0.6, -0.72], h: [0.28, 0.27, 0.3] },
+  { part: "body", c: [0, 0.42, -0.15], h: [0.31, 0.33, 0.4] },
+  { part: "body", c: [0, 0.22, 0.38], h: [0.2, 0.24, 0.24] },
+];
 const HIT_SEAT = [
   { part: "head", c: [0, 1.38, 0.06], h: [0.28, 0.3, 0.27] },
   { part: "body", c: [0, 0.87, 0.02], h: [0.31, 0.3, 0.21] },
@@ -202,6 +209,7 @@ function transitionHitboxes(b) {
 function playerHitboxes(q) {
   if (q.vehicleId) return { boxes: HIT_SEAT };
   if (q.state === "freefall") return { boxes: HIT_FREEFALL };
+  if (q.knocked && !q.swimming) return { boxes: HIT_CRAWL }; // bị hạ gục: luôn dáng bò, đổi ngay
   if (q.pbAt !== undefined && Date.now() - q.pbAt < PRONE_MS) {
     const b = proneBlendOf(q);
     if (b < 0.999) return { boxes: b <= 0.001 ? (q.crouching ? HIT_CROUCH : HIT_STAND) : transitionHitboxes(b) };
@@ -390,6 +398,13 @@ const snapshot = (room) => ({
     vehicleSeat: Number.isInteger(p.vehicleSeat) ? p.vehicleSeat : -1,
     jumpY: r2(p.jumpY),
     vaultId: p.vaultId || 0,
+    team: p.team ?? 0,
+    color: p.color || "#ffffff",
+    slot: p.slot ?? 0,
+    knocked: Boolean(p.knocked),
+    knockCount: p.knockCount || 0,
+    revivedBy: p.revivedBy || null,
+    reviving: p.reviving ? { id: p.reviving.id, left: Math.max(0, p.reviving.until - Date.now()) } : null,
     outfit: p.outfit || "",
     pb: r2(proneBlendOf(p)), // mức nằm (0 → 1) để người khác vẽ đúng nhịp với hitbox
     ammo: p.ammo,
@@ -414,6 +429,7 @@ const snapshot = (room) => ({
     shooting: Date.now() - (p.lastShotAt || 0) < 150,
   })),
   alive: [...room.players.values()].filter((p) => p.alive).length,
+  mode: room.mode || "solo",
   // Keep the round denominator fixed even if a disconnected player is removed.
   total: room.matchTotal ?? room.players.size,
 });
@@ -906,6 +922,158 @@ function createLoot(room) {
 }
 // Thông số vũ khí (server là nơi quyết định). "none" = tay không.
 const MAX_PLAYERS = 6;
+// ======================= CHẾ ĐỘ ĐÔI (DUO) =======================
+// 6 màu hệ thống (KHÔNG phải màu nhân vật): mỗi người 1 màu suốt trận — chấm trên đầu
+// đồng đội, ping, phòng chờ. Đôi: 3 đội × 2 chỗ (slot 0-1 = đội 1, 2-3 = đội 2, 4-5 = đội 3).
+const TEAM_COLORS = ["#ff4d4d", "#3fa9ff", "#ffd23f", "#b06bff", "#36e07a", "#ff8a3d"];
+const KNOCK_LIMIT = 4; // bị hạ gục quá 4 lần → chết luôn
+const KNOCK_BLEED_S = 60; // bị hạ gục không ai cứu: mất hết máu sau ~60 s
+const REVIVE_MS = 10000;
+const REVIVE_RANGE = 2.4;
+const KNOCK_CRAWL_SPEED = 1.0; // bò chậm hơn đi bộ
+// Hành động người bị hạ gục KHÔNG được làm (chỉ được bò + thả đồ).
+const KNOCK_BLOCKED = new Set(["shoot", "heal", "pickup", "reload", "vehicleInteract", "vault", "attach", "detach", "throw", "cook", "aimThrow", "transferCrate", "equip", "revive", "jump"]);
+const isDuo = (room) => room?.mode === "duo";
+const sideOf = (room, p) => (isDuo(room) ? "t" + p.team : p.id);
+const teammates = (room, p) => (isDuo(room) ? [...room.players.values()].filter((q) => q !== p && q.team === p.team) : []);
+function aliveSides(room) {
+  const sides = new Set();
+  for (const p of room.players.values()) if (p.alive) sides.add(sideOf(room, p));
+  return sides;
+}
+// Báo sự kiện cho killfeed (hạ gục / cứu) ngay lập tức cho cả phòng.
+// Ghi nhận 1 lần giết: lưu cho snapshot (kết quả trận) + gửi ngay sự kiện killfeed.
+function pushElimination(room, ev) {
+  room.lastElimination = ev;
+  feedEvent(room, { kind: "kill", ...ev });
+}
+function feedEvent(room, ev) {
+  broadcastRaw(room, { type: "feed", ev: { ...ev, at: Date.now() } });
+}
+// Hết máu: còn đồng đội đứng vững → HẠ GỤC (chưa chết). true = đã hạ gục, đừng giết.
+function tryKnock(room, victim, info = {}) {
+  if (!isDuo(room) || !victim.alive || victim.knocked) return false;
+  if ((victim.knockCount || 0) >= KNOCK_LIMIT) return false;
+  if (!teammates(room, victim).some((q) => q.alive && !q.knocked)) return false;
+  const now = Date.now();
+  victim.knocked = true;
+  victim.knockCount = (victim.knockCount || 0) + 1;
+  victim.hp = 100; // "máu hạ gục": chảy dần, bị bắn tiếp thì chết
+  detachFromVehicle(room, victim);
+  victim.vault = null;
+  victim.healingUntil = 0;
+  victim.reloadingUntil = 0;
+  victim.sprinting = false;
+  victim.cook = null;
+  // Bò bằng tay + gối (hitbox thấp như ngồi), KHÔNG nằm sát đất.
+  if (victim.prone) {
+    victim.pbFrom = proneBlendOf(victim, now);
+    victim.pbAt = now;
+  }
+  victim.prone = false;
+  victim.crouching = true;
+  cancelRevivesOf(room, victim);
+  const killer = info.killer && info.killer !== victim ? info.killer : null;
+  const distance = killer ? Math.round(Math.hypot(killer.x - victim.x, killer.z - victim.z)) : null;
+  victim.knockedBy = killer ? { id: killer.id, name: killer.name, weapon: info.weapon || "", distance } : null;
+  feedEvent(room, {
+    distance,
+    kind: "knock",
+    killerId: killer?.id || null,
+    killerName: killer?.name || info.killerName || "Không rõ",
+    victimId: victim.id,
+    victimName: victim.name,
+    weapon: info.weapon || "",
+    knockCount: victim.knockCount,
+  });
+  if (victim.ws?.readyState === 1) send(victim.ws, { type: "toast", text: `BẠN ĐÃ BỊ HẠ GỤC (${victim.knockCount}/${KNOCK_LIMIT}) · CHỜ ĐỒNG ĐỘI CỨU` });
+  return true;
+}
+function cancelRevivesOf(room, p) {
+  for (const q of room.players.values()) {
+    if (q.reviving && (q === p || q.reviving.id === p.id)) {
+      const t = room.players.get(q.reviving.id);
+      if (t) t.revivedBy = null;
+      q.reviving = null;
+    }
+  }
+  if (p.revivedBy) {
+    const r = room.players.get(p.revivedBy);
+    if (r) r.reviving = null;
+    p.revivedBy = null;
+  }
+}
+// Người bị hạ gục chết hẳn (chảy hết máu / cả đội gục).
+function killKnocked(room, q, reason) {
+  if (!q.alive) return;
+  q.hp = 0;
+  q.alive = false;
+  q.knocked = false;
+  cancelRevivesOf(room, q);
+  q.placement = [...room.players.values()].filter((pl) => pl.alive).length + 1;
+  room.eliminationSequence = (room.eliminationSequence || 0) + 1;
+  // Chết vì chảy máu / cả đội gục: mạng tính cho người đã hạ gục (nếu còn trong phòng).
+  const kb = q.knockedBy && room.players.get(q.knockedBy.id);
+  if (kb && kb !== q) kb.kills++;
+  pushElimination(room, kb
+    ? { id: room.eliminationSequence, victimId: q.id, victimName: q.name, killerId: kb.id, killerName: kb.name, weapon: q.knockedBy.weapon, distance: q.knockedBy.distance }
+    : { id: room.eliminationSequence, victimId: q.id, victimName: q.name, killerId: null, killerName: reason });
+  q.knockedBy = null;
+  dropDeathLoot(room, q);
+}
+// Mỗi tick: chảy máu, cứu, cả đội gục → chết, kiểm tra thắng theo đội.
+function tickTeams(room, now) {
+  if (!isDuo(room) || room.phase !== "playing") return;
+  let changed = false;
+  for (const p of room.players.values()) {
+    if (!p.alive) continue;
+    if (p.knocked && !p.revivedBy) {
+      p.hp = Math.max(0, p.hp - (100 / KNOCK_BLEED_S) * 0.05);
+      if (p.hp <= 0) {
+        killKnocked(room, p, "Chảy máu");
+        changed = true;
+      }
+    }
+    if (p.reviving) {
+      const t = room.players.get(p.reviving.id);
+      const ok = t && t.alive && t.knocked && p.alive && !p.knocked && Math.hypot(t.x - p.x, t.z - p.z) <= REVIVE_RANGE + 0.4;
+      if (!ok) {
+        if (t) t.revivedBy = null;
+        p.reviving = null;
+        changed = true;
+      } else if (now >= p.reviving.until) {
+        t.knocked = false;
+        t.revivedBy = null;
+        t.hp = 30;
+        t.pbFrom = proneBlendOf(t, now);
+        t.pbAt = now;
+        t.prone = false;
+        t.crouching = false;
+        p.reviving = null;
+        if (p.ws?.readyState === 1) send(p.ws, { type: "toast", text: `ĐÃ CỨU ${t.name}` });
+        if (t.ws?.readyState === 1) send(t.ws, { type: "toast", text: `${p.name} ĐÃ CỨU BẠN` });
+        t.knockedBy = null;
+        changed = true;
+      }
+    }
+  }
+  // Cả đội không còn ai đứng vững → những người đang gục chết luôn.
+  for (const p of room.players.values()) {
+    if (!p.alive || !p.knocked) continue;
+    if (!teammates(room, p).some((q) => q.alive && !q.knocked)) {
+      killKnocked(room, p, "Cả đội bị hạ gục");
+      changed = true;
+    }
+  }
+  checkTeamWin(room);
+  if (changed) room.dirty = true;
+}
+function checkTeamWin(room) {
+  if (room.finishAt || room.phase !== "playing") return;
+  if (aliveSides(room).size > 1) return;
+  room.finishAt = Date.now() + MATCH_END_DELAY_MS;
+  for (const q of room.players.values()) if (q.alive && q.ws?.readyState === 1) send(q.ws, { type: "toast", text: isDuo(room) ? "CHIẾN THẮNG! ĐỘI BẠN LÀ ĐỘI CUỐI CÙNG" : "CHIẾN THẮNG!" });
+}
 // ĐẠN BAY THẬT: vận tốc đầu nòng (m/s) + trọng lực kéo đạn rơi dần. Server mô
 // phỏng từng viên theo nhịp tick (mỗi nhịp 1 đoạn thẳng → dò va chạm đoạn đó).
 const BULLET_SPEED = { ranger: 300, beryl: 280, sniper: 480 };
@@ -1430,21 +1598,24 @@ function tickZone(room, now) {
       p.hp = Math.max(0, p.hp - zone.damage * ZONE_TICK_SECONDS);
       changed = true;
       if (p.hp) continue;
+      if (tryKnock(room, p, { killerName: "Vòng bo" })) continue;
+      if (p.knocked) cancelRevivesOf(room, p);
+      p.knocked = false;
       p.alive = false;
       detachFromVehicle(room, p);
       p.placement =
         [...room.players.values()].filter((pl) => pl.alive).length + 1;
       room.eliminationSequence = (room.eliminationSequence || 0) + 1;
-      room.lastElimination = {
+      pushElimination(room, {
         id: room.eliminationSequence,
         victimId: p.id,
         victimName: p.name,
         killerId: null,
         killerName: "Vòng bo",
-      };
+      });
       dropDeathLoot(room, p);
       const remaining = [...room.players.values()].filter((pl) => pl.alive);
-      if (remaining.length <= 1 && !room.finishAt) {
+      if (aliveSides(room).size <= 1 && !room.finishAt) {
         room.finishAt = now + MATCH_END_DELAY_MS;
         if (remaining[0])
           send(remaining[0].ws, {
@@ -1666,6 +1837,12 @@ function killByVehicle(
   cause = "vehicle",
 ) {
   if (!victim.alive) return;
+  {
+    const k = room.players.get(vehicle.lastDriverId);
+    if (tryKnock(room, victim, { killer: k !== victim ? k : null, killerName: "Xe", weapon: "XE" })) return;
+  }
+  cancelRevivesOf(room, victim);
+  victim.knocked = false;
   victim.hp = 0;
   victim.alive = false;
   victim.vehicleId = null;
@@ -1676,7 +1853,7 @@ function killByVehicle(
   const killer = candidateKiller === victim ? null : candidateKiller;
   if (killer && killer !== victim) killer.kills++;
   room.eliminationSequence = (room.eliminationSequence || 0) + 1;
-  room.lastElimination = {
+  pushElimination(room, {
     id: room.eliminationSequence,
     victimId: victim.id,
     victimName: victim.name,
@@ -1688,10 +1865,10 @@ function killByVehicle(
         ? "Nổ xe"
         : killer?.name ||
           (candidateKiller === victim ? "Rời xe khi đang chạy" : "Xe tông"),
-  };
+  });
   dropDeathLoot(room, victim);
   const alive = [...room.players.values()].filter((player) => player.alive);
-  if (alive.length <= 1 && !room.finishAt) {
+  if (aliveSides(room).size <= 1 && !room.finishAt) {
     room.finishAt = now + MATCH_END_DELAY_MS;
     if (alive[0])
       send(alive[0].ws, {
@@ -2215,6 +2392,9 @@ function damageVehicleBy(vehicle, hits) {
 }
 function killByBlast(room, victim, g, distance) {
   if (!victim.alive) return;
+  if (tryKnock(room, victim, { killer: room.players.get(g.ownerId), killerName: g.ownerName || "Lựu đạn", weapon: GRENADE[g.kind].name })) return;
+  cancelRevivesOf(room, victim);
+  victim.knocked = false;
   victim.hp = 0;
   victim.alive = false;
   detachFromVehicle(room, victim);
@@ -2222,7 +2402,7 @@ function killByBlast(room, victim, g, distance) {
   const killer = g.ownerId !== victim.id ? room.players.get(g.ownerId) : null;
   if (killer) killer.kills++;
   room.eliminationSequence = (room.eliminationSequence || 0) + 1;
-  room.lastElimination = {
+  pushElimination(room, {
     id: room.eliminationSequence,
     victimId: victim.id,
     victimName: victim.name,
@@ -2231,10 +2411,10 @@ function killByBlast(room, victim, g, distance) {
     weapon: GRENADE[g.kind].name,
     headshot: false,
     distance: Math.round(distance),
-  };
+  });
   dropDeathLoot(room, victim);
   const alive = [...room.players.values()].filter((pl) => pl.alive);
-  if (alive.length <= 1 && !room.finishAt) {
+  if (aliveSides(room).size <= 1 && !room.finishAt) {
     room.finishAt = Date.now() + MATCH_END_DELAY_MS;
     if (alive[0]) send(alive[0].ws, { type: "toast", text: "CHIẾN THẮNG! TIẾNG NỔ CUỐI CÙNG ĐÃ DỨT" });
   }
@@ -2365,6 +2545,7 @@ function tickRoom(room) {
     tickVehicles(room, now);
   if (room.phase === "playing" && tickGrenades(room, now)) broadcast(room);
   if (room.phase === "playing" || room.phase === "finished") tickBullets(room, now);
+  tickTeams(room, now);
   tickVaults(room, now);
   const players = [...room.players.values()];
   /* Weather start/end polling disabled for performance testing.
@@ -2450,6 +2631,7 @@ function applyShotResult(room, p, stats, origin, dir, nearest, target, targetPar
     }
   }
   if (!target || !target.alive) return;
+  if (isDuo(room) && target !== p && target.team === p.team) return; // không bắn đau đồng đội
   room.hitSequence = (room.hitSequence || 0) + 1;
   room.lastHit = {
     id: room.hitSequence,
@@ -2458,13 +2640,16 @@ function applyShotResult(room, p, stats, origin, dir, nearest, target, targetPar
     point: { x: origin.x + dir.x * nearest, y: origin.y + dir.y * nearest, z: origin.z + dir.z * nearest },
   };
   target.hp = Math.max(0, target.hp - (targetPart === "head" ? stats.head : stats.body));
+  if (!target.hp && tryKnock(room, target, { killer: p, weapon: stats.name })) return;
   if (!target.hp) {
+    cancelRevivesOf(room, target);
+    target.knocked = false;
     target.alive = false;
     detachFromVehicle(room, target);
     target.placement = [...room.players.values()].filter((player) => player.alive).length + 1;
     p.kills++;
     room.eliminationSequence = (room.eliminationSequence || 0) + 1;
-    room.lastElimination = {
+    pushElimination(room, {
       id: room.eliminationSequence,
       victimId: target.id,
       victimName: target.name,
@@ -2473,9 +2658,9 @@ function applyShotResult(room, p, stats, origin, dir, nearest, target, targetPar
       weapon: stats.name,
       headshot: targetPart === "head",
       distance: Math.round(Math.hypot(target.x - p.x, target.z - p.z)),
-    };
+    });
     dropDeathLoot(room, target);
-    if ([...room.players.values()].filter((player) => player.alive).length <= 1) {
+    if (aliveSides(room).size <= 1 && !room.finishAt) {
       room.finishAt = Date.now() + MATCH_END_DELAY_MS;
       if (p.ws?.readyState === 1) send(p.ws, { type: "toast", text: "CHIẾN THẮNG! BẠN ĐÃ GÕ ĐẦU TẤT CẢ" });
     }
@@ -3053,7 +3238,8 @@ wss.on("connection", (ws) => {
       // chưa có (hoặc phòng chung đang đánh / đã đủ người) thì mở phòng chung mới.
       let code = m.type === "create" ? roomCode() : String(m.code || "");
       if (m.type === "play") {
-        const open = [...rooms.values()].find((r) => r.isPublic && r.phase === "waiting" && r.players.size < 5);
+        const mode = m.mode === "duo" ? "duo" : "solo";
+        const open = [...rooms.values()].find((r) => r.isPublic && (r.mode || "solo") === mode && r.phase === "waiting" && r.players.size < MAX_PLAYERS);
         code = open ? open.code : roomCode();
       }
       room = rooms.get(code);
@@ -3075,6 +3261,7 @@ wss.on("connection", (ws) => {
           crates: [],
           nextCrateId: 1,
           nextLootId: 1,
+          mode: m.mode === "duo" ? "duo" : "solo", // Đơn / Đôi
         };
         if (m.type === "play") room.isPublic = true;
         rooms.set(code, room);
@@ -3133,6 +3320,16 @@ wss.on("connection", (ws) => {
         lastShotAt: 0,
         shotId: 0,
       };
+      // Màu hệ thống (6 màu riêng, theo người chơi suốt trận) + chỗ trong phòng chờ.
+      {
+        const usedColors = new Set([...room.players.values()].map((q) => q.color));
+        player.color = TEAM_COLORS.find((c) => !usedColors.has(c)) || TEAM_COLORS[0];
+        const usedSlots = new Set([...room.players.values()].map((q) => q.slot));
+        player.slot = [0, 1, 2, 3, 4, 5].find((k) => !usedSlots.has(k)) ?? 0;
+        player.team = isDuo(room) ? Math.floor(player.slot / 2) : player.slot;
+        player.knocked = false;
+        player.knockCount = 0;
+      }
       room.players.set(id, player);
       ws.player = player;
       ws.room = room;
@@ -3179,9 +3376,54 @@ wss.on("connection", (ws) => {
         q.state = "lobby";
         q.ready = false;
         q.placement = 0;
+        q.knocked = false;
+        q.knockCount = 0;
+        q.reviving = null;
+        q.revivedBy = null;
+        q.team = isDuo(room) ? Math.floor((q.slot ?? 0) / 2) : q.slot ?? 0;
       }
       broadcast(room);
       flushRoomState(room);
+      return;
+    }
+    if (m.type === "moveSlot" && room.phase === "waiting" && isDuo(room)) {
+      const slot = Number(m.slot);
+      if (!Number.isInteger(slot) || slot < 0 || slot > 5) return;
+      if ([...room.players.values()].some((q) => q !== p && q.slot === slot)) return;
+      p.slot = slot;
+      p.team = Math.floor(slot / 2);
+      broadcast(room);
+      return;
+    }
+    // Ping đánh dấu vị trí (chuột giữa): CHỈ đồng đội (và chính mình) thấy.
+    if (m.type === "mark" && p.alive && room.phase !== "waiting") {
+      const x = Number(m.x),
+        y = Number(m.y),
+        z = Number(m.z);
+      if (![x, y, z].every(Number.isFinite) || Math.abs(x) > MAP_HALF + 5 || Math.abs(z) > MAP_HALF + 5) return;
+      const now = Date.now();
+      if (now - (p.lastMarkAt || 0) < 250) return;
+      p.lastMarkAt = now;
+      const payload = JSON.stringify({ type: "mark", by: p.id, color: p.color, x: r2(x), y: r2(y), z: r2(z) });
+      for (const q of [p, ...teammates(room, p)]) if (q.ws?.readyState === 1) q.ws.send(payload);
+      return;
+    }
+    // Hạ gục: chặn mọi hành động trừ bò + thả đồ.
+    if (p.knocked && KNOCK_BLOCKED.has(m.type)) return;
+    // Cứu đồng đội bị hạ gục (F, 10 s, cả 2 đứng yên).
+    if (m.type === "startRevive" && canFight(room, p) && isDuo(room) && !p.knocked && !p.vehicleId && !p.reviving) {
+      const t = room.players.get(m.id);
+      if (!t || t === p || t.team !== p.team || !t.alive || !t.knocked || t.revivedBy) return;
+      if (Math.hypot(t.x - p.x, t.z - p.z) > REVIVE_RANGE) return;
+      p.reviving = { id: t.id, until: Date.now() + REVIVE_MS };
+      t.revivedBy = p.id;
+      p.sprinting = false;
+      broadcast(room);
+      return;
+    }
+    if (m.type === "cancelRevive") {
+      cancelRevivesOf(room, p);
+      broadcast(room);
       return;
     }
     // Client báo đã dựng xong map trong phòng chờ.
@@ -3434,6 +3676,17 @@ wss.on("connection", (ws) => {
       broadcast(room);
       return;
     }
+    if (m.type === "move" && (p.reviving || (p.knocked && p.revivedBy))) {
+      // Đang cứu / được cứu: đứng yên. Người được cứu vẫn xoay nhìn quanh được;
+      // người cứu mà tự di chuyển (lệch > 0.25 m) thì huỷ cứu.
+      p.yaw = Number(m.yaw) || p.yaw;
+      p.pitch = Math.max(-1.4, Math.min(1.4, Number(m.pitch) || 0));
+      if (p.reviving && Math.hypot((Number(m.x) || p.x) - p.x, (Number(m.z) || p.z) - p.z) > 0.25) {
+        cancelRevivesOf(room, p);
+        broadcast(room);
+      }
+      return;
+    }
     if (m.type === "move" && p.vault) {
       // Đang trèo: chỉ nhận hướng nhìn, vị trí do server điều khiển.
       p.yaw = Number(m.yaw) || p.yaw;
@@ -3441,9 +3694,9 @@ wss.on("connection", (ws) => {
       return;
     }
     if (m.type === "move" && canWalk(room, p) && !p.vehicleId) {
-      p.crouching = Boolean(m.crouching);
+      p.crouching = Boolean(m.crouching) || Boolean(p.knocked); // bị hạ gục: luôn bò (tay + gối)
       {
-        const wantProne = Boolean(m.prone);
+        const wantProne = Boolean(m.prone) && !p.knocked; // bị hạ gục: không nằm được
         if (wantProne !== Boolean(p.prone)) {
           // Ghi lại mốc đổi tư thế: hitbox + hình người khác thấy cùng chuyển trong 0.7 s.
           const now = Date.now();
@@ -3477,7 +3730,9 @@ wss.on("connection", (ws) => {
         p.swimming &&
         p.swimY < waterBeforeMove.surfaceY - 1.73,
       );
-      const moveSpeed = inWaterBeforeMove
+      const moveSpeed = p.knocked
+        ? KNOCK_CRAWL_SPEED + 0.4
+        : inWaterBeforeMove
         ? 3.6
         : p.prone
           ? 1.3
@@ -4155,7 +4410,18 @@ wss.on("connection", (ws) => {
   ws.on("error", (error) => console.warn("socket error:", error.message));
   ws.on("close", () => {
     if (room && ws.player) {
+      const wasHost = [...room.players.keys()][0] === ws.player.id;
+      cancelRevivesOf(room, ws.player);
       room.players.delete(ws.player.id);
+      if (wasHost && room.players.size > 1) {
+        // Chủ phòng mới: NGẪU NHIÊN trong số người còn lại (đưa lên đầu danh sách).
+        const list = [...room.players.entries()];
+        const pick = Math.floor(Math.random() * list.length);
+        const reordered = [list[pick], ...list.filter((_, i) => i !== pick)];
+        room.players.clear();
+        for (const [k, v] of reordered) room.players.set(k, v);
+      }
+      if (room.phase === "playing") checkTeamWin(room);
       if (!room.players.size) {
         clearInterval(room.timer);
         rooms.delete(room.code);

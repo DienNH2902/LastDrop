@@ -22,6 +22,13 @@ export const HITBOX = {
     legs: { c: [0, 0.3, -0.15], h: [0.2, 0.3, 0.3] },
     peek: { head: 0.24, torso: 0.14 },
   },
+  // Bò bằng tay + gối (bị hạ gục) — khớp poseCrawl (game.js) và HIT_CRAWL (server).
+  crawl: {
+    head: { c: [0, 0.6, -0.72], h: [0.28, 0.27, 0.3] },
+    torso: { c: [0, 0.42, -0.15], h: [0.31, 0.33, 0.4] },
+    legs: { c: [0, 0.22, 0.38], h: [0.2, 0.24, 0.24] },
+    peek: { head: 0, torso: 0 },
+  },
 };
 
 const STAND_HIP = 0.9;

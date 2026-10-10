@@ -371,6 +371,76 @@ h2 {
   color: var(--acid);
   font: 10px "JetBrains Mono";
 }
+/* Phòng chờ Đôi: 3 đội × 2 chỗ */
+.slots.duo {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+.team-col {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #3a3e33;
+  padding: 8px;
+  background: #12150fcc;
+}
+.team-col h5 {
+  margin: 0;
+  font: 900 14px "Barlow Condensed", Arial, sans-serif;
+  letter-spacing: 2px;
+  color: #c8ff1a;
+}
+.slot.free-slot {
+  cursor: pointer;
+}
+.slot.free-slot:hover {
+  border-color: #c8ff1a;
+}
+.slot .p-color {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-right: 6px;
+  box-shadow: 0 0 0 2px #000a;
+  vertical-align: middle;
+}
+.mode-select {
+  margin-bottom: 10px;
+}
+/* Killfeed: tên mình / đồng đội hạ đối thủ = xanh; mình bị hạ = đỏ */
+.kf-good {
+  color: #5dff7a;
+  font-weight: 800;
+}
+.kf-bad {
+  color: #ff5a5a;
+  font-weight: 800;
+}
+#knockHud {
+  position: absolute;
+  left: 50%;
+  bottom: 22%;
+  transform: translateX(-50%);
+  text-align: center;
+  font: 800 14px "JetBrains Mono", monospace;
+  letter-spacing: 1px;
+  color: #ff6b6b;
+  text-shadow: 0 1px 3px #000;
+  pointer-events: none;
+  z-index: 4;
+}
+#knockHud i {
+  display: block;
+  width: 240px;
+  height: 6px;
+  margin: 8px auto 0;
+  background: #0008;
+  border: 1px solid #ff6b6b88;
+}
+#knockHud i b {
+  display: block;
+  height: 100%;
+  background: #ff4d4d;
+}
 .slots {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
