@@ -5048,15 +5048,21 @@ function updateLocalVehicleView() {
     local.x = vehicleEye.x;
     local.z = vehicleEye.z;
     local.groundY = carMesh.position.y;
-    if (local.vehicleSeat === 0) {
+    if (local.vehicleSeat === 0 && !driverLookYaw && !driverLookPitch) {
       local.yaw = yaw;
       camera.quaternion.copy(carMesh.quaternion);
     } else {
-      // Hành khách nhìn tự do (yaw/pitch riêng) nhưng vẫn nghiêng theo khung xe.
+      // Hành khách nhìn tự do (yaw/pitch riêng); tài xế = đầu xe + góc lệch chuột.
+      // Cả hai vẫn nghiêng theo khung xe.
+      if (local.vehicleSeat === 0) local.yaw = yaw;
       vehicleTilt.copy(carMesh.quaternion).premultiply(
         vehicleYawInv.setFromAxisAngle(UP_AXIS, -yaw),
       );
-      vehicleLook.setFromEuler(vehicleEuler.set(vehiclePitch, local.yaw, 0, "YXZ"));
+      vehicleLook.setFromEuler(
+        local.vehicleSeat === 0
+          ? vehicleEuler.set(driverLookPitch, yaw + driverLookYaw, 0, "YXZ")
+          : vehicleEuler.set(vehiclePitch, local.yaw, 0, "YXZ"),
+      );
       camera.quaternion.copy(vehicleYawInv.setFromAxisAngle(UP_AXIS, yaw))
         .multiply(vehicleTilt)
         .multiply(vehicleYawInv.setFromAxisAngle(UP_AXIS, -yaw))
@@ -5066,7 +5072,11 @@ function updateLocalVehicleView() {
     local.groundY = groundHeightAt(vehicle.x, vehicle.z);
     camera.position.set(vehicle.x, local.groundY + eyeY, vehicle.z);
     if (local.vehicleSeat === 0) local.yaw = yaw;
-    camera.rotation.set(local.vehicleSeat === 0 ? 0 : vehiclePitch, local.yaw, 0);
+    camera.rotation.set(
+      local.vehicleSeat === 0 ? driverLookPitch : vehiclePitch,
+      local.vehicleSeat === 0 ? yaw + driverLookYaw : local.yaw,
+      0,
+    );
   }
   if (gun) gun.visible = false;
   if (hud) {
@@ -5805,6 +5815,8 @@ function renderPlayers(state) {
       local.vehicleId = p.vehicleId || null;
       local.vehicleSeat = Number.isInteger(p.vehicleSeat) ? p.vehicleSeat : -1;
       if (local.vehicleId && local.vehicleId !== previousVehicleId) {
+        driverLookYaw = 0; // lên xe: nhìn thẳng theo đầu xe
+        driverLookPitch = 0;
         local.peek = 0;
         peekBlend = 0;
         keys.KeyQ = false;
@@ -6284,7 +6296,9 @@ function addCrateMesh(crate) {
   );
   lid.position.y = 0.69;
   root.add(lid);
-  root.position.set(crate.x, groundHeightAt(crate.x, crate.z), crate.z);
+  // Chết dưới sông / hồ: hòm NỔI trên mặt nước (ngập ~1/3), không chìm xuống đáy.
+  const water = isOnBridgeAt(crate.x, crate.z, 0.8) ? null : waterAt(crate.x, crate.z);
+  root.position.set(crate.x, water ? water.surfaceY - 0.25 : groundHeightAt(crate.x, crate.z), crate.z);
   scene.add(root);
   crate.mesh = root;
 }
@@ -6577,7 +6591,7 @@ function nearestLoot() {
   return best;
 }
 function nearestCrate() {
-  if (local.state !== "ground" || local.swimming) return null;
+  if (local.state !== "ground") return null; // hòm nổi: đang bơi vẫn mở được
   let best = null;
   let bestDistance = 4.5;
   for (const crate of lootCrates.values()) {
@@ -6876,7 +6890,8 @@ function onKillEvent(ev) {
       distance: ev.distance,
       at: Date.now() - startedAt,
     });
-    showKillNotice("Bạn ", "đã giết", ` ${ev.victimName}${feedTail(ev)}`);
+    if (ev.teamKill) showKillNotice("", "BẮN ĐỒNG ĐỘI", ` · Bạn đã giết ${ev.victimName}`);
+    else showKillNotice("Bạn ", "đã giết", ` ${ev.victimName}${feedTail(ev)}`);
   }
 }
 function addFeedRow(verb, ev, tail = "") {
@@ -6893,6 +6908,12 @@ function addFeedRow(verb, ev, tail = "") {
   v.textContent = ev.victimName || "";
   if (isMine(ev.victimId)) v.className = "kf-bad"; // mình / đồng đội bị hạ: đỏ
   row.append(k, document.createTextNode(` ${verb} `), v, document.createTextNode(tail));
+  if (ev.teamKill) {
+    const tk = document.createElement("span");
+    tk.className = "kf-bad";
+    tk.textContent = " · BẮN ĐỒNG ĐỘI";
+    row.append(tk);
+  }
   // Giới hạn số dòng: không để DOM phình ra khi đấu đông người.
   while (feed.childElementCount > 6) feed.lastElementChild.remove();
   feed.prepend(row);
@@ -6903,7 +6924,8 @@ function onFeedEvent(ev) {
   else if (ev.kind === "knock") {
     // Cứu KHÔNG lên killfeed tổng (server chỉ báo riêng cho 2 người).
     addFeedRow("đã hạ gục", ev, feedTail(ev));
-    if (ev.killerId === playerId) showKillNotice("Bạn ", "đã hạ gục", ` ${ev.victimName}${feedTail(ev)}`);
+    if (ev.killerId === playerId && ev.teamKill) showKillNotice("", "BẮN ĐỒNG ĐỘI", ` · Bạn đã hạ gục ${ev.victimName}`);
+    else if (ev.killerId === playerId) showKillNotice("Bạn ", "đã hạ gục", ` ${ev.victimName}${feedTail(ev)}`);
     else if (ev.victimId === playerId)
       showKillNotice("Bạn ", "đã bị hạ gục", ev.killerId ? ` bởi ${ev.killerName}${feedTail(ev)}` : ` do ${ev.killerName}`);
   }
@@ -8994,12 +9016,21 @@ function saneMouseDelta(e) {
   lookDY = lastGoodDY = my;
   return true;
 }
+let driverLookYaw = 0,
+  driverLookPitch = 0;
 function onMouse(e) {
   // Đang CỨU đồng đội: khoá màn hình (người được cứu thì vẫn xoay nhìn quanh được).
   if (local.reviving) return;
-  // While driving, steering controls the car and the POV follows its heading.
-  if (local.vehicleId && local.vehicleSeat === 0) return;
   if (document.pointerLockElement !== renderer?.domElement) return;
+  // Tài xế: chuột xoay góc nhìn LỆCH so với đầu xe (nhìn quanh khi lái). Thôi di chuột
+  // thì góc lệch giữ nguyên → màn hình "khoá" ở hướng đó và quay theo xe.
+  if (local.vehicleId && local.vehicleSeat === 0) {
+    if (!saneMouseDelta(e)) return;
+    const sens = Number($("#sensitivity").value) || 50;
+    driverLookYaw = clamp(driverLookYaw - lookDX * sens * 0.000055, -2.6, 2.6);
+    driverLookPitch = clamp(driverLookPitch - lookDY * sens * 0.000036, -0.9, 0.9);
+    return;
+  }
   // Mất sự kiện nhả chuột (trình duyệt đôi khi làm rơi mouseup khi khóa chuột):
   // nút trái thực tế đã nhả mà vẫn đang "bóp cò" → dừng bắn ngay.
   if (triggerHeld && !(e.buttons & 1)) stopFiring();
@@ -13977,7 +14008,12 @@ function showResult() {
   document.exitPointerLock?.();
   $("#killsResult").textContent = local.kills;
   const finalPlace = local.placement || (local.hp > 0 ? 1 : 0);
-  $("#placeResult").textContent = finalPlace ? `TOP ${finalPlace}` : "TOP —";
+  const total = gameState?.mode === "duo" ? new Set((gameState.players || []).map((q) => q.team)).size : gameState?.players?.length || 0;
+  $("#placeResult").textContent = finalPlace ? `#${finalPlace}` : "#—";
+  setText($("#placeTotal"), total ? `/ ${total} ${gameState?.mode === "duo" ? "ĐỘI" : "NGƯỜI"}` : "");
+  // Màu theo hạng: vàng / bạc / đồng / xanh chanh.
+  const hero = $("#placeHero");
+  if (hero) hero.dataset.rank = finalPlace === 1 ? "1" : finalPlace === 2 ? "2" : finalPlace === 3 ? "3" : "n";
   const e = Math.floor((Date.now() - startedAt) / 1000);
   $("#surviveResult").textContent =
     `${String(Math.floor(e / 60)).padStart(2, "0")}:${String(e % 60).padStart(2, "0")}`;
