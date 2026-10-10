@@ -341,6 +341,7 @@
     ];
     // Đổi đoạn tường + lỗ thành các hộp đặc (cục bộ, y từ sàn).
     const boxes = [];
+    const windows = [];
     for (const w of walls) {
       const cuts = [...w.holes].sort((a, b) => a.u0 - b.u0);
       const pushBox = (u0, u1, y0, y1, kind) => {
@@ -352,6 +353,17 @@
       };
       let u = w.u0;
       for (const h of cuts) {
+        // Cửa sổ (lỗ có bệ): ghi lại để trèo qua được bằng phím F.
+        if (h.y0 > 0 && !w.inner)
+          windows.push({
+            cx: w.axis === "x" ? (h.u0 + h.u1) / 2 : w.at,
+            cz: w.axis === "x" ? w.at : (h.u0 + h.u1) / 2,
+            ax: w.axis === "x" ? "z" : "x", // hướng xuyên qua tường
+            half: (h.u1 - h.u0) / 2,
+            uLimit: (h.u1 - h.u0) / 2 - 0.3,
+            h: h.y0,
+            depth: T,
+          });
         pushBox(u, h.u0, 0, H, "wall");
         pushBox(h.u0, h.u1, 0, h.y0, h.y0 > 0 ? "sill" : "wall"); // bệ cửa sổ
         pushBox(h.u0, h.u1, h.y1, H, "lintel"); // lanh tô trên cửa / cửa sổ
@@ -386,7 +398,7 @@
       { x0: -W + 0.6, x1: -0.6, z0: split + 0.6, z1: D - 0.6 }, // phòng trái
       { x0: 0.6, x1: W - 0.6, z0: split + 0.6, z1: D - 0.6 }, // phòng phải
     ];
-    L = { W, D, H, top, split, boxes, floor, roof, parapets, rooms };
+    L = { W, D, H, top, split, boxes, floor, roof, parapets, rooms, windows };
     manorCache.set(o, L);
     return L;
   }
@@ -407,6 +419,8 @@
     if (Math.abs(lx) >= L.W + 0.15 + r || Math.abs(lz) >= L.D + 0.15 + r) return false;
     if (rel === null) return true; // xe không vào nhà
     if (rel >= L.top - 0.45) {
+      // Lan can mái chỉ cao 0.45 m: nhảy cao hơn nó là vượt qua được (chỉ chặn đi bộ).
+      if (rel > L.top + MANOR.parapet + 0.02) return false;
       // Trên mái: lan can quanh mép chặn rơi.
       for (const b of L.parapets) if (Math.abs(lx - b.x) < b.hx + r && Math.abs(lz - b.z) < b.hz + r) return true;
       return false;
@@ -443,7 +457,44 @@
     return rel > floor - 0.6 && rel < floor + TABLE_TOP - 0.25; // đứng cùng sàn: vướng bàn
   }
 
+  // ======================= TRÈO QUA (rào / cửa sổ) =======================
+  // Mỗi chỗ trèo: tâm (cục bộ), hướng xuyên qua (ax), độ cao bệ (h), bề dày (depth).
+  function vaultOpenings(o) {
+    if (o.type === "fence") return [{ cx: 0, cz: 0, ax: "x", half: o.length / 2, uLimit: o.length / 2 + 0.1, h: o.h || 1.15, depth: o.w || 0.3 }];
+    if ((o.type === "house" || o.type === "hut") && !o.lift) {
+      const half = o.w / 2,
+        wallH = o.h * 0.72;
+      return [-1, 1].map((s) => ({ cx: s * half, cz: 0, ax: "x", half: 0.72, uLimit: 0.42, h: wallH * 0.34, depth: 0.24, window: true }));
+    }
+    if (o.type === "manor") return manorLayout(o).windows.map((w) => ({ ...w, window: true }));
+    return [];
+  }
+  // Kế hoạch trèo từ (x, z): điểm bắt đầu (sát chỗ trèo) → điểm đáp bên kia. null = không trèo được.
+  function vaultPlan(o, x, z) {
+    const [lx, lz] = toLocal(o, x, z);
+    let best = null;
+    for (const w of vaultOpenings(o)) {
+      if (w.h > 1.6) continue;
+      const n = w.ax === "x" ? lx - w.cx : lz - w.cz,
+        u = w.ax === "x" ? lz - w.cz : lx - w.cx;
+      if (Math.abs(n) > 1.4 || Math.abs(u) > w.uLimit) continue;
+      if (best && Math.abs(n) >= best.dist) continue;
+      const side = n >= 0 ? 1 : -1;
+      const s = side * (w.depth / 2 + 0.55),
+        t = -side * (w.depth / 2 + 0.8);
+      const uu = Math.max(-w.uLimit, Math.min(w.uLimit, u));
+      const [sx, sz] = w.ax === "x" ? toWorld(o, w.cx + s, w.cz + uu) : toWorld(o, w.cx + uu, w.cz + s);
+      const [tx, tz] = w.ax === "x" ? toWorld(o, w.cx + t, w.cz + uu) : toWorld(o, w.cx + uu, w.cz + t);
+      best = { sx, sz, tx, tz, h: w.h, dist: Math.abs(n), window: Boolean(w.window) };
+    }
+    return best;
+  }
+  const VAULTABLE = new Set(["fence", "house", "hut", "manor"]);
+
   const api = {
+    vaultOpenings,
+    vaultPlan,
+    VAULTABLE,
     MANOR,
     manorLayout,
     manorParts,

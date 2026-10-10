@@ -2107,6 +2107,14 @@ function bucketAdd(key, color, geometry, build) {
 // màu theo đỉnh: mỗi khu MERGE_CHUNK m chỉ còn 1 draw call thay vì 1 call / màu
 // (trước đây ~770 mesh, ~560 call mỗi khung hình). Hình ảnh không đổi.
 let solidVertexMat = null;
+// Vật TĨNH của map: chốt ma trận 1 lần, bỏ khỏi lượt cập nhật ma trận mỗi khung hình.
+function freezeStatic(o) {
+  o.updateMatrix();
+  o.updateMatrixWorld(true);
+  o.matrixAutoUpdate = false;
+  o.matrixWorldAutoUpdate = false;
+  return o;
+}
 // MÀU TƯƠI: tăng độ bão hoà mọi màu tĩnh (địa hình, cỏ, nhà, cây, đá...) ngay lúc
 // dựng map — miễn phí khi chơi (không thêm bước hậu kỳ nào cho mỗi khung hình).
 const vividHSL = { h: 0, s: 0, l: 0 };
@@ -2179,6 +2187,8 @@ function flushMergeBuckets() {
       }
       mesh.matrixAutoUpdate = false; // tĩnh: khỏi tính lại ma trận mỗi khung hình
       mesh.updateMatrix();
+      mesh.updateMatrixWorld(true);
+      mesh.matrixWorldAutoUpdate = false;
       scene.add(mesh);
     }
   }
@@ -2191,6 +2201,8 @@ function flushMergeBuckets() {
     mesh.receiveShadow = true;
     mesh.matrixAutoUpdate = false;
     mesh.updateMatrix();
+    mesh.updateMatrixWorld(true);
+    mesh.matrixWorldAutoUpdate = false;
     scene.add(mesh);
   }
   mergeBuckets = null;
@@ -2261,16 +2273,18 @@ function obstaclesNear(x, z) {
     ) || NO_OBSTACLES
   );
 }
+// Mặt cầu kéo dài 2.5 m mỗi đầu (khớp server) — không thụt xuống hõm đất đầu cầu.
+const BRIDGE_END_EXTEND = 2.5;
 function groundHeightAt(x, z) {
   let height = mapTerrain ? mapTerrain.heightAt(x, z) : 0;
-  if (isOnBridgeAt(x, z, 0.2)) height = Math.max(height, 0.3);
+  if (isOnBridgeAt(x, z, 0.35, BRIDGE_END_EXTEND)) height = Math.max(height, 0.3);
   return height;
 }
-function isOnBridgeAt(x, z, clearance = 0) {
+function isOnBridgeAt(x, z, clearance = 0, extend = 0) {
   return obstaclesNear(x, z).some((road) => {
     if (road.type !== "road" || !road.bridge) return false;
-    const dx = (Math.sin(road.yaw || 0) * road.length) / 2;
-    const dz = (Math.cos(road.yaw || 0) * road.length) / 2;
+    const dx = (Math.sin(road.yaw || 0) * (road.length + extend * 2)) / 2;
+    const dz = (Math.cos(road.yaw || 0) * (road.length + extend * 2)) / 2;
     const ax = road.x - dx,
       az = road.z - dz;
     const bx = road.x + dx,
@@ -2379,7 +2393,7 @@ function standingHeightAt(x, z, previousGroundY) {
     if (previousGroundY > c.base + 0.55 && c.height > h) h = c.height;
   return h;
 }
-function waterAt(x, z) {
+function waterAt(x, z, underBridge = false) {
   for (const water of obstaclesNear(x, z)) {
     if (water.type !== "river" && water.type !== "lake") continue;
     const dx = x - water.x;
@@ -2394,8 +2408,9 @@ function waterAt(x, z) {
         : Math.abs(localX) <= water.w / 2 &&
           Math.abs(localZ) <= water.length / 2;
     if (inside) {
-      // The rendered bridge deck is dry and walkable, not river water.
-      if (isOnBridgeAt(x, z, 0.8)) continue;
+      // The rendered bridge deck is dry and walkable, not river water —
+      // trừ khi đang BƠI dưới gầm cầu (vẫn là nước).
+      if (!underBridge && isOnBridgeAt(x, z, 0.8)) continue;
       return { surfaceY: 0.08, depth: water.depth || 4 };
     }
   }
@@ -2562,7 +2577,7 @@ function createGroundMesh(forest) {
       geometry.computeBoundingSphere();
       const groundChunk = new THREE.Mesh(geometry, material);
       groundChunk.receiveShadow = true;
-      scene.add(groundChunk);
+      scene.add(freezeStatic(groundChunk));
     }
   addWaterSurfaces(forest);
   addRoadRibbons(forest);
@@ -2687,7 +2702,7 @@ function addRoadRibbons(forest) {
     bucketAdd(
       "bridge-deck-" + deck,
       deck,
-      new THREE.BoxGeometry(s.w + 0.6, 0.4, s.length),
+      new THREE.BoxGeometry(s.w + 0.6, 0.4, s.length + BRIDGE_END_EXTEND * 2), // phủ cả phần kéo dài 2 đầu
       (t) => {
         t.position.set(s.x, groundHeightAt(s.x, s.z) - 0.18, s.z);
         t.rotation.y = s.yaw;
@@ -2718,12 +2733,22 @@ function addWaterSurfaces(forest) {
     opacity: 0.86,
   });
   for (const pts of segmentLines("river", "riverId", 6)) {
+    // Kéo dài 2 đầu sông thêm 6 m (segmentLines cắt bớt 3 m mỗi đầu → hở ở chỗ
+    // sông chảy vào hồ / ra mép map) và rộng hơn 2 bên — phần thừa nằm dưới bờ đất.
+    for (const [i, j] of [[0, 1], [pts.length - 1, pts.length - 2]]) {
+      const a = pts[i],
+        b = pts[j];
+      if (!a || !b) continue;
+      const len = Math.hypot(a.x - b.x, a.z - b.z) || 1;
+      a.x += ((a.x - b.x) / len) * 6;
+      a.z += ((a.z - b.z) / len) * 6;
+    }
     const geometry = ribbonGeometry(
       pts,
-      (i) => pts[i].seg.w / 2 + 0.6,
+      (i) => pts[i].seg.w / 2 + 1.8,
       () => 0.05,
     );
-    scene.add(new THREE.Mesh(geometry, riverMat));
+    scene.add(freezeStatic(new THREE.Mesh(geometry, riverMat)));
   }
   // Đầm lầy: mặt nước đục màu rêu, nông (đi bộ được), kèm lau sậy từ addGrass().
   const swampMat = waterMaterial("swamp", {
@@ -2739,7 +2764,7 @@ function addWaterSurfaces(forest) {
     m.rotation.z = o.yaw || 0; // khớp phép xoay elip của insideWater
     m.scale.set(o.w, o.length, 1);
     m.position.set(o.x, 0.04, o.z);
-    scene.add(m);
+    scene.add(freezeStatic(m));
   }
 }
 // Cả khối gầm nhà sàn (xe và người đứng dưới đất không chui qua được).
@@ -2996,7 +3021,8 @@ function drawMapObject(o, forest) {
         }),
       );
       water.rotation.set(-Math.PI / 2, 0, o.yaw || 0);
-      water.scale.set(o.w, o.length, 1);
+      water.scale.set(o.w * 1.06, o.length * 1.06, 1); // phủ kín mép hồ, không hở thấy đáy
+      freezeStatic(water);
       break;
     }
     case "fence": {
@@ -3917,6 +3943,8 @@ function addGrass(forest) {
       mesh.computeBoundingSphere();
       mesh.matrixAutoUpdate = false; // ô cỏ tĩnh: không tính lại ma trận mỗi khung hình
       mesh.updateMatrix();
+      mesh.updateMatrixWorld(true);
+      mesh.matrixWorldAutoUpdate = false;
       mesh.visible = false;
       scene.add(mesh);
       grassChunks.push(mesh);
@@ -4022,7 +4050,7 @@ function isBlockedAt(x, z, radiusOverride = null) {
     }
     if (o.type === "manor" || o.type === "table" || o.type === "chair" || o.type === "bed" || o.type === "shelf") {
       const [lx, lz] = Structures.toLocal(o, x, z);
-      const rel = local.groundY - groundHeightAt(o.x, o.z);
+      const rel = local.groundY + (grounded ? 0 : jumpOffset) - groundHeightAt(o.x, o.z); // chân thật (đang nhảy)
       if (o.type === "manor" ? Structures.manorBlocked(o, lx, lz, obstacleRadius, rel) : Structures.tableBlocked(o, lx, lz, obstacleRadius, rel)) return true;
       continue;
     }
@@ -4031,6 +4059,7 @@ function isBlockedAt(x, z, radiusOverride = null) {
       if (Structures.fortBlocked(o, lx, lz, obstacleRadius, local.groundY - groundHeightAt(o.x, o.z), groundHeightAt)) return true;
       continue;
     }
+    if (o.type === "fence" && local.swimming) continue; // bơi dưới gầm cầu: lan can ở trên đầu
     if (o.type === "fence" || o.type === "stonewall") {
       const dx = x - o.x,
         dz = z - o.z;
@@ -4069,8 +4098,13 @@ function isBlockedAt(x, z, radiusOverride = null) {
     )
       continue;
     const otherRadius = p.prone ? 1.15 : PLAYER_RADIUS;
-    if (Math.hypot(x - p.x, z - p.z) < selfRadius + otherRadius + 0.02)
+    const reach = selfRadius + otherRadius + 0.02;
+    if (Math.hypot(x - p.x, z - p.z) < reach) {
+      // Đang chồng lên nhau (spawn trùng chỗ): bước làm 2 người xa ra thì cho đi (khớp server).
+      const now = Math.hypot(local.x - p.x, local.z - p.z);
+      if (now < reach && Math.hypot(x - p.x, z - p.z) >= now - 1e-4) continue;
       return true;
+    }
   }
   for (const vehicle of gameState?.vehicles || []) {
     const dx = x - vehicle.x,
@@ -4426,6 +4460,24 @@ function stepCar(state, input, dt) {
   // đi xuyên lan can trong khi server chặn lại → mỗi gói tin xe bị kéo giật về
   // ("lag xe" mỗi lần cạ rào cầu).
   const current = carBlockInfo(state.id, state.x, state.z, state.yaw);
+    // ĐANG LÚN vào vật cản (đâm thẳng / bị đẩy / lag): tự đẩy xe ra chỗ trống gần
+    // nhất (tìm trong 2.4 m) thay vì dính kẹt, rung giật tại chỗ.
+    if (current.count > 0) {
+      let escaped = false;
+      for (let r = 0.2; r <= 2.4 && !escaped; r += 0.2)
+        for (let k = 0; k < 12; k++) {
+          const a = (k / 12) * Math.PI * 2;
+          const ex = state.x + Math.cos(a) * r,
+            ez = state.z + Math.sin(a) * r;
+          if (((x, z, yaw) => carBlockInfo(state.id, x, z, yaw))(ex, ez, state.yaw).count === 0) {
+            state.x = ex;
+            state.z = ez;
+            current.count = 0;
+            escaped = true;
+            break;
+          }
+        }
+    }
   if (steerYaw) {
     const turned = carBlockInfo(state.id, state.x, state.z, state.yaw + steerYaw);
     if (turned.count <= current.count) {
@@ -4468,12 +4520,41 @@ function fenceBlocks(o, x, z, radius) {
 }
 // Một điểm trên thân xe có đụng gì không (khớp blockedPosition của server với
 // mover = null, bỏ qua người chơi, bỏ qua chính chiếc xe này).
+// Đỉnh THẬT của vật cản (khớp hình vẽ): xe đang bay cao hơn đỉnh này thì bay qua được.
+function obstacleTopY(o) {
+  const base = groundHeightAt(o.x, o.z);
+  switch (o.type) {
+    case "tree":
+      return base + o.h * 0.72; // thân + tán dưới (lá phía trên không cản xe)
+    case "deadTree":
+    case "palm":
+    case "banana":
+    case "cactus":
+      return base + o.h * 0.75;
+    case "rock":
+      return base + o.h * 0.92;
+    case "house":
+    case "hut":
+      return base + (o.lift || 0) + o.h * 0.72 + o.w * 0.29;
+    case "manor":
+      return base + o.h + 0.7;
+    case "keep":
+      return base + 11;
+    case "tower":
+      return base + o.h + 0.8;
+    default:
+      return base + (o.h || 2);
+  }
+}
+// Xe mình đang bay: gầm xe (đặt mỗi khung hình trước khi mô phỏng xe).
+let carAirMinY = null;
 function carPointBlocked(ownId, x, z) {
   if (x < -MAP_HALF + 1 || x > MAP_HALF - 1 || z < -MAP_HALF + 1 || z > MAP_HALF - 1)
     return true;
   const r = PLAYER_RADIUS;
   for (const o of obstaclesNear(x, z)) {
     if (o.solid === false) continue;
+    if (carAirMinY !== null && obstacleTopY(o) < carAirMinY) continue;
     if (o.type === "house" || o.type === "hut") {
       if (o.lift ? stiltFootprint(o, x, z, r) : blockedByBuilding(o, x, z, r)) return true;
       continue;
@@ -4724,6 +4805,37 @@ function poseDriverForearms(ud) {
     mesh.scale.set(1, 1, length / 0.38);
   });
 }
+// XE RƠI TỰ DO: bám mặt đất khi chạy, nhưng lao qua đỉnh dốc / mỏm đất mà mặt đất
+// tụt nhanh hơn đường bay thì xe BAY theo quỹ đạo (vận tốc đứng giữ nguyên + trọng lực)
+// rồi mới tiếp đất. Dùng chung công thức với ${"other"} để hitbox khớp hình.
+const CAR_GRAVITY = 20;
+function carVertical(state, groundY, dt) {
+  if (state.y === undefined || !Number.isFinite(state.y)) {
+    state.y = groundY;
+    state.vy = 0;
+    state.air = false;
+  }
+  if (!state.air) {
+    const ballistic = state.y + state.vy * dt - 0.5 * CAR_GRAVITY * dt * dt;
+    if (groundY < ballistic - 0.08) {
+      state.air = true;
+      state.y = ballistic;
+      state.vy -= CAR_GRAVITY * dt;
+    } else {
+      state.vy = Math.max(-25, Math.min(25, (groundY - state.y) / Math.max(dt, 1e-3)));
+      state.y = groundY;
+    }
+  } else {
+    state.vy -= CAR_GRAVITY * dt;
+    state.y += state.vy * dt;
+    if (state.y <= groundY) {
+      state.y = groundY;
+      state.vy = 0;
+      state.air = false;
+    }
+  }
+  return state.y;
+}
 function updateVehicleMeshes(dt) {
   const vehicles = gameState?.vehicles || [];
   const liveIds = new Set();
@@ -4747,7 +4859,9 @@ function updateVehicleMeshes(dt) {
       !vehicle.submerged;
     let targetX, targetZ, targetYaw;
     if (localDriver) {
+      carAirMinY = driveSim.air && Number.isFinite(driveSim.y) ? driveSim.y + 0.15 : null; // khớp server
       advanceCar(driveSim, carInputs(), dt);
+      carAirMinY = null;
       const decay = Math.exp(-7 * dt);
       driveSim.ox *= decay;
       driveSim.oz *= decay;
@@ -4766,7 +4880,18 @@ function updateVehicleMeshes(dt) {
       targetZ = s ? s.z : vehicle.z;
       targetYaw = s ? s.yaw : vehicle.yaw;
     }
-    const targetY = groundHeightAt(targetX, targetZ) - (vehicle.sinkDepth || 0);
+    // Xe tự lái: mô phỏng rơi tự do ngay ở máy mình (cùng công thức server); xe người
+    // khác: độ cao bay server gửi (ay). Xe đang bay thì không bám nghiêng theo dốc.
+    let carAir = false,
+      targetY;
+    if (localDriver) {
+      targetY = carVertical(driveSim, groundHeightAt(targetX, targetZ), Math.min(dt, 0.05));
+      carAir = driveSim.air;
+    } else {
+      targetY = groundHeightAt(targetX, targetZ) + (vehicle.ay || 0);
+      carAir = (vehicle.ay || 0) > 0.05;
+    }
+    targetY -= vehicle.sinkDepth || 0;
     mesh.position.x = targetX;
     mesh.position.z = targetZ;
     // Độ cao nền là hàm liên tục nên bám thẳng; chỉ làm mềm bậc cầu 0.3 m.
@@ -4774,8 +4899,9 @@ function updateVehicleMeshes(dt) {
       (targetY - mesh.position.y) *
       (Math.abs(targetY - mesh.position.y) > 0.25 ? Math.min(18 * dt, 1) : 1);
     mesh.rotation.y = targetYaw;
-    if (!vehicle.destroyed && !vehicle.submerged)
+    if (!vehicle.destroyed && !vehicle.submerged && !carAir)
       tiltCarToGround(mesh, targetX, targetZ, targetYaw);
+    else if (carAir) mesh.rotation.x += (0.12 - mesh.rotation.x) * Math.min(1, dt * 1.5); // đang bay: chúc dần đầu xe xuống
     const ud = mesh.userData;
     // Đánh lái: vô lăng quay tối đa ~100°, về giữa mượt khi thả phím.
     const iDrive = local.vehicleId === vehicle.id && local.vehicleSeat === 0;
@@ -5423,14 +5549,16 @@ function placeRemote(mesh, p) {
     x: p.x,
     y: p.swimming
       ? p.swimY || 0
-      : (p.groundY || 0) + (p.prone ? 0.35 : p.jumpY || 0),
+      : (p.groundY || 0) + (p.prone ? 0 : p.jumpY || 0), // nằm: nâng thân 0.35 m dần theo tư thế (animateAvatars)
     z: p.z,
     yaw: p.yaw,
   });
   // Negative X rotation lays local +Y toward local -Z, matching the server's
   // prone hitbox centers (head forward, legs behind).
   const peekRoll = p.prone ? 0 : -(Number(p.peek) || 0) * 0.18;
-  mesh.rotation.x = p.prone ? -Math.PI / 2 : 0;
+  // Nằm / đứng dậy KHÔNG đổ rạp tức thì: góc thân nằm xuống do animateAvatars
+  // làm dần (quỳ xuống → nằm, chống tay → quỳ → đứng).
+  if (mesh.userData.proneBlend === undefined) mesh.rotation.x = p.prone ? -Math.PI / 2 : 0;
   mesh.rotation.z = peekRoll;
   // Khom người là tư thế (gập gối, cúi thân) do poseAvatar dựng, không bóp dẹt mô hình.
   mesh.scale.set(1, 1, 1);
@@ -5703,6 +5831,8 @@ function renderPlayers(state) {
       ammo = Math.max(0, Number(p.ammo) || 0);
       local.reserveAmmo = p.reserveAmmo;
       local.medkits = p.medkits || 0;
+      local.outfit = p.outfit || "";
+      syncFpGhillie();
       local.frags = p.frags || 0;
       local.flashes = p.flashes || 0;
       if (local.attRaw !== p.att || local.packAttRaw !== p.packAtt) {
@@ -5869,10 +5999,23 @@ function renderPlayers(state) {
       playPunchWhoosh({ x: p.x, y: (p.groundY || 0) + 1.3, z: p.z });
     }
     mesh.userData.chute.visible = curState === "parachute";
+    {
+      const vid = Number(p.vaultId) || 0;
+      if (mesh.userData.vaultId !== undefined && vid > mesh.userData.vaultId) {
+        mesh.userData.vaultAt = nowMs;
+        playVaultSound({ x: p.x, y: (p.groundY || 0) + 1, z: p.z });
+      }
+      mesh.userData.vaultId = vid;
+    }
     mesh.userData.slowWalking = Boolean(p.slowWalking);
     mesh.userData.sprinting = Boolean(p.sprinting);
     mesh.userData.crouching = Boolean(p.crouching);
     mesh.userData.prone = Boolean(p.prone);
+    mesh.userData.pb = Number(p.pb);
+    if ((p.outfit || "") !== (mesh.userData.outfit || "")) {
+      mesh.userData.outfit = p.outfit || "";
+      setGhillie(mesh.userData, mesh.userData.outfit === "ghillie");
+    }
     mesh.userData.swimming = Boolean(p.swimming);
     // Nhảy: dựng tư thế co gối khi đang ở trên không; phát tiếng đáp đất khi chạm đất.
     const wasJumping = mesh.userData.jumpY > 0.05;
@@ -6021,6 +6164,7 @@ function lootLabel(item) {
     return `${A.name} · ${fit ? "NHẤN F GẮN VÀO SÚNG" : "NHẤN F CHO VÀO BALO"}`;
   }
   if (item.type === "ammo") return `ĐẠN 5.56 (+${item.amount})`;
+  if (item.type === "ghillie") return "BỘ ĐỒ CỎ · NHẤN F ĐỂ MẶC";
   if (item.type === "frag" || item.type === "flash") return GRENADE_NAME[item.type];
   if (item.type === "weapon")
     return `${{ sniper: "KAR98K · SCOPE 8X", beryl: "BERYL M762", ranger: "AUG · RED DOT" }[item.weapon] || "SÚNG"} · NHẤN F ${weaponKey(local.weapon) === "none" ? "NHẶT" : "ĐỔI"} SÚNG`;
@@ -6205,6 +6349,20 @@ function buildLootAssets() {
       coloredPart(new THREE.BoxGeometry(0.025, 0.18, 0.035), "#b7b9b3", (o) => o.position.set(0.075, 0.03, 0)),
     ], false),
     ammo: mergeGeometries(ammoParts, false),
+    // Bộ đồ cỏ gấp gọn: tấm vải lưới xanh + các túm cỏ / lá thò ra.
+    ghillie: mergeGeometries(
+      [
+        coloredPart(new THREE.BoxGeometry(0.62, 0.14, 0.46), "#4a5a2c"),
+        ...Array.from({ length: 16 }, (_, i) =>
+          coloredPart(new THREE.ConeGeometry(0.035, 0.22 + (i % 3) * 0.06, 4), i % 2 ? "#5f7a32" : "#3f5426", (o) => {
+            const a = i * 2.39;
+            o.position.set(Math.cos(a) * 0.24 * ((i % 4) / 4 + 0.3), 0.14, Math.sin(a) * 0.17 * ((i % 3) / 3 + 0.4));
+            o.rotation.set(Math.sin(i) * 0.6, a, Math.cos(i) * 0.6);
+          }),
+        ),
+      ],
+      false,
+    ),
   };
   // Phụ kiện nằm đất: đúng mô hình gắn súng, phóng to 1.8x cho dễ thấy.
   for (const [id, A] of Object.entries(Attach.ATTACH)) {
@@ -6259,7 +6417,9 @@ function addLootMesh(item) {
       ? "medkit"
       : item.type === "frag" || item.type === "flash"
         ? item.type
-        : item.type === "attach" && lootAssets.bodies["att-" + item.att]
+        : item.type === "ghillie"
+          ? ((lootAssets.bodies["ghillie-" + ghilliePalette()] ||= ghillieGroundGeometry()), "ghillie-" + ghilliePalette())
+          : item.type === "attach" && lootAssets.bodies["att-" + item.att]
           ? "att-" + item.att
           : "ammo";
   const body = new THREE.Mesh(
@@ -6311,6 +6471,8 @@ function addLootMesh(item) {
   root.updateMatrixWorld(true);
   root.matrixAutoUpdate = false;
   body.matrixAutoUpdate = false;
+  // Bỏ hẳn khỏi lượt duyệt cập nhật ma trận của Three.js mỗi khung hình (đứng yên).
+  root.matrixWorldAutoUpdate = false;
   // Chỉ bật khi người chơi tới gần (updateLootVisibility).
   root.visible = false;
   scene.add(root);
@@ -6341,7 +6503,7 @@ function updateLootVisibility() {
 }
 // Balo còn chỗ cho loại vật phẩm này không?
 function packHasRoom(type) {
-  if (type === "weapon" || type === "attach") return true; // phụ kiện: server quyết (gắn súng / balo)
+  if (type === "weapon" || type === "attach" || type === "ghillie") return true; // phụ kiện: server quyết (gắn súng / balo)
   if (type === "frag" || type === "flash") return throwCount(type) < (packLimits.throwables || 3);
   return type === "ammo"
     ? (local.reserveAmmo ?? 0) < packLimits.ammo
@@ -6485,7 +6647,75 @@ function onInteract() {
     return;
   }
   const crate = nearestCrate(); // không ngắm gì nhưng đứng sát hòm → mở hòm
-  if (crate) openBackpack(crate.id);
+  if (crate) return openBackpack(crate.id);
+  startVault();
+}
+// ======================= TRÈO QUA RÀO =======================
+// Cùng công thức với server (planVault / vaultPose) → máy mình đi ngay không chờ
+// mạng, server đưa người chơi qua rào cùng quỹ đạo nên hitbox khớp đúng.
+const VAULT_MS = 900;
+let localVault = null;
+// Chỗ trèo gần nhất: rào chắn hoặc cửa sổ nhà / nhà to (Structures.vaultPlan dùng
+// chung với server → cùng điểm bắt đầu, điểm đáp, độ cao).
+function nearFenceForVault() {
+  if (local.state !== "ground" || local.swimming || local.vehicleId || !grounded || localVault) return null;
+  let best = null;
+  for (const o of obstaclesNear(local.x, local.z)) {
+    if (!Structures.VAULTABLE.has(o.type) || o.solid === false) continue;
+    const plan = Structures.vaultPlan(o, local.x, local.z);
+    if (plan && (!best || plan.dist < best.dist)) best = { ...plan, o };
+  }
+  return best;
+}
+function startVault() {
+  const f = nearFenceForVault();
+  if (!f) return;
+  if (isBlockedAt(f.tx, f.tz)) return showLootToast("KHÔNG TRÈO QUA ĐƯỢC CHỖ NÀY");
+  localVault = { sx: f.sx, sz: f.sz, tx: f.tx, tz: f.tz, h: f.h, fenceY: groundHeightAt(f.o.x, f.o.z), t: 0 };
+  stopFiring();
+  if (scoped) setScope(false);
+  local.sprinting = false;
+  if (gun) gun.visible = false;
+  send({ type: "vault" });
+  playVaultSound(null);
+}
+// Cập nhật mỗi khung hình khi đang trèo: trả về true = đã tự lo vị trí / camera.
+function updateLocalVault(dt) {
+  const v = localVault;
+  if (!v) return false;
+  v.t += dt / (VAULT_MS / 1000);
+  const k = Math.min(1, v.t);
+  const e = k * k * (3 - 2 * k);
+  local.x = v.sx + (v.tx - v.sx) * e;
+  local.z = v.sz + (v.tz - v.sz) * e;
+  local.groundY = standingHeightAt(local.x, local.z, local.groundY);
+  const lift = v.h * 1.05 * Math.sin(Math.PI * Math.min(1, k * 1.05));
+  jumpOffset = Math.max(0, v.fenceY + lift - local.groundY);
+  // Góc nhìn: cúi về phía trước lúc chống tay, nghiêng nhẹ theo cú đu người.
+  camera.position.set(local.x, local.groundY + STAND_HEIGHT - 0.35 * Math.sin(Math.PI * k) + jumpOffset, local.z);
+  camera.rotation.z = Math.sin(Math.PI * k) * 0.09;
+  if (k >= 1) {
+    localVault = null;
+  fpGhillieMeshes.length = 0;
+  fpGhillieOn = false;
+    jumpOffset = 0;
+    cameraBaseY = local.groundY + STAND_HEIGHT;
+    camera.rotation.z = 0;
+    playJumpLand(local.x, local.groundY, local.z, true);
+  }
+  return true;
+}
+// Tiếng trèo: 2 tay chụp lên thanh rào (gỗ kêu "cộc" + cót két), quần áo sột soạt khi
+// đu người qua, rồi tiếng chân tiếp đất phía bên kia.
+function playVaultSound(pos) {
+  const a = spatialAudio(pos, { volume: pos ? 0.9 : 0.7, ref: 2, max: 28 });
+  if (!a) return;
+  toneBurst(a, { duration: 0.06, from: 340, to: 170, gain: 0.45 }); // tay chụp rào
+  noiseBurst(a, { duration: 0.05, filter: "bandpass", freq: 950, q: 1.6, gain: 0.55 });
+  toneBurst(a, { at: 0.05, duration: 0.05, from: 300, to: 160, gain: 0.3 }); // tay thứ 2
+  toneBurst(a, { at: 0.12, duration: 0.18, type: "triangle", from: 520, to: 430, gain: 0.03 }); // gỗ cót két
+  noiseBurst(a, { at: 0.14, duration: 0.32, filter: "bandpass", freq: 1500, q: 0.6, gain: 0.3 }); // quần áo sột soạt
+  noiseBurst(a, { at: 0.2, duration: 0.03, filter: "bandpass", freq: 3200, q: 3, gain: 0.25 }); // đồ trên người va nhau
 }
 function useMedkit() {
   if (local.healing) return showLootToast("ĐANG HỒI MÁU · NHẤN F ĐỂ HỦY");
@@ -6543,7 +6773,7 @@ function installLootUi() {
     <div class="inv-grid">
       <section class="inv-col" data-zone="ground"><h4>XUNG QUANH <small>TẦM 4.5 M · LĂN CHUỘT ĐỂ XEM THÊM</small></h4><div id="invGround" class="inv-list"></div></section>
       <section class="inv-col" data-zone="pack"><h4>KHO ĐỒ</h4><div id="invPack" class="inv-list"></div></section>
-      <section class="inv-col inv-char"><h4>NHÂN VẬT <small id="invCharNote">TRANG PHỤC: THƯỜNG</small></h4><img id="invCharImg" alt=""></section>
+      <section class="inv-col inv-char"><h4>NHÂN VẬT <small id="invCharNote">TRANG PHỤC: THƯỜNG</small></h4><img id="invCharImg" alt="" title="Chuột phải: cởi bộ đồ cỏ"></section>
       <section class="inv-col inv-equip" data-zone="equip"><h4>TRANG BỊ · SÚNG & LỰU ĐẠN</h4><div id="invEquip" class="inv-list"></div></section>
     </div>
     <div class="bp-foot">GIỮ CHUỘT TRÁI KÉO ĐỒ SANG KHO ĐỂ NHẶT · KÉO RA NGOÀI ĐỂ VỨT · CHUỘT PHẢI: NHẶT NHANH / DÙNG / VỨT SÚNG</div>`;
@@ -6558,20 +6788,226 @@ function installLootUi() {
 const INV_NAMES = {
   ammo: "ĐẠN 5.56 MM",
   medkit: "BỊCH MÁU",
+  ghillie: "BỘ ĐỒ CỎ",
   frag: "LỰU ĐẠN NỔ",
   flash: "LỰU ĐẠN CHOÁNG",
 };
 const GUN_NAMES = { sniper: "KAR98K", beryl: "BERYL M762", ranger: "AUG" };
-const INV_EMOJI = { ammo: "▮", medkit: "✚", frag: "💣", flash: "⚡", attach: "⚙" };
+const INV_EMOJI = { ammo: "▮", medkit: "✚", frag: "💣", flash: "⚡", attach: "⚙", ghillie: "🌿" };
 const GUN_SHORT = { ranger: "AUG", beryl: "BERYL", sniper: "KAR98K" };
 const attFitText = (id) => Attach.ATTACH[id].guns.map((g) => GUN_SHORT[g]).join(" / ");
 // Ảnh vật phẩm: chụp chính mô hình 3D trong game một lần (súng nghiêng ngang, lựu đạn).
 let invIcons = null;
+// ---- BỘ ĐỒ CỎ trên nhân vật: các túm cỏ / lá phủ thân, đầu, đùi, ống chân ----
+// Hình học + vật liệu tạo 1 LẦN (dùng chung cho mọi người chơi), gắn vào xương nên
+// cử động theo tư thế (đi, nằm, trèo...) mà không phải dựng lại gì.
+let ghillieShared = null;
+const fpGhillieMeshes = [];
+let fpGhillieOn = false;
+// Bật / tắt cỏ trên tay góc nhìn thứ nhất — chỉ khi trang phục THAY ĐỔI.
+function syncFpGhillie() {
+  const on = local.outfit === "ghillie";
+  if (on === fpGhillieOn) return;
+  fpGhillieOn = on;
+  for (const m of fpGhillieMeshes) m.visible = on;
+}
+// Màu đồ cỏ theo map: Sa mạc = vàng cát / cam / nâu đất; Rừng = xanh lá + rêu;
+// Thành Cổ = xanh rừng nhiệt đới lẫn nâu lá khô.
+const GHILLIE_PALETTES = {
+  desert: ["#b88a4c", "#c99c58", "#a5773e", "#d4ad6b", "#8c6232", "#bf9150", "#e0bd7d"],
+  forest: ["#3f5426", "#566f2e", "#4a6128", "#6a7f3a", "#38491f", "#5d7a34", "#73884a"],
+  jungle: ["#3d5524", "#5a7230", "#6b6a32", "#4a5f27", "#7a6a3a", "#33461e", "#5f7d36"],
+};
+const ghilliePalette = () => (mapId === "desert" ? "desert" : isJungleMap() ? "jungle" : "forest");
+// Túm cỏ xù: nhiều sợi cỏ mảnh (nón 3 cạnh) chĩa ra / rủ xuống, ĐẶC KÍN thành nhiều
+// lớp quanh từng đoạn xương. Tạo 1 LẦN mỗi bảng màu, mọi người chơi dùng chung.
+const ghillieCache = new Map();
+// Công cụ dựng đồ cỏ (dùng chung cho áo mặc + áo trải dưới đất).
+function ghillieKit(pal, seed) {
+  const cols = GHILLIE_PALETTES[pal];
+  const tint = new THREE.Color();
+  let sd = seed;
+  const rnd = () => ((sd = (Math.imul(sd, 1664525) + 1013904223) >>> 0) / 4294967296);
+  const paint = (g, dark = 1, tipLight = 0.25) => {
+    g.deleteAttribute("uv");
+    const p = g.attributes.position;
+    g.computeBoundingBox();
+    const y0 = g.boundingBox.min.y,
+      y1 = g.boundingBox.max.y;
+    tint.set(cols[Math.floor(rnd() * cols.length)]).multiplyScalar((0.82 + rnd() * 0.3) * dark);
+    const c = new Float32Array(p.count * 3);
+    for (let k = 0; k < p.count; k++) {
+      // ngọn dải cỏ (dưới) sáng hơn gốc một chút → có chiều sâu, mềm mắt
+      const t = y1 > y0 ? (y1 - p.getY(k)) / (y1 - y0) : 0;
+      const m = 1 + tipLight * t;
+      c[k * 3] = Math.min(1, tint.r * m);
+      c[k * 3 + 1] = Math.min(1, tint.g * m);
+      c[k * 3 + 2] = Math.min(1, tint.b * m);
+    }
+    g.setAttribute("color", new THREE.BufferAttribute(c, 3));
+    return g;
+  };
+  // Dải cỏ DẸT mềm (như sợi vải bố của ghillie thật): rộng, cong nhẹ, rủ xuống.
+  const strand = (w, L, bend) => {
+    const g = new THREE.PlaneGeometry(w, L, 1, 4);
+    g.translate(0, -L / 2, 0);
+    const p = g.attributes.position;
+    for (let k = 0; k < p.count; k++) {
+      const y = p.getY(k); // 0 → -L
+      const t = -y / L;
+      p.setZ(k, p.getZ(k) + bend * t * t * L); // cong ra ngoài dần về ngọn
+      p.setX(k, p.getX(k) * (1 - 0.55 * t)); // thon dần về ngọn
+    }
+    return g;
+  };
+  return { rnd, paint, strand };
+}
+function ghillieParts(pal = ghilliePalette()) {
+  if (ghillieCache.has(pal)) return ghillieCache.get(pal);
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  sharedMaterials.add(mat);
+  const { rnd, paint, strand } = ghillieKit(pal, 1234);
+  // LỚP LÓT xù bọc kín đoạn xương (bên dưới các dải cỏ) — không còn lộ quân phục.
+  const sock = (r, y0, y1, rx = 1, rz = 1) => {
+    const g = new THREE.CylinderGeometry(r, r * 0.95, y1 - y0, 12, 4, true);
+    g.translate(0, (y0 + y1) / 2, 0);
+    const p = g.attributes.position;
+    for (let k = 0; k < p.count; k++) {
+      const n = 0.9 + rnd() * 0.2;
+      p.setXYZ(k, p.getX(k) * n * rx, p.getY(k), p.getZ(k) * n * rz);
+    }
+    g.computeVertexNormals();
+    return paint(g, 0.75, 0);
+  };
+  // Dải cỏ quanh đoạn xương: n dải, từ y0 tới y1, rủ ra ngoài.
+  const layer = (r, y0, y1, n, len, rx = 1, rz = 1, tilt = 0.35, skip = null) => {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const a = rnd() * Math.PI * 2,
+        y = y0 + (y1 - y0) * rnd();
+      if (skip && skip(a, y)) continue;
+      const g = strand(0.05 + rnd() * 0.05, len * (0.7 + rnd() * 0.6), 0.25 + rnd() * 0.35);
+      g.rotateX(-(tilt * (0.5 + rnd())));
+      g.rotateY(Math.PI / 2 - a + (rnd() - 0.5) * 0.5);
+      g.translate(Math.cos(a) * r * rx, y, Math.sin(a) * r * rz);
+      out.push(paint(g));
+    }
+    return out;
+  };
+  const build = (...groups) => {
+    const parts = groups.flat();
+    const geo = mergeGeometries(parts, false);
+    for (const g of parts) g.dispose();
+    return geo;
+  };
+  // MŨ TRÙM KÍN cả đầu + nón (đầu mèo 0.46 × 0.44 × 0.42 m nằm trọn bên trong), chỉ
+  // khoét 1 lỗ nhỏ ~11 cm đúng chỗ MIỆNG phía trước (-Z, thấp).
+  const MOUTH = new THREE.Vector3(0, -0.15, -0.21).normalize();
+  const hood = () => {
+    let g = new THREE.SphereGeometry(1, 22, 16);
+    g.scale(0.38, 0.43, 0.36);
+    g.translate(0, 0.05, 0);
+    const p0 = g.attributes.position;
+    for (let k = 0; k < p0.count; k++) {
+      const n = 0.97 + rnd() * 0.1; // xù nhẹ, không lõm vào trong đầu
+      p0.setXYZ(k, p0.getX(k) * n, (p0.getY(k) - 0.05) * n + 0.05, p0.getZ(k) * n);
+    }
+    g = g.toNonIndexed();
+    const p = g.attributes.position;
+    const keep = [];
+    const v = new THREE.Vector3();
+    for (let t = 0; t < p.count; t += 3) {
+      v.set((p.getX(t) + p.getX(t + 1) + p.getX(t + 2)) / 3, (p.getY(t) + p.getY(t + 1) + p.getY(t + 2)) / 3 - 0.05, (p.getZ(t) + p.getZ(t + 1) + p.getZ(t + 2)) / 3).normalize();
+      if (v.angleTo(MOUTH) < 0.28) continue; // lỗ miệng (~11 cm)
+      for (let j = 0; j < 3; j++) keep.push(p.getX(t + j), p.getY(t + j), p.getZ(t + j));
+    }
+    const out = new THREE.BufferGeometry();
+    out.setAttribute("position", new THREE.Float32BufferAttribute(keep, 3));
+    out.computeVertexNormals();
+    out.setIndex([...Array(keep.length / 3).keys()]);
+    out.setAttribute("uv", new THREE.Float32BufferAttribute(new Float32Array((keep.length / 3) * 2), 2));
+    return paint(out, 0.75, 0);
+  };
+  // dải cỏ không được che lỗ miệng
+  const mouthClear = (a, y) => Math.sin(a) < -0.72 && y < 0.13;
+  const G = {
+    mat,
+    torso: build(sock(0.235, -0.05, 0.7, 1.15, 0.92), layer(0.24, -0.05, 0.7, 90, 0.3, 1.18, 0.95), layer(0.27, 0.2, 0.72, 60, 0.36, 1.18, 0.98, 0.5), layer(0.2, 0.55, 0.74, 24, 0.24, 1.1, 0.9, 0.2)),
+    head: build(hood(), layer(0.33, -0.12, 0.48, 95, 0.26, 1.08, 1.02, 0.28, mouthClear), layer(0.25, 0.38, 0.5, 24, 0.22, 1, 1, 0.15)),
+    hips: build(sock(0.25, -0.22, 0.08, 1.12, 0.92), layer(0.26, -0.18, 0.08, 56, 0.34, 1.12, 0.95, 0.25)),
+    thigh: build(sock(0.125, -0.45, 0.03), layer(0.13, -0.42, 0.02, 30, 0.24)),
+    shin: build(sock(0.11, -0.43, 0.03), layer(0.115, -0.4, 0.0, 26, 0.22)),
+    arm: build(sock(0.1, -0.33, 0.03), layer(0.105, -0.3, 0.02, 24, 0.22)),
+    fore: build(sock(0.088, -0.34, 0.02), layer(0.09, -0.32, 0.0, 20, 0.2)),
+    fpSleeve: build(sock(0.05, -0.17, 0.17), layer(0.052, -0.16, 0.16, 16, 0.11, 1, 1, 0.25)),
+  };
+  ghillieCache.set(pal, G);
+  return G;
+}
+function setGhillie(ud, on) {
+  const rig = ud.rig;
+  if (!rig) return;
+  if (!ud.ghillieMeshes) {
+    if (!on) return;
+    const G = ghillieParts();
+    const add = (bone, geo) => {
+      const m = new THREE.Mesh(geo, G.mat);
+      m.castShadow = false;
+      bone.add(m);
+      return m;
+    };
+    ud.ghillieMeshes = [add(rig.torso, G.torso), add(rig.head, G.head), add(rig.hips, G.hips)];
+    for (const leg of rig.legs) ud.ghillieMeshes.push(add(leg.thigh, G.thigh), add(leg.knee, G.shin));
+    for (const arm of rig.arms) ud.ghillieMeshes.push(add(arm.shoulder, G.arm), add(arm.elbow, G.fore));
+  }
+  for (const m of ud.ghillieMeshes) m.visible = on;
+}
+// Bộ đồ cỏ nằm dưới đất: TRẢI RA như tấm lưới phủ cỏ (bộ áo + mũ trùm nằm bẹp),
+// sợi cỏ nằm toả ra các phía + vài túm dựng lên — nhìn là hiểu ngay đồ cỏ.
+const ghillieGroundCache = new Map();
+function ghillieGroundGeometry(pal = ghilliePalette()) {
+  if (ghillieGroundCache.has(pal)) return ghillieGroundCache.get(pal);
+  const { rnd, paint, strand } = ghillieKit(pal, 97);
+  const parts = [];
+  // Dáng áo trải phẳng: thân giữa + 2 tay dang ra + mũ trùm + 2 ống quần.
+  const blobs = [
+    [0, 0, 0.36, 0.48, 150],
+    [-0.5, -0.12, 0.27, 0.13, 46],
+    [0.5, -0.12, 0.27, 0.13, 46],
+    [0, -0.52, 0.16, 0.14, 34],
+    [-0.18, 0.55, 0.13, 0.27, 40],
+    [0.18, 0.55, 0.13, 0.27, 40],
+  ];
+  for (const [bx, bz, rx, rz, n] of blobs) {
+    // tấm lưới nền nhăn nhúm
+    const pad = new THREE.CircleGeometry(1, 16).rotateX(-Math.PI / 2);
+    pad.scale(rx * 1.08, 1, rz * 1.08).translate(bx, 0.015, bz);
+    const pp = pad.attributes.position;
+    for (let k = 1; k < pp.count; k++) pp.setY(k, 0.012 + rnd() * 0.03);
+    pad.computeVertexNormals();
+    parts.push(paint(pad, 0.75, 0));
+    // dải cỏ DẸT nằm rạp toả ra mọi hướng, chồng nhiều lớp
+    for (let i = 0; i < n; i++) {
+      const a = rnd() * Math.PI * 2,
+        d = Math.sqrt(rnd());
+      const g = strand(0.05 + rnd() * 0.05, 0.16 + rnd() * 0.2, 0.15);
+      g.rotateX(-Math.PI / 2 + 0.12 + rnd() * 0.25); // nằm gần sát đất, ngọn hơi vểnh
+      g.rotateY(rnd() * Math.PI * 2);
+      g.translate(bx + Math.cos(a) * rx * d, 0.03 + rnd() * 0.04, bz + Math.sin(a) * rz * d);
+      parts.push(paint(g));
+    }
+  }
+  const geo = mergeGeometries(parts, false);
+  for (const g of parts) g.dispose();
+  geo.computeBoundingBox();
+  ghillieGroundCache.set(pal, geo);
+  return geo;
+}
 // ẢNH TĨNH nhân vật cho balo: dựng mô hình 1 lần, chụp ra ảnh PNG rồi bỏ bộ vẽ tạm —
 // balo chỉ hiện ảnh, không có mô hình 3D chạy liên tục. Cache theo màu + trang phục.
 const portraitCache = new Map();
 function characterPortrait(skin, outfit) {
-  const key = skin + "|" + outfit;
+  const key = skin + "|" + outfit + "|" + ghilliePalette();
   if (portraitCache.has(key)) return portraitCache.get(key);
   if (headFacesLoaded < headFacesTotal) return null; // ảnh mặt mèo chưa tải xong: thử lại lần mở sau
   let url = null;
@@ -6586,9 +7022,10 @@ function characterPortrait(skin, outfit) {
     const sun = new THREE.DirectionalLight(0xffffff, 1.6);
     sun.position.set(2, 4, 5);
     sc.add(sun);
-    const { root } = buildAvatar(catHeadMaterials, catEarMat, SKINS[skin] ? skin : "green");
+    const { root, rig } = buildAvatar(catHeadMaterials, catEarMat, SKINS[skin] ? skin : "green");
     root.rotation.y = Math.PI - 0.35; // quay mặt về phía người xem, hơi nghiêng 3/4
-    if (outfit === "ghillie") {
+    if (outfit === "ghillie") setGhillie({ rig }, true);
+    if (false) {
       // Bộ đồ cỏ: nhiều chùm cỏ / lá phủ kín thân (hình tĩnh).
       const leaf = new THREE.MeshLambertMaterial({ color: "#4f6b2e" }),
         leaf2 = new THREE.MeshLambertMaterial({ color: "#6d8a3a" });
@@ -6789,14 +7226,14 @@ function renderBackpack() {
     invItemHtml({ src: "equip", type: "flash", key: "5", count: `${local.flashes || 0}<small>/${max}</small>`, cls: (local.flashes || 0) ? "" : "empty" }, "equip");
   // Ảnh nhân vật: chụp 1 lần cho mỗi (màu + trang phục), đổi trang phục mới chụp lại.
   const outfit = local.outfit === "ghillie" ? "ghillie" : "normal";
-  const charKey = mySkin + "|" + outfit;
+  const charKey = mySkin + "|" + outfit + "|" + ghilliePalette();
   const charImg = $("#invCharImg");
   if (charImg && charImg.dataset.key !== charKey) {
     const url = characterPortrait(mySkin, outfit);
     if (url) {
       charImg.src = url;
       charImg.dataset.key = charKey;
-      setText($("#invCharNote"), outfit === "ghillie" ? "TRANG PHỤC: ĐỒ CỎ" : "TRANG PHỤC: THƯỜNG");
+      setText($("#invCharNote"), outfit === "ghillie" ? "TRANG PHỤC: ĐỒ CỎ · CHUỘT PHẢI ĐỂ CỞI" : "TRANG PHỤC: THƯỜNG");
     }
   }
   // Chỉ ghi DOM khi nội dung đổi (state tới 20 lần/giây).
@@ -6858,6 +7295,7 @@ let invDrag = null;
 function installInventoryDrag(panel) {
   panel.addEventListener("contextmenu", (e) => {
     e.preventDefault();
+    if (e.target.closest?.("#invCharImg") && local.outfit === "ghillie") return send({ type: "dropOutfit" });
     const el = e.target.closest(".inv-item[data-type]");
     if (el) invUse(el);
   });
@@ -7003,6 +7441,13 @@ function updateGunPose(dt) {
     gun.position.z += 0.09 * reloadBlend;
     // Rung/lắc liên tục trong suốt quá trình nạp đạn (2 tần số chồng lên
     // nhau cho cảm giác lộn xộn tự nhiên hơn một dao động đơn thuần).
+    if (weaponKey(local.weapon) === "ranger") {
+      // AUG: tay phải giữ báng, xoay nghiêng súng sang PHẢI để lộ giếng băng đạn và
+      // tay gạt bên trái — tay trái rút băng cũ, lắp băng mới, kéo tay gạt.
+      gun.rotation.z -= 0.62 * reloadBlend;
+      gun.rotation.y += 0.22 * reloadBlend;
+      gun.position.x += 0.05 * reloadBlend;
+    }
     const wobble = reloadBlend * 0.03;
     gun.rotation.x +=
       Math.sin(reloadProgress * 26) * wobble +
@@ -7126,6 +7571,11 @@ function makeFpArm() {
   const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.046, 0.04, 10), fpArmMats.cuff);
   cuff.position.y = -0.17;
   fore.add(cuff);
+  // Bộ đồ cỏ: túm cỏ trên ống tay (hình học dùng chung, chỉ bật / tắt hiện).
+  const tufts = new THREE.Mesh(ghillieParts().fpSleeve, ghillieParts().mat);
+  tufts.visible = local.outfit === "ghillie";
+  fore.add(tufts);
+  fpGhillieMeshes.push(tufts);
   g.add(hand, fore);
   g.userData = { hand, fore };
   return g;
@@ -7239,6 +7689,12 @@ function updateLootHud(dt) {
     prompt.classList.remove("hidden");
     return;
   }
+  const vaultSpot = !target && nearFenceForVault();
+  if (vaultSpot) {
+    setHtml(prompt, vaultSpot.window ? `<b>F</b>TRÈO QUA CỬA SỔ` : `<b>F</b>TRÈO QUA RÀO`);
+    prompt.classList.remove("hidden");
+    return;
+  }
   if (target?.kind === "crate" && target.data) {
     setHtml(prompt, `<b>F</b>MỞ HÒM TIẾP TẾ`);
     prompt.classList.remove("hidden");
@@ -7306,6 +7762,7 @@ function beginGame() {
   local.reloading = false;
   local.reserveAmmo = 0; // balo rỗng khi bắt đầu trận
   local.medkits = 0;
+  local.outfit = "";
   local.healing = false;
   local.healEndsAt = 0;
   backpackOpen = false;
@@ -7881,6 +8338,7 @@ function onKeyDown(e) {
     $("#game").classList.contains("active")
   ) {
     local.prone = isHoldMode("proneMode") ? true : !local.prone; // giữ Z: nằm tới khi thả
+    proneChangeAt = performance.now();
     if (local.prone) {
       local.crouching = false;
       local.crouchToggle = false;
@@ -8082,6 +8540,7 @@ function cleanupGame() {
   ignoredImpacts.clear();
   endedOwnSids.clear();
   localSwimDistance = 0;
+  localVault = null;
   remoteMeshes.clear();
   // Trạng thái nội suy / dự đoán / các bể đối tượng thuộc về scene cũ.
   vehicleSnaps.clear();
@@ -8196,6 +8655,7 @@ function onMouse(e) {
 }
 function onFire(e) {
   if (landRoll && local.state === "ground") return; // đang lộn nhào: chưa bắn được
+  if (localVault) return; // đang trèo rào: hai tay bám rào
   // Đang chạy nhanh: không bắn/ngắm được. Click (trái hoặc phải) sẽ DỪNG CHẠY
   // (về đi bộ WASD bình thường); súng được nâng lên trong ~150 ms rồi mới nổ.
   const wasSprinting =
@@ -8678,7 +9138,7 @@ function setScope(enabled) {
   sniperZoomFov = baseFov / zoom;
   camera.fov = scoped ? baseFov / zoom : baseFov;
   // Ngắm bằng thước ngắm / red dot: súng sát mắt → mặt phẳng cắt gần nhỏ lại.
-  camera.near = scoped && !magnified ? 0.025 : 0.1;
+  camera.near = scoped && !magnified ? 0.01 : 0.1; // ngắm red dot: súng sát mắt vẫn đặc, không bị cắt trong suốt
   camera.updateProjectionMatrix();
   gun.visible = local.state === "ground" && !handsBusy() && (!scoped || !magnified);
   $(".crosshair").classList.toggle("scope-hidden", scoped);
@@ -9824,7 +10284,7 @@ let landRoll = null,
 // không làm hỏng góc nhìn chuột của người chơi.
 // Tay đang bận (kéo dây dù / bắt chéo ngực / đang lộn): KHÔNG hiện tay cầm súng / nắm đấm.
 function handsBusy() {
-  return Boolean(landRoll || chutePull || braceHands?.visible);
+  return Boolean(landRoll || chutePull || braceHands?.visible || localVault);
 }
 function applyRollCamera(dt) {
   // Dọn hiệu ứng trên không khi đã rời trạng thái bay (chết giữa trời, rơi xuống nước...).
@@ -10018,14 +10478,19 @@ function updateAir(dt) {
 }
 // Máy bay bay thẳng theo đường server đã chốt; cánh quạt quay, đèn nhảy đổi xanh khi vào zone.
 function updatePlaneObject(dt) {
-  if (planeCloudField) planeCloudField.visible = local.state === "plane";
+  if (planeCloudField) {
+    planeCloudField.visible = local.state === "plane";
+    planeCloudField.matrixWorldAutoUpdate = planeCloudField.visible; // ẩn: bỏ khỏi lượt cập nhật ma trận
+  }
   if (!planeObject) return;
   const planeLight = planeObject.userData.jumpPointLight;
   if (!plane) {
     planeObject.visible = false;
+    planeObject.matrixWorldAutoUpdate = false; // máy bay đã bay đi: ~130 vật không phải duyệt mỗi khung hình
     planeLight.intensity = 0;
     return;
   }
+  planeObject.matrixWorldAutoUpdate = true;
   const t = planeTime();
   if (local.state === "plane" && t >= plane.tEnter && !jumpCuePlayed) {
     jumpCuePlayed = true;
@@ -10385,6 +10850,19 @@ function animateAvatars(dt) {
     }
     ud.prevX = px;
     ud.prevZ = pz;
+    // Chuyển nằm ↔ đứng trong ~0.7 s: nửa đầu QUỲ xuống (khom gối), nửa sau đổ người
+    // nằm sát đất; đứng dậy làm ngược lại.
+    {
+      // Theo đúng mức nằm server gửi (pb) — server dùng chính số này để dựng hitbox.
+      const tgt = ud.motionMode === "vehicle" ? 0 : Number.isFinite(ud.pb) ? ud.pb : ud.prone ? 1 : 0;
+      if (ud.proneBlend === undefined) ud.proneBlend = tgt;
+      ud.proneBlend += Math.max(-dt * 2.2, Math.min(dt * 2.2, tgt - ud.proneBlend));
+      const lie = Math.min(1, Math.max(0, (ud.proneBlend - 0.45) / 0.55));
+      const lieE = lie * lie * (3 - 2 * lie);
+      mesh.rotation.x = -Math.PI / 2 * lieE;
+      if (ud.motionMode === "ground") mesh.position.y += 0.35 * lieE;
+      ud.kneeling = ud.proneBlend > 0.02 && ud.proneBlend < 0.98;
+    }
     const stance =
       ud.motionMode === "vehicle"
         ? "seat"
@@ -10394,7 +10872,9 @@ function animateAvatars(dt) {
             ? "chute"
             : ud.swimming
               ? "swim"
-              : ud.prone
+              : ud.kneeling && ud.proneBlend < 0.75
+                ? "crouch" // đang quỳ xuống / chống dậy
+                : ud.prone || ud.proneBlend >= 0.75
                 ? "prone"
                 : ud.jumpY > 0.05
                   ? "jump"
@@ -10438,6 +10918,7 @@ function animateAvatars(dt) {
       dt,
     );
     poseLandRoll(ud, now);
+    poseVault(ud, now);
     if (now >= ud.flashUntil) {
       ud.muzzleFlash.visible = false;
       ud.sniperFlash.visible = false;
@@ -10450,6 +10931,30 @@ function animateAvatars(dt) {
 // LỘN NHÀO TIẾP ĐẤT (nhìn từ người khác): cúi gập người, khòm lưng, co gối sát
 // ngực, hai tay ôm cẳng chân, cằm áp ngực → cả thân cuộn tròn lăn qua vai đủ
 // 1 vòng về phía trước (trục hông hạ thấp) → duỗi chân, đứng dậy.
+// Người khác trèo rào: 2 tay chống thẳng xuống thanh rào phía trước, thân đổ tới,
+// 2 chân co lệch sang bên (đu người qua) rồi duỗi xuống tiếp đất.
+function poseVault(ud, now) {
+  if (!ud.vaultAt) return;
+  const p = (now - ud.vaultAt) / VAULT_MS;
+  if (p >= 1 || p < 0) {
+    ud.vaultAt = 0;
+    return;
+  }
+  const k = Math.sin(Math.PI * Math.min(1, p * 1.1));
+  const rig = ud.rig;
+  rig.torso.rotation.x = rig.torso.rotation.x * (1 - k) - 0.75 * k;
+  rig.arms.forEach((arm) => {
+    arm.shoulder.rotation.x = arm.shoulder.rotation.x * (1 - k) + 1.05 * k;
+    arm.shoulder.rotation.z = arm.shoulder.rotation.z * (1 - k) - arm.side * 0.15 * k;
+    arm.elbow.rotation.x = arm.elbow.rotation.x * (1 - k);
+  });
+  rig.legs.forEach((leg, i) => {
+    leg.thigh.rotation.x = leg.thigh.rotation.x * (1 - k) + (i === 0 ? 1.7 : 1.15) * k;
+    leg.knee.rotation.x = leg.knee.rotation.x * (1 - k) - (i === 0 ? 1.9 : 1.2) * k;
+    leg.thigh.rotation.z = (i === 0 ? -0.45 : -0.25) * k; // đu 2 chân sang một bên
+  });
+  ud.weapon.visible = ud.sniperWeapon.visible = ud.berylWeapon.visible = false;
+}
 function poseLandRoll(ud, now) {
   const rig = ud.rig;
   if (!ud.rollAt) return;
@@ -12176,10 +12681,33 @@ function playSwimStroke(pos, under, intensity = 1) {
   const a = spatialAudio(pos, { volume: (pos ? 0.85 : 0.6) * intensity, ref: 2.5, max: under ? 16 : 30 });
   if (!a) return;
   if (!under) {
-    noiseBurst(a, { duration: 0.2, filter: "bandpass", freq: 1100 + Math.random() * 300, q: 0.7, gain: 0.55 }); // tay khua nước
-    noiseBurst(a, { at: 0.04, duration: 0.28, filter: "lowpass", freq: 420, gain: 0.45 }); // nước dồn
-    noiseBurst(a, { at: 0.14, duration: 0.09, filter: "highpass", freq: 3000, gain: 0.18 }); // giọt nước rơi lại
-    noiseBurst(a, { at: 0.24, duration: 0.07, filter: "highpass", freq: 3400, gain: 0.12 });
+    // Sải tay quạt nước: âm lượng LÊN TỪ TỪ rồi tắt dần (không có cú "bạch" đột ngột như
+    // tiếng bước chân), bộ lọc quét lên như nước bị vuốt qua, kèm tiếng nước sủi ùng ục
+    // trầm và vài giọt rơi lại mặt nước.
+    const t = a.t0;
+    const swoosh = (at, dur, f0, f1, peak, q = 0.9) => {
+      const src = audioCtx.createBufferSource();
+      src.buffer = a.noiseBuffer;
+      const bp = audioCtx.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.Q.value = q;
+      bp.frequency.setValueAtTime(f0, t + at);
+      bp.frequency.exponentialRampToValueAtTime(f1, t + at + dur);
+      const g = audioCtx.createGain();
+      g.gain.setValueAtTime(0.0001, t + at);
+      g.gain.linearRampToValueAtTime(peak, t + at + dur * 0.4);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + at + dur);
+      src.connect(bp);
+      bp.connect(g);
+      g.connect(a.input);
+      src.start(t + at, Math.random() * 0.5);
+      src.stop(t + at + dur + 0.02);
+    };
+    swoosh(0, 0.42, 380, 1300, 0.5); // tay vuốt nước
+    swoosh(0.08, 0.5, 220, 480, 0.35, 0.6); // nước dồn ùng ục quanh người
+    for (let i = 0; i < 3; i++)
+      toneBurst(a, { at: 0.12 + i * 0.09 + Math.random() * 0.05, duration: 0.06, from: 700 + Math.random() * 500, to: 1400 + Math.random() * 600, gain: 0.03 }); // tiếng "lóc" nước
+    noiseBurst(a, { at: 0.42, duration: 0.05, filter: "highpass", freq: 3600, gain: 0.07 }); // giọt nước rơi lại
   } else {
     noiseBurst(a, { duration: 0.34, filter: "lowpass", freq: 480, gain: 0.6 }); // nước dồn qua tai
     for (let i = 0; i < 3; i++) {
@@ -12424,6 +12952,8 @@ function playJumpReadyBell() {
   }
 }
 let airFeetY = 0;
+let proneChangeAt = -1e9;
+const PRONE_KNEEL_MS = 350;
 function frame() {
   if (!renderer || !$("#game").classList.contains("active")) return;
   noteFrameStart(performance.now());
@@ -12485,8 +13015,10 @@ function frame() {
         lastVehicleControlAt = now;
       }
     }
+  } else if (localVault && local.state === "ground") {
+    updateLocalVault(dt);
   } else if (!paused && (local.state === "ground" || local.state === "lobby")) {
-    const currentlyInWater = Boolean(waterAt(local.x, local.z));
+    const currentlyInWater = Boolean(waterAt(local.x, local.z, local.swimming));
     const isProne = !currentlyInWater && Boolean(local.prone);
     const isSlowWalking = keys.ControlLeft || keys.ControlRight;
     // Chạy nhanh: giữ Shift + W (không lùi), đang đứng trên cạn, không bóp cò,
@@ -12665,7 +13197,8 @@ function frame() {
         playSwimStroke(null, Boolean(local.underwater), keys.ShiftLeft || keys.ShiftRight ? 1.2 : 0.85);
       }
     } else if (!currentlyInWater) localSwimDistance = 0;
-    const water = waterAt(local.x, local.z);
+    const water = waterAt(local.x, local.z, local.swimming);
+    local.underBridge = Boolean(water && isOnBridgeAt(local.x, local.z, 0.6));
     $("#swimHint")?.classList.toggle("hidden", !water);
     if (water) {
       if (!local.swimming) local.swimDepth = 0;
@@ -12677,6 +13210,8 @@ function frame() {
       if (keys.Space) local.swimDepth -= 2.5 * dt;
       if (keys.KeyC) local.swimDepth += 2.2 * dt; // C (như nút ngồi) = lặn xuống
       local.swimDepth = Math.max(0, Math.min(maxDive, local.swimDepth || 0));
+      // Dưới gầm cầu: mặt cầu sát mặt nước → luôn lặn, đầu không ngoi xuyên qua mặt cầu (khớp server).
+      if (local.underBridge) local.swimDepth = Math.min(maxDive, Math.max(local.swimDepth, 0.62));
       local.swimY = water.surfaceY - 1.58 - local.swimDepth;
       jumpOffset = 0;
       verticalSpeed = 0;
@@ -12703,8 +13238,11 @@ function frame() {
         airFeetY = prevFeet;
         local.jumping = true;
       }
+      // Nằm xuống / đứng dậy có nhịp: QUỲ trước (~0.35 s) rồi mới nằm sát đất / đứng thẳng.
+      const proneAge = performance.now() - proneChangeAt;
+      const kneeling = proneAge < PRONE_KNEEL_MS;
       const targetHeight =
-        local.groundY + (isProne ? PRONE_HEIGHT : isCrouching ? CROUCH_HEIGHT : STAND_HEIGHT);
+        local.groundY + (kneeling ? CROUCH_HEIGHT : isProne ? PRONE_HEIGHT : isCrouching ? CROUCH_HEIGHT : STAND_HEIGHT);
       if (!grounded) {
         // NHẢY / RƠI theo độ cao TUYỆT ĐỐI: nhảy từ đỉnh núi xuống thì bay theo
         // quỹ đạo rồi rơi xuống chỗ thấp, không bị "kéo dính" theo mặt đất.
@@ -12724,7 +13262,7 @@ function frame() {
         jumpOffset = 0;
         // Độ cao gốc của mắt đuổi mượt theo mặt đất; nhún đầu khi đi là một
         // ĐỘ LỆCH theo nhịp bước (trước đây cộng dồn sin mỗi khung hình → rung).
-        cameraBaseY += (targetHeight - cameraBaseY) * Math.min(12 * dt, 1);
+        cameraBaseY += (targetHeight - cameraBaseY) * Math.min((proneAge < PRONE_KNEEL_MS * 2 ? 5 : 12) * dt, 1);
         const bob =
           !isCrouching && isMoving
             ? Math.sin(localGaitPhase * 2) * (isSprinting ? 0.04 : 0.022)
