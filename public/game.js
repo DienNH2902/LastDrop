@@ -6857,6 +6857,18 @@ function updateTeamMarks() {
 }
 // ---- Killfeed tô màu ----
 // " bằng AKM (52m)" — tên súng / khoảng cách nếu có.
+// Tag súng: 1 kiểu duy nhất cho mọi súng — viên thuốc tối, viền xám, chữ trắng đậm.
+const gunTag = (name) => {
+  const tag = document.createElement("span");
+  tag.className = "gun-tag";
+  tag.textContent = name;
+  return tag;
+};
+// " bằng [AUG] (52m)" dạng node: thông báo giữa màn hình + killfeed tổng đều dùng.
+const feedTailNodes = (ev) => [
+  ...(ev.weapon ? [" bằng ", gunTag(ev.weapon)] : []),
+  ...(ev.distance > 0 ? [` (${ev.distance}m)`] : []),
+];
 const feedTail = (ev) => `${ev.weapon ? ` bằng ${ev.weapon}` : ""}${ev.distance > 0 ? ` (${ev.distance}m)` : ""}`;
 // Thông báo giữa màn hình (góc nhìn người chơi): GIẾT / HẠ GỤC / ĐÃ BỊ GIẾT / ĐÃ BỊ HẠ GỤC.
 // Style nằm ngay đây (tự chèn 1 lần) để không phụ thuộc vào style.css.
@@ -6866,6 +6878,25 @@ const feedTail = (ev) => `${ev.weapon ? ` bằng ${ev.weapon}` : ""}${ev.distanc
   st.id = "kill-feed-extra-style";
   st.textContent = `
 .kf-verb { font-weight: 900; letter-spacing: 0.5px; }
+.gun-tag {
+  display: inline-block;
+  box-sizing: border-box;
+  padding: 0.12em 0.7em 0.1em;   /* đơn vị em: đúng tỉ lệ ở cả killfeed (11px) lẫn thông báo (20px) */
+  margin: 0 0.1em;
+  border-radius: 999px;
+  background: #14120fd9;
+  border: 1.5px solid #6e6e69;
+  color: #f4f4ee;
+  font-weight: 900;
+  font-size: 0.92em;
+  letter-spacing: 0.08em;
+  line-height: 1.1;
+  vertical-align: baseline;      /* chữ trong tag nằm đúng đường cơ sở với chữ xung quanh */
+  position: relative;
+  top: -0.04em;                  /* bù nhẹ để viên thuốc cân giữa theo chiều cao chữ HOA */
+  text-shadow: none;
+  white-space: nowrap;
+}
 .kill-notice-line { white-space: nowrap; }
 .kill-streak {
   position: absolute;
@@ -6968,13 +6999,13 @@ function showKillStreak(streak, notice) {
 function onKillEvent(ev) {
   if (!ev.id || ev.id <= lastEliminationId) return;
   lastEliminationId = ev.id;
-  addFeedRow("GIẾT", ev, feedTail(ev));
+  addFeedRow("GIẾT", ev);
   if (ev.victimId === playerId) {
     localEliminationMessage = ev.killerId
       ? `Bạn ĐÃ BỊ GIẾT bởi ${ev.killerName}${feedTail(ev)}.`
       : `Bạn ĐÃ CHẾT do ${ev.killerName}.`;
     $("#resultDetail").textContent = localEliminationMessage;
-    showKillNotice("Bạn ", "ĐÃ BỊ GIẾT", ev.killerId ? ` bởi ${ev.killerName}${feedTail(ev)}` : ` do ${ev.killerName}`);
+    showKillNotice("Bạn ", "ĐÃ BỊ GIẾT", ev.killerId ? [` bởi ${ev.killerName}`, ...feedTailNodes(ev)] : ` do ${ev.killerName}`);
   }
   if (ev.killerId === playerId && ev.victimId !== playerId) {
     matchKills.push({
@@ -6990,12 +7021,12 @@ function onKillEvent(ev) {
     } else {
       const from = myKillTotal;
       myKillTotal += 1;
-      showKillNotice("Bạn đã ", "GIẾT", ` ${ev.victimName}${feedTail(ev)}`, { from, to: myKillTotal });
+      showKillNotice("Bạn đã ", "GIẾT", [` ${ev.victimName}`, ...feedTailNodes(ev)], { from, to: myKillTotal });
     }
   }
 }
 // Dòng killfeed tổng: "A đã GIẾT B bằng AUG" — động từ viết HOA, đậm.
-function addFeedRow(verb, ev, tail = "") {
+function addFeedRow(verb, ev) {
   const feed = $("#killFeed");
   if (!feed) return;
   const players = gameState?.players || [];
@@ -7011,7 +7042,7 @@ function addFeedRow(verb, ev, tail = "") {
   const verbEl = document.createElement("span");
   verbEl.className = "kf-verb";
   verbEl.textContent = verb;
-  row.append(k, document.createTextNode(" đã "), verbEl, document.createTextNode(" "), v, document.createTextNode(tail));
+  row.append(k, document.createTextNode(" đã "), verbEl, document.createTextNode(" "), v, ...toNodes(feedTailNodes(ev)));
   if (ev.teamKill) {
     const tk = document.createElement("span");
     tk.className = "kf-bad";
@@ -7027,11 +7058,11 @@ function onFeedEvent(ev) {
   if (ev.kind === "kill") onKillEvent(ev);
   else if (ev.kind === "knock") {
     // Cứu KHÔNG lên killfeed tổng (server chỉ báo riêng cho 2 người).
-    addFeedRow("HẠ GỤC", ev, feedTail(ev));
+    addFeedRow("HẠ GỤC", ev);
     if (ev.killerId === playerId && ev.teamKill) showKillNotice("", "BẮN ĐỒNG ĐỘI", [" · Bạn đã ", hl("HẠ GỤC"), ` ${ev.victimName}`]);
-    else if (ev.killerId === playerId) showKillNotice("Bạn đã ", "HẠ GỤC", ` ${ev.victimName}${feedTail(ev)}`);
+    else if (ev.killerId === playerId) showKillNotice("Bạn đã ", "HẠ GỤC", [` ${ev.victimName}`, ...feedTailNodes(ev)]);
     else if (ev.victimId === playerId)
-      showKillNotice("Bạn ", "ĐÃ BỊ HẠ GỤC", ev.killerId ? ` bởi ${ev.killerName}${feedTail(ev)}` : ` do ${ev.killerName}`);
+      showKillNotice("Bạn ", "ĐÃ BỊ HẠ GỤC", ev.killerId ? [` bởi ${ev.killerName}`, ...feedTailNodes(ev)] : ` do ${ev.killerName}`);
   }
 }
 // Bò bằng TAY + GỐI (bị hạ gục): thân nằm ngang, đầu cúi, đùi thẳng đứng chống gối,
