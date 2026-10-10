@@ -3057,13 +3057,19 @@ white-space: nowrap;
     min-height: 0;
   }
 }
-
-/* Ống ngắm 4X (kiểu ACOG): đỉnh chữ V đỏ phát sáng NẰM ĐÚNG TÂM (điểm chạm
-   đạn), viền đen cho nổi trên nền sáng; vạch ngang dày ở hai mép, mảnh dần vào
-   giữa; cột dọc phía dưới có vạch bù tầm xa. Phóng theo kích thước ống ngắm. */
+/* Ống ngắm 4X (ACOG):
+   - Mũi tên đỏ rất mảnh, không có viền đen
+   - Dot tâm trắng sáng, dễ quan sát
+   - Giữ nguyên vị trí tâm và các vạch bù tầm
+*/
 .scope-overlay.x4 {
-  background: radial-gradient(circle at center, transparent 0 26%, #050605 27% 100%);
+  background: radial-gradient(
+    circle at center,
+    transparent 0 26%,
+    #050605 27% 100%
+  );
 }
+
 .scope-overlay.x4 .scope-reticle {
   position: absolute;
   width: min(54vh, 54vw);
@@ -3072,7 +3078,10 @@ white-space: nowrap;
   padding: 0;
   font-size: 0;
   text-shadow: none;
-  background: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%20200%20200%27%3E%3Cg%20stroke%3D%27%230b0d09%27%20fill%3D%27none%27%3E%3Cpath%20d%3D%27M0%20100H70M130%20100H200%27%20stroke-width%3D%273.2%27%2F%3E%3Cpath%20d%3D%27M70%20100H86M114%20100H130%27%20stroke-width%3D%270.9%27%2F%3E%3Cpath%20d%3D%27M100%20118V200%27%20stroke-width%3D%273.2%27%2F%3E%3Cpath%20d%3D%27M93%20130H107M95%20142H105M96%20154H104M97%20166H103%27%20stroke-width%3D%271.2%27%2F%3E%3C%2Fg%3E%3Cpath%20d%3D%27M86%20114%20L100%20100%20L114%20114%27%20stroke%3D%27%231a0503%27%20stroke-width%3D%275.2%27%20fill%3D%27none%27%20stroke-linejoin%3D%27miter%27%2F%3E%3Cpath%20d%3D%27M86%20114%20L100%20100%20L114%20114%27%20stroke%3D%27%23ff2a1a%27%20stroke-width%3D%273%27%20fill%3D%27none%27%20stroke-linejoin%3D%27miter%27%2F%3E%3Ccircle%20cx%3D%27100%27%20cy%3D%27100%27%20r%3D%271.6%27%20fill%3D%27%23ffd2c8%27%2F%3E%3C%2Fsvg%3E") center/100% 100% no-repeat;
+
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cg stroke='%230b0d09' fill='none'%3E%3Cpath d='M0 100H70M130 100H200' stroke-width='3.2'/%3E%3Cpath d='M70 100H86M114 100H130' stroke-width='0.9'/%3E%3Cpath d='M100 118V200' stroke-width='3.2'/%3E%3Cpath d='M93 130H107M95 142H105M96 154H104M97 166H103' stroke-width='1.2'/%3E%3C/g%3E%3Cpath d='M86 114L100 100L114 114' stroke='%23ff3025' stroke-opacity='0.8' stroke-width='1.1' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3Ccircle cx='100' cy='100' r='2.2' fill='%23ffffff' stroke='%23ff6255' stroke-width='0.8'/%3E%3C/svg%3E")
+    center / 100% 100% no-repeat;
+
   filter: drop-shadow(0 0 2px rgba(255, 50, 30, 0.35));
 }
 .scope-overlay.x4 .scope-reticle:after {
