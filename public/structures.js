@@ -319,6 +319,7 @@
   // Cửa chính ở mặt -Z. Bên trong: SẢNH trước + 2 PHÒNG sau (vách ngăn có cửa).
   // Tường = các đoạn thẳng theo trục, mỗi đoạn có lỗ (cửa / cửa sổ) theo độ cao.
   const MANOR = { wall: 0.24, doorHalf: 0.85, doorH: 2.35, sill: 1.0, winTop: 2.25, winHalf: 0.65, roof: 0.22, parapet: 0.45, floor: 0.3 };
+  const ROOF_EDGE = MANOR.wall / 2 + 0.55 + 0.08;
   const manorCache = new WeakMap();
   function manorLayout(o) {
     let L = manorCache.get(o);
@@ -409,9 +410,21 @@
   };
   function manorSurfaces(o, ground, lx, lz, out) {
     const L = manorLayout(o);
-    if (Math.abs(lx) > L.W + 0.15 || Math.abs(lz) > L.D + 0.15) return;
-    out.push({ height: ground + MANOR.floor, base: ground - 0.9, type: "manorFloor", obstacle: o });
+    // Mái: vùng đứng được tràn ra ngoài mép ROOF_EDGE m — rộng hơn vùng va chạm của
+    // tường ngoài (mặt tường + bán kính người, kể cả nằm 0.55). Nhờ vậy bước ra lối hở
+    // lan can là rơi thẳng xuống BÊN NGOÀI tường, không còn lọt vào khe giữa mép mái và
+    // vùng chặn của tường (trước đây bị kẹt / giật qua lại ở đó).
+    const ax = Math.abs(lx),
+      az = Math.abs(lz);
+    if (ax > L.W + ROOF_EDGE || az > L.D + ROOF_EDGE) return;
     out.push({ height: ground + L.top, base: ground + L.top - 1, type: "manorRoof", obstacle: o });
+    // Đáp dù trúng ĐỈNH lan can: đứng được trên đó (trước đây lọt vào trong lan can → kẹt).
+    // base sát đỉnh: đi bộ trên mái không bị "leo" lên lan can.
+    for (const b of L.parapets)
+      if (Math.abs(lx - b.x) <= b.hx + 0.05 && Math.abs(lz - b.z) <= b.hz + 0.05)
+        out.push({ height: ground + L.top + MANOR.parapet, base: ground + L.top + MANOR.parapet - 0.12, type: "manorRoof", obstacle: o });
+    if (ax > L.W + 0.15 || az > L.D + 0.15) return;
+    out.push({ height: ground + MANOR.floor, base: ground - 0.9, type: "manorFloor", obstacle: o });
   }
   // Va chạm di chuyển (rel = độ cao chân so với nền; null = xe).
   function manorBlocked(o, lx, lz, r, rel) {
@@ -420,7 +433,7 @@
     if (rel === null) return true; // xe không vào nhà
     if (rel >= L.top - 0.45) {
       // Lan can mái chỉ cao 0.45 m: nhảy cao hơn nó là vượt qua được (chỉ chặn đi bộ).
-      if (rel > L.top + MANOR.parapet + 0.02) return false;
+      if (rel > L.top + MANOR.parapet - 0.06) return false; // đang đứng / nhảy trên đỉnh lan can
       // Trên mái: lan can quanh mép chặn rơi.
       for (const b of L.parapets) if (Math.abs(lx - b.x) < b.hx + r && Math.abs(lz - b.z) < b.hz + r) return true;
       return false;

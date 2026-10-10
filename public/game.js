@@ -1415,6 +1415,7 @@ const KEY_ACTIONS = [
   ["drop", "BỎ SÚNG", "KeyG"],
   ["backpack", "BALO", "Tab"],
   ["map", "BẢN ĐỒ", "KeyM"],
+  ["ping", "PING ĐÁNH DẤU", "Mouse1"], // chuột giữa (đổi được sang phím / nút chuột khác)
 ];
 let keyBinds = {};
 try {
@@ -1457,7 +1458,7 @@ function mapKeyEvent(e) {
 const onKeyDownMapped = (e) => onKeyDown(mapKeyEvent(e));
 const onKeyUpMapped = (e) => onKeyUp(mapKeyEvent(e));
 const keyLabel = (code) =>
-  ({ Space: "SPACE", ShiftLeft: "SHIFT", ShiftRight: "SHIFT PHẢI", ControlLeft: "CTRL", ControlRight: "CTRL PHẢI", AltLeft: "ALT", Tab: "TAB", CapsLock: "CAPS", Backquote: "`" })[code] ||
+  ({ Mouse1: "CHUỘT GIỮA", Mouse3: "CHUỘT LÙI", Mouse4: "CHUỘT TIẾN", Space: "SPACE", ShiftLeft: "SHIFT", ShiftRight: "SHIFT PHẢI", ControlLeft: "CTRL", ControlRight: "CTRL PHẢI", AltLeft: "ALT", Tab: "TAB", CapsLock: "CAPS", Backquote: "`" })[code] ||
   code.replace(/^Key/, "").replace(/^Digit/, "").replace(/^Numpad/, "NUM ").replace(/^ArrowUp$/, "↑ LÊN").replace(/^ArrowDown$/, "↓ XUỐNG").replace(/^ArrowLeft$/, "← TRÁI").replace(/^ArrowRight$/, "→ PHẢI").toUpperCase();
 let keybindCapture = null;
 // Danh sách phím nằm ngay trong tab BÀN PHÍM (Cài đặt ở Home và trong trận).
@@ -1489,6 +1490,26 @@ document.addEventListener("click", (e) => {
     renderKeybindPanel();
   }
 });
+// Gán nút CHUỘT (giữa / 2 nút bên) cho hành động: bấm khi đang chờ phím mới.
+window.addEventListener(
+  "mousedown",
+  (e) => {
+    if (!keybindCapture || (e.button !== 1 && e.button !== 3 && e.button !== 4)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const code = "Mouse" + e.button;
+    const codeOf = (id) => keyBinds[id] || KEY_ACTIONS.find((a) => a[0] === id)[2];
+    const other = KEY_ACTIONS.find(([id]) => id !== keybindCapture && codeOf(id) === code);
+    if (other) keyBinds[other[0]] = codeOf(keybindCapture);
+    keyBinds[keybindCapture] = code;
+    for (const [id, , def] of KEY_ACTIONS) if (keyBinds[id] === def) delete keyBinds[id];
+    localStorage.setItem("ld-keybinds", JSON.stringify(keyBinds));
+    rebuildKeyRemap();
+    keybindCapture = null;
+    renderKeybindPanel();
+  },
+  true,
+);
 // Đang chờ phím mới: bắt phím ở pha capture để game không xử lý phím đó.
 window.addEventListener(
   "keydown",
@@ -1701,14 +1722,23 @@ function requireHomePlayerName() {
   localStorage.setItem("ld-player-name", name);
   return name;
 }
+// Chế độ trận: ĐƠN (mỗi người 1 phe) / ĐÔI (3 đội × 2 người).
+let gameMode = localStorage.getItem("ld-mode") === "duo" ? "duo" : "solo";
+function renderModeChoice(mode) {
+  gameMode = mode === "duo" ? "duo" : "solo";
+  localStorage.setItem("ld-mode", gameMode);
+  document.querySelectorAll("[data-mode-choice]").forEach((b) => b.classList.toggle("selected", b.dataset.modeChoice === gameMode));
+}
+document.querySelectorAll("[data-mode-choice]").forEach((b) => b.addEventListener("click", () => renderModeChoice(b.dataset.modeChoice)));
+renderModeChoice(gameMode);
 $("#createBtn").onclick = () => {
   if (!requireHomePlayerName()) return;
-  connect({ type: "create", mapId: selectedMap });
+  connect({ type: "create", mapId: selectedMap, mode: gameMode });
 };
-// CHƠI: vào thẳng phòng chung đang chờ (bạn bè cùng bấm CHƠI là chung phòng).
+// CHƠI: vào thẳng phòng chung đang chờ CÙNG CHẾ ĐỘ (bạn bè cùng bấm CHƠI là chung phòng).
 $("#playBtn").onclick = () => {
   if (!requireHomePlayerName()) return;
-  connect({ type: "play", mapId: selectedMap });
+  connect({ type: "play", mapId: selectedMap, mode: gameMode });
 };
 $("#joinBtn").onclick = () => {
   if (!requireHomePlayerName()) return;
@@ -1796,6 +1826,8 @@ function connect(message) {
     if (m.type === "toast") showLootToast(m.text);
     if (m.type === "explosion") onExplosion(m);
     if (m.type === "bullet" && Array.isArray(m.b)) onBulletSpawn(m.b);
+    if (m.type === "mark") onTeamMark(m);
+    if (m.type === "feed" && m.ev) onFeedEvent(m.ev);
     if (m.type === "impacts" && Array.isArray(m.list)) onBulletImpacts(m.list);
     if (m.type === "lootSfx" && typeof m.sound === "string")
       playLootSound(
@@ -1807,7 +1839,7 @@ function connect(message) {
     if (m.type === "horn" && m.senderId !== playerId)
       playCarHorn({ x: m.x, y: m.y, z: m.z });
     // Server sửa lại chỗ tiếp đất (ví dụ trúng cây / đá).
-    if (m.type === "landed" && local.state === "ground") {
+    if (m.type === "landed" && (local.state === "ground" || local.state === "lobby")) {
       local.x = m.x;
       local.z = m.z;
       local.groundY = Number(m.groundY) || 0;
@@ -1967,13 +1999,40 @@ function renderLobby() {
   if (!gameState) return;
   isHost = gameState.hostId === playerId;
   // Gói state tới 20 lần/giây; chỉ dựng lại sảnh khi danh sách người chơi đổi.
-  const lobbyKey = `${playerId}|${isHost}|${mapId}|${gameState.players
-    .map((p) => `${p.id}:${p.name}`)
+  const lobbyKey = `${playerId}|${isHost}|${mapId}|${gameState.mode}|${gameState.players
+    .map((p) => `${p.id}:${p.name}:${p.slot}:${p.color}`)
     .join(",")}`;
   if (lobbyKey === lastLobbyKey) return;
   lastLobbyKey = lobbyKey;
   const slots = $("#slots");
   slots.innerHTML = "";
+  const duo = gameState.mode === "duo";
+  slots.classList.toggle("duo", duo);
+  if (duo) {
+    // 3 đội × 2 chỗ; ô trống của đội nào cũng bấm vào để chuyển sang được.
+    for (let t = 0; t < 3; t++) {
+      const col = document.createElement("div");
+      col.className = "team-col";
+      col.innerHTML = `<h5>TEAM ${t + 1}</h5>`;
+      for (let k = 0; k < 2; k++) {
+        const slot = t * 2 + k;
+        const p = gameState.players.find((q) => q.slot === slot);
+        const el = document.createElement("div");
+        el.className = "slot " + (p ? "filled team-slot" : "free-slot");
+        if (p) el.style.setProperty("--pc", p.color);
+        el.innerHTML = p
+          ? `<span class="p-badge">${escapeHtml((p.name || "?").trim().charAt(0).toUpperCase() || "?")}</span><strong>${escapeHtml(p.name)}</strong><small>${p.id === playerId ? "BẠN" : p.id === gameState.hostId ? "CHỦ PHÒNG" : "SẴN SÀNG"}</small>`
+          : `<b>＋</b><small>BẤM ĐỂ VÀO</small>`;
+        if (!p) el.onclick = () => send({ type: "moveSlot", slot });
+        col.append(el);
+      }
+      slots.append(col);
+    }
+    $("#lobbyHint").textContent = `CHẾ ĐỘ ĐÔI · ${gameState.players.length}/${LOBBY_MAX_PLAYERS} người chơi · MAP ${MAP_INFO[mapId].label}`;
+    $("#startBtn").classList.toggle("hidden", !isHost);
+    $("#leaveLobbyBtn")?.classList.remove("hidden");
+    return;
+  }
   for (let i = 0; i < LOBBY_MAX_PLAYERS; i++) {
     const p = gameState.players[i],
       el = document.createElement("div");
@@ -5520,7 +5579,10 @@ function placeRemote(mesh, p) {
   }
   if (st === "plane") {
     setRemoteMotionMode(ud, "plane");
-    mesh.rotation.set(0, p.yaw, 0);
+    ud.lookYaw = Number(p.yaw) || 0;
+    ud.lookPitch = Number(p.pitch) || 0;
+    if (ud.shownYaw === undefined) ud.shownYaw = ud.lookYaw;
+    mesh.rotation.set(0, ud.shownYaw, 0);
     mesh.scale.set(1, 1, 1);
     return;
   }
@@ -5540,6 +5602,7 @@ function placeRemote(mesh, p) {
     // Rơi tự do: nằm sấp, đầu hướng về phía trước (như tư thế nhảy dù); dù bung: đứng thẳng.
     mesh.rotation.x = st === "freefall" ? -1.35 : 0;
     mesh.rotation.z = 0;
+    mesh.userData.peekRoll = mesh.userData.peekTarget = mesh.userData.peekVel = 0;
     mesh.scale.set(1, 1, 1);
     return;
   }
@@ -5559,7 +5622,10 @@ function placeRemote(mesh, p) {
   // Nằm / đứng dậy KHÔNG đổ rạp tức thì: góc thân nằm xuống do animateAvatars
   // làm dần (quỳ xuống → nằm, chống tay → quỳ → đứng).
   if (mesh.userData.proneBlend === undefined) mesh.rotation.x = p.prone ? -Math.PI / 2 : 0;
-  mesh.rotation.z = peekRoll;
+  // Nghiêng (peek): chỉ ghi góc ĐÍCH; updateRemoteMotion làm mượt mỗi khung hình
+  // (snapshot chỉ 20 lần/giây → gán thẳng sẽ giật từng nấc).
+  mesh.userData.peekTarget = peekRoll;
+  if (mesh.userData.peekRoll === undefined) mesh.rotation.z = mesh.userData.peekRoll = peekRoll;
   // Khom người là tư thế (gập gối, cúi thân) do poseAvatar dựng, không bóp dẹt mô hình.
   mesh.scale.set(1, 1, 1);
 }
@@ -5716,53 +5782,7 @@ function renderPlayers(state) {
   setText($("#totalCount"), state.total);
   if (state.lastElimination && state.lastElimination.id !== lastEliminationId) {
     const event = state.lastElimination;
-    lastEliminationId = event.id;
-    const row = document.createElement("div");
-    row.className = "kill-feed-row";
-    row.textContent =
-      event.cause === "collision"
-        ? `${event.killerName} đã tông ${event.victimName} không thương tiếc`
-        : event.killerName === "Nổ xe"
-          ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn`
-          : `${event.killerName} đã chịch ${event.victimName} đến chết`;
-    $("#killFeed")?.prepend(row);
-    const timer = setTimeout(() => row.remove(), 20000);
-    killFeedTimers.push(timer);
-    if (event.victimId === playerId) {
-      localEliminationMessage =
-        event.cause === "collision"
-          ? `${event.killerName} đã lỡ tông bạn.`
-          : event.killerName === "Nổ xe"
-            ? `Nổ xe đã đưa ${event.victimName} đến một nơi tốt hơn.`
-            : `Bạn đã bị chịch đến chết bởi ${event.killerName}.`;
-      $("#resultDetail").textContent = localEliminationMessage;
-    }
-    if (event.killerId === playerId && event.killerName !== "Nổ xe") {
-      matchKills.push({
-        name: event.victimName,
-        weapon: event.weapon || (event.cause === "collision" ? "XE" : "—"),
-        headshot: Boolean(event.headshot),
-        distance: event.distance,
-        at: Date.now() - startedAt,
-      });
-      const notice = $("#killNotice");
-      if (notice) {
-        if (event.cause === "collision") {
-          notice.textContent = `Bạn đã tông ${event.victimName} dẹp lép`;
-        } else {
-          notice.replaceChildren(document.createTextNode("Bạn "));
-          const action = document.createElement("span");
-          action.className = "kill-notice-action";
-          action.textContent = "đã chịch";
-          notice.append(
-            action,
-            document.createTextNode(` ${event.victimName} đến chết.`),
-          );
-        }
-        notice.classList.remove("hidden");
-        setTimeout(() => notice.classList.add("hidden"), 10000);
-      }
-    }
+    if (event.id > lastEliminationId) onKillEvent(event); // dự phòng nếu lỡ mất gói "feed"
   }
   const living = new Set();
   const nowMs = Date.now();
@@ -5833,6 +5853,36 @@ function renderPlayers(state) {
       local.medkits = p.medkits || 0;
       local.outfit = p.outfit || "";
       syncFpGhillie();
+      local.team = p.team ?? 0;
+      local.color = p.color || "#ffffff";
+      const wasKnocked = local.knocked;
+      local.knocked = Boolean(p.knocked) && p.alive;
+      local.knockHp = p.hp;
+      local.knockCount = p.knockCount || 0;
+      local.revivedBy = p.revivedBy || null;
+      local.reviving = p.reviving || null;
+      // Mốc kết thúc cứu (đếm ngược tự chạy ở client giữa các snapshot): người cứu lấy
+      // từ chính mình, người được cứu lấy từ người đang cứu mình.
+      {
+        const rv = local.reviving || (local.revivedBy && state.players.find((q) => q.id === local.revivedBy)?.reviving);
+        if (!rv) local.reviveEndAt = 0;
+        else {
+          const end = performance.now() + (Number(rv.left) || 0);
+          if (!local.reviveEndAt || Math.abs(end - local.reviveEndAt) > 400) local.reviveEndAt = end;
+        }
+      }
+      if (local.knocked && !wasKnocked) {
+        stopFiring();
+        if (scoped) setScope(false);
+        if (local.healing) send({ type: "cancelHeal" });
+        // Bò bằng tay + gối (không nằm).
+        if (local.prone) proneChangeAt = performance.now();
+        local.prone = false;
+        local.crouchToggle = true;
+        local.sprinting = false;
+      } else if (!local.knocked && wasKnocked) {
+        local.crouchToggle = false; // được cứu: đứng dậy
+      }
       local.frags = p.frags || 0;
       local.flashes = p.flashes || 0;
       if (local.attRaw !== p.att || local.packAttRaw !== p.packAtt) {
@@ -6012,6 +6062,9 @@ function renderPlayers(state) {
     mesh.userData.crouching = Boolean(p.crouching);
     mesh.userData.prone = Boolean(p.prone);
     mesh.userData.pb = Number(p.pb);
+    mesh.userData.knocked = Boolean(p.knocked);
+    updateTeamDot(mesh, p);
+    if (p.knocked) mesh.userData.weapon.visible = mesh.userData.sniperWeapon.visible = mesh.userData.berylWeapon.visible = false;
     if ((p.outfit || "") !== (mesh.userData.outfit || "")) {
       mesh.userData.outfit = p.outfit || "";
       setGhillie(mesh.userData, mesh.userData.outfit === "ghillie");
@@ -6624,6 +6677,13 @@ function onInteract() {
     send({ type: "vehicleInteract" });
     return;
   }
+  // Cứu đồng đội: F lần nữa = huỷ cứu.
+  if (local.reviving) return send({ type: "cancelRevive" });
+  if (local.knocked) return; // bị hạ gục: chỉ bò + thả đồ (Tab)
+  {
+    const mate = knockedMateNear();
+    if (mate) return send({ type: "startRevive", id: mate.id });
+  }
   // F: đang hồi máu thì hủy hồi máu, ngược lại nhặt vật phẩm gần nhất.
   if (local.healing) {
     send({ type: "cancelHeal" });
@@ -6649,6 +6709,273 @@ function onInteract() {
   const crate = nearestCrate(); // không ngắm gì nhưng đứng sát hòm → mở hòm
   if (crate) return openBackpack(crate.id);
   startVault();
+}
+// ======================= CHẾ ĐỘ ĐÔI: đồng đội · ping · hạ gục =======================
+const isTeammate = (p) => gameState?.mode === "duo" && p && p.id !== playerId && p.team === local.team;
+// Đồng đội đang bị hạ gục ở gần (để cứu).
+function knockedMateNear() {
+  if (gameState?.mode !== "duo" || local.state !== "ground" || local.knocked || local.vehicleId) return null;
+  for (const p of gameState.players || [])
+    if (isTeammate(p) && p.alive && p.knocked && !p.revivedBy && Math.hypot(p.x - local.x, p.z - local.z) <= 2.2) return p;
+  return null;
+}
+// Chấm tròn dùng chung (vẽ 1 lần): viền tối + lõi trắng, nhuộm màu bằng material.color.
+let dotTexture = null;
+function teamDotTexture() {
+  if (dotTexture) return dotTexture;
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d");
+  g.fillStyle = "#000c";
+  g.beginPath();
+  g.arc(32, 32, 30, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#fff";
+  g.beginPath();
+  g.arc(32, 32, 22, 0, Math.PI * 2);
+  g.fill();
+  dotTexture = new THREE.CanvasTexture(c);
+  return dotTexture;
+}
+// Chấm màu trên đầu ĐỒNG ĐỘI — nhìn xuyên nhà / núi (không bị che), kích thước cố định
+// trên màn hình. Đối thủ: không có chấm.
+function updateTeamDot(mesh, p) {
+  const ud = mesh.userData;
+  const show = isTeammate(p) && p.alive && p.state !== "plane";
+  if (!show) {
+    if (ud.teamDot) ud.teamDot.visible = false;
+    return;
+  }
+  if (!ud.teamDot) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: teamDotTexture(), depthTest: false, depthWrite: false, sizeAttenuation: false, transparent: true }));
+    sp.scale.setScalar(0.028);
+    sp.renderOrder = 999;
+    sp.position.set(0, 2.45, 0);
+    mesh.add(sp);
+    ud.teamDot = sp;
+  }
+  ud.teamDot.visible = true;
+  ud.teamDot.material.color.set(p.color || "#ffffff");
+  // Đồng đội bị hạ gục: chấm nhấp nháy để dễ tìm đến cứu.
+  ud.teamDot.material.opacity = p.knocked ? 0.45 + 0.55 * Math.abs(Math.sin(performance.now() / 260)) : 1;
+}
+// ---- PING ----
+const teamMarks = new Map(); // id người ping → {x,y,z,color,until}
+const markSprites = new Map();
+let markTexture = null;
+function markIconTexture() {
+  if (markTexture) return markTexture;
+  const c = document.createElement("canvas");
+  c.width = 64;
+  c.height = 96;
+  const g = c.getContext("2d");
+  g.fillStyle = "#000b";
+  g.beginPath();
+  g.moveTo(32, 94);
+  g.arc(32, 32, 30, Math.PI * 0.82, Math.PI * 2.18);
+  g.closePath();
+  g.fill();
+  g.fillStyle = "#fff";
+  g.beginPath();
+  g.moveTo(32, 86);
+  g.arc(32, 32, 24, Math.PI * 0.82, Math.PI * 2.18);
+  g.closePath();
+  g.fill();
+  g.fillStyle = "#000a";
+  g.beginPath();
+  g.arc(32, 32, 9, 0, Math.PI * 2);
+  g.fill();
+  markTexture = new THREE.CanvasTexture(c);
+  return markTexture;
+}
+// Bắn tia theo tâm ngắm tìm điểm chạm (đất / vật cản) rồi gửi ping cho server.
+const markDir = new THREE.Vector3();
+function placeMark() {
+  if (!camera || local.state === "plane" || local.state === "lobby") return;
+  camera.getWorldDirection(markDir);
+  const o = camera.position;
+  let hit = null;
+  for (let t = 1; t < 450; t += 1.5) {
+    const x = o.x + markDir.x * t,
+      y = o.y + markDir.y * t,
+      z = o.z + markDir.z * t;
+    if (Math.abs(x) > MAP_HALF || Math.abs(z) > MAP_HALF) break;
+    const g = groundHeightAt(x, z);
+    if (y <= g || solidPointClient(x, y, z)) {
+      hit = { x, y: Math.max(y, g), z };
+      break;
+    }
+  }
+  if (!hit) return;
+  send({ type: "mark", x: hit.x, y: hit.y, z: hit.z });
+}
+function onTeamMark(m) {
+  teamMarks.set(m.by, { x: m.x, y: m.y, z: m.z, color: m.color, until: performance.now() + 9000 });
+  const a = spatialAudio(null, { volume: 0.5 });
+  if (a) {
+    toneBurst(a, { duration: 0.09, type: "triangle", from: 1320, to: 1320, gain: 0.08 });
+    toneBurst(a, { at: 0.09, duration: 0.12, type: "triangle", from: 1760, to: 1760, gain: 0.07 });
+  }
+}
+function updateTeamMarks() {
+  const now = performance.now();
+  for (const [id, mk] of teamMarks) {
+    let sp = markSprites.get(id);
+    if (now > mk.until) {
+      teamMarks.delete(id);
+      if (sp) sp.visible = false;
+      continue;
+    }
+    if (!sp && scene) {
+      sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: markIconTexture(), depthTest: false, depthWrite: false, sizeAttenuation: false, transparent: true }));
+      sp.center.set(0.5, 0);
+      sp.scale.set(0.03, 0.045, 1);
+      sp.renderOrder = 1000;
+      scene.add(sp);
+      markSprites.set(id, sp);
+    }
+    if (!sp) continue;
+    sp.visible = true;
+    sp.position.set(mk.x, mk.y + 0.2, mk.z);
+    sp.material.color.set(mk.color);
+  }
+}
+// ---- Killfeed tô màu ----
+// " bằng AKM (52m)" — tên súng / khoảng cách nếu có.
+const feedTail = (ev) => `${ev.weapon ? ` bằng ${ev.weapon}` : ""}${ev.distance > 0 ? ` (${ev.distance}m)` : ""}`;
+// Thông báo giữa màn hình (góc nhìn người chơi): giết / hạ gục / bị giết / bị hạ gục.
+let killNoticeTimer = 0;
+function showKillNotice(before, verb, after) {
+  const notice = $("#killNotice");
+  if (!notice) return;
+  const action = document.createElement("span");
+  action.className = "kill-notice-action";
+  action.textContent = verb;
+  notice.replaceChildren(document.createTextNode(before), action, document.createTextNode(after));
+  notice.classList.remove("hidden");
+  clearTimeout(killNoticeTimer);
+  killNoticeTimer = setTimeout(() => notice.classList.add("hidden"), 6000);
+}
+// Một lần GIẾT (sự kiện feed "kill", gửi ngay; mỗi id xử lý đúng 1 lần).
+function onKillEvent(ev) {
+  if (!ev.id || ev.id <= lastEliminationId) return;
+  lastEliminationId = ev.id;
+  addFeedRow("đã giết", ev, feedTail(ev));
+  if (ev.victimId === playerId) {
+    localEliminationMessage = ev.killerId
+      ? `Bạn đã bị giết bởi ${ev.killerName}${feedTail(ev)}.`
+      : `Bạn đã chết do ${ev.killerName}.`;
+    $("#resultDetail").textContent = localEliminationMessage;
+    showKillNotice("Bạn ", "đã bị giết", ev.killerId ? ` bởi ${ev.killerName}${feedTail(ev)}` : ` do ${ev.killerName}`);
+  }
+  if (ev.killerId === playerId && ev.victimId !== playerId) {
+    matchKills.push({
+      name: ev.victimName,
+      weapon: ev.weapon || "—",
+      headshot: Boolean(ev.headshot),
+      distance: ev.distance,
+      at: Date.now() - startedAt,
+    });
+    showKillNotice("Bạn ", "đã giết", ` ${ev.victimName}${feedTail(ev)}`);
+  }
+}
+function addFeedRow(verb, ev, tail = "") {
+  const feed = $("#killFeed");
+  if (!feed) return;
+  const players = gameState?.players || [];
+  const isMine = (id) => id && (id === playerId || isTeammate(players.find((q) => q.id === id)));
+  const row = document.createElement("div");
+  row.className = "kill-feed-row";
+  const k = document.createElement("span");
+  k.textContent = ev.killerName || "";
+  if (isMine(ev.killerId)) k.className = "kf-good"; // mình / đồng đội hạ đối thủ: xanh
+  const v = document.createElement("span");
+  v.textContent = ev.victimName || "";
+  if (isMine(ev.victimId)) v.className = "kf-bad"; // mình / đồng đội bị hạ: đỏ
+  row.append(k, document.createTextNode(` ${verb} `), v, document.createTextNode(tail));
+  // Giới hạn số dòng: không để DOM phình ra khi đấu đông người.
+  while (feed.childElementCount > 6) feed.lastElementChild.remove();
+  feed.prepend(row);
+  killFeedTimers.push(setTimeout(() => row.remove(), 20000));
+}
+function onFeedEvent(ev) {
+  if (ev.kind === "kill") onKillEvent(ev);
+  else if (ev.kind === "knock") {
+    // Cứu KHÔNG lên killfeed tổng (server chỉ báo riêng cho 2 người).
+    addFeedRow("đã hạ gục", ev, feedTail(ev));
+    if (ev.killerId === playerId) showKillNotice("Bạn ", "đã hạ gục", ` ${ev.victimName}${feedTail(ev)}`);
+    else if (ev.victimId === playerId)
+      showKillNotice("Bạn ", "đã bị hạ gục", ev.killerId ? ` bởi ${ev.killerName}${feedTail(ev)}` : ` do ${ev.killerName}`);
+  }
+}
+// Bò bằng TAY + GỐI (bị hạ gục): thân nằm ngang, đầu cúi, đùi thẳng đứng chống gối,
+// cẳng chân duỗi ra sau sát đất; bước chéo (tay trái đi cùng chân phải) như người thật.
+const KNOCK_EYE_HEIGHT = 0.62;
+const REVIVE_MS = 10000; // khớp server
+function poseCrawl(ud, now) {
+  const r = ud.rig;
+  const mv = Math.min(1, (ud.speed || 0) / 0.8);
+  const ph = now / 210;
+  const s = Math.sin(ph) * mv,
+    lift = Math.max(0, Math.cos(ph)) * mv,
+    liftB = Math.max(0, -Math.cos(ph)) * mv;
+  r.hips.position.set(0, 0.47 + Math.abs(s) * 0.015, 0.18);
+  r.hips.rotation.set(0.06, 0, s * 0.05);
+  r.torso.rotation.set(-1.42, 0, -s * 0.06);
+  r.head.rotation.set(0.85, s * 0.08, 0); // cúi nhìn đất phía trước
+  // Chân: đùi gần thẳng đứng (gối chạm đất), cẳng chân ngang ra sau.
+  r.legs.forEach((leg, i) => {
+    const sw = i === 0 ? s : -s;
+    leg.thigh.rotation.set(0.08 + sw * 0.28, 0, (i === 0 ? 1 : -1) * 0.06);
+    leg.knee.rotation.set(-1.62 + (i === 0 ? liftB : lift) * 0.25, 0, 0);
+    leg.ankle.rotation.set(0.35, 0, 0);
+  });
+  // Tay: thẳng xuống đất dưới vai, khuỷu hơi cong; tay nào đang bước thì nhấc lên.
+  r.arms.forEach((arm, i) => {
+    const sw = i === 0 ? -s : s; // chéo với chân cùng bên
+    const up = i === 0 ? lift : liftB;
+    arm.shoulder.rotation.set(1.42 + 0.3 + sw * 0.32 + up * 0.15, 0, (i === 0 ? 1 : -1) * 0.12);
+    arm.elbow.rotation.set(-0.5 - up * 0.45, 0, 0);
+  });
+}
+// ---- Góc nhìn khi bị hạ gục: 2 tay chống đất, bò; thanh máu hạ gục ----
+let crawlHands = null;
+function updateKnockView(dt) {
+  let hud = $("#knockHud");
+  const on = local.knocked && local.state === "ground" && !deathView;
+  if (!on) {
+    if (hud && !hud.classList.contains("hidden")) hud.classList.add("hidden");
+    if (crawlHands) crawlHands.visible = false;
+    return;
+  }
+  if (!hud) {
+    hud = document.createElement("div");
+    hud.id = "knockHud";
+    hud.innerHTML = "<span></span><i><b></b></i>";
+    $(".hud")?.append(hud);
+  }
+  hud.classList.remove("hidden");
+  const text = local.revivedBy ? "ĐANG ĐƯỢC ĐỒNG ĐỘI CỨU" : `BỊ HẠ GỤC (${local.knockCount}/4) · CHỜ ĐỒNG ĐỘI CỨU · TAB THẢ ĐỒ`;
+  setText(hud.querySelector("span"), text);
+  hud.querySelector("b").style.width = `${Math.max(0, Math.min(100, local.knockHp || 0))}%`;
+  if (!crawlHands && camera) {
+    crawlHands = new THREE.Group();
+    crawlHands.userData.arms = [makeFpArm(), makeFpArm()];
+    crawlHands.add(...crawlHands.userData.arms);
+    camera.add(crawlHands);
+  }
+  if (!crawlHands) return;
+  crawlHands.visible = true;
+  const moving = keys.KeyW || keys.KeyS || keys.KeyA || keys.KeyD;
+  const ph = performance.now() / 300;
+  crawlHands.userData.arms.forEach((arm, i) => {
+    const side = i === 0 ? -1 : 1;
+    const reach = moving ? Math.sin(ph + i * Math.PI) * 0.12 : 0;
+    // Bàn tay đặt trên mặt đất phía trước, khuỷu tay lùi về sau / hai bên.
+    fpH.set(side * 0.22, -0.42 + Math.max(0, reach) * 0.15, -0.5 - reach);
+    fpE.set(side * 0.34, -0.62, -0.12);
+    setFpArm(arm, fpH, fpE);
+  });
 }
 // ======================= TRÈO QUA RÀO =======================
 // Cùng công thức với server (planVault / vaultPose) → máy mình đi ngay không chờ
@@ -6696,6 +7023,12 @@ function updateLocalVault(dt) {
   camera.rotation.z = Math.sin(Math.PI * k) * 0.09;
   if (k >= 1) {
     localVault = null;
+  teamMarks.clear();
+  markSprites.clear();
+  crawlHands = null;
+  local.knocked = false;
+  local.reviving = null;
+  local.revivedBy = null;
   fpGhillieMeshes.length = 0;
   fpGhillieOn = false;
     jumpOffset = 0;
@@ -6718,6 +7051,7 @@ function playVaultSound(pos) {
   noiseBurst(a, { at: 0.2, duration: 0.03, filter: "bandpass", freq: 3200, q: 3, gain: 0.25 }); // đồ trên người va nhau
 }
 function useMedkit() {
+  if (local.knocked) return showLootToast("ĐANG BỊ HẠ GỤC · KHÔNG HỒI MÁU ĐƯỢC");
   if (local.healing) return showLootToast("ĐANG HỒI MÁU · NHẤN F ĐỂ HỦY");
   if (local.reloading) return showLootToast("ĐANG NẠP ĐẠN");
   if ((local.medkits || 0) <= 0) return showLootToast("KHÔNG CÒN BỊCH MÁU");
@@ -7670,6 +8004,33 @@ function updateLootHud(dt) {
     return;
   }
   heal.classList.add("hidden");
+  // Cứu đồng đội / đang được cứu: đếm ngược + thanh tiến trình (dùng chung khung hồi máu).
+  if (local.reviving || (local.knocked && local.revivedBy)) {
+    const left = local.reviveEndAt ? Math.max(0, local.reviveEndAt - performance.now()) : REVIVE_MS;
+    const who = gameState?.players.find((q) => q.id === (local.reviving ? local.reviving.id : local.revivedBy));
+    setText(
+      heal.querySelector("span"),
+      local.reviving
+        ? `ĐANG CỨU ${who?.name || ""} ${(left / 1000).toFixed(1)}S · F HỦY CỨU`
+        : `${who?.name || "ĐỒNG ĐỘI"} ĐANG CỨU BẠN ${(left / 1000).toFixed(1)}S`,
+    );
+    heal.querySelector("i").style.width = `${Math.min(100, (1 - left / REVIVE_MS) * 100)}%`;
+    heal.classList.remove("hidden");
+    prompt.classList.add("hidden");
+    return;
+  }
+  if (local.knocked) {
+    prompt.classList.add("hidden");
+    return;
+  }
+  {
+    const mate = knockedMateNear();
+    if (mate) {
+      setHtml(prompt, `<b>F</b>CỨU ${escapeHtml(mate.name)} (10 GIÂY)`);
+      prompt.classList.remove("hidden");
+      return;
+    }
+  }
   // Gợi ý phím F chỉ ghi lại DOM khi nội dung thật sự đổi (trước đây ghi
   // innerHTML mỗi khung hình → trình duyệt dựng lại HUD 60 lần/giây).
   if (local.vehicleId) {
@@ -8115,6 +8476,11 @@ function onKeyDown(e) {
     "MetaLeft",
     "MetaRight",
   ].includes(e.code);
+  // Bị hạ gục: chỉ bò — không nằm (Z), không ngồi/đứng (C), không nhảy (Space).
+  if (local.knocked && (e.code === "KeyZ" || e.code === "KeyC" || e.code === "Space")) {
+    e.preventDefault();
+    return;
+  }
   // Giữ Ctrl (đi chậm) vẫn dùng được MỌI phím điều khiển game: đi 4 hướng,
   // nghiêng, nhảy, ngồi, nằm, chạy... (shortcut trình duyệt vẫn bị chặn mặc định).
   const ctrlWalkKey =
@@ -8189,6 +8555,11 @@ function onKeyDown(e) {
     return;
   }
 
+  // Trên máy bay: chỉ xoay chuột để nhìn; phím khác bị khoá (trừ nhảy, bản đồ, ESC).
+  if (local.state === "plane" && !["Space", "KeyF", "KeyM", "Escape"].includes(e.code) && $("#game").classList.contains("active")) {
+    if (!paused) e.preventDefault();
+    return;
+  }
   // Trên máy bay: Space / F nhảy dù. Đang rơi tự do: Space / F bung dù.
   if (
     (e.code === "Space" || e.code === "KeyF") &&
@@ -8202,7 +8573,7 @@ function onKeyDown(e) {
     }
     if (local.state === "freefall") {
       e.preventDefault();
-      if (!e.repeat) deployChute(false);
+      if (!e.repeat && gameState?.phase !== "staging" && gameState?.phase !== "countdown") deployChute(false);
       return;
     }
     if (local.state === "parachute") {
@@ -8624,6 +8995,8 @@ function saneMouseDelta(e) {
   return true;
 }
 function onMouse(e) {
+  // Đang CỨU đồng đội: khoá màn hình (người được cứu thì vẫn xoay nhìn quanh được).
+  if (local.reviving) return;
   // While driving, steering controls the car and the POV follows its heading.
   if (local.vehicleId && local.vehicleSeat === 0) return;
   if (document.pointerLockElement !== renderer?.domElement) return;
@@ -8654,6 +9027,17 @@ function onMouse(e) {
   );
 }
 function onFire(e) {
+  // Nút chuột được gán cho PING (mặc định chuột giữa).
+  {
+    const mc = "Mouse" + e.button;
+    const mapped = keyRemap.has(mc) ? keyRemap.get(mc) : keyFreed.has(mc) ? "" : mc;
+    if (mapped === "Mouse1") {
+      if (document.pointerLockElement === renderer?.domElement) placeMark();
+      return;
+    }
+  }
+  if (local.knocked) return; // bị hạ gục: không dùng súng / lựu đạn
+  if (local.state === "plane") return; // trên máy bay: chỉ xoay nhìn
   if (landRoll && local.state === "ground") return; // đang lộn nhào: chưa bắn được
   if (localVault) return; // đang trèo rào: hai tay bám rào
   // Đang chạy nhanh: không bắn/ngắm được. Click (trái hoặc phải) sẽ DỪNG CHẠY
@@ -8995,7 +9379,7 @@ function findAimedPlayer(eye, dir, far = 140) {
   for (const [id, mesh] of remoteMeshes) {
     const ud = mesh.userData;
     if (!mesh.visible || !ud.rig) continue;
-    const set = ud.rig.hitboxes[ud.crouching && !ud.prone ? "crouch" : "stand"];
+    const set = ud.rig.hitboxes[ud.knocked && !ud.swimming ? "crawl" : ud.crouching && !ud.prone ? "crouch" : "stand"];
     mesh.updateMatrixWorld(true);
     const hit = aimRaycaster.intersectObject(set, true)[0];
     if (hit && (!best || hit.distance < best.dist))
@@ -9954,6 +10338,8 @@ function setMode(state) {
 // Các bước bung dù và tiếp đất do client báo lên trước, server chỉ xác nhận lại.
 function syncLocalState(p) {
   const target = p.state || "lobby";
+  // Lên máy bay luôn được ưu tiên (kể cả đang rơi / dù / đứng sau cú thả ở map chờ).
+  if (target === "plane" && local.state !== "plane") return enterPlane(p);
   if ((STATE_ORDER[target] ?? 0) <= (STATE_ORDER[local.state] ?? 0)) return;
   if (target === "plane") enterPlane(p);
   else if (target === "freefall" || target === "parachute")
@@ -9962,6 +10348,22 @@ function syncLocalState(p) {
 function enterPlane(p) {
   if (!plane) return;
   local.seat = p.seat || 0;
+  // TẮT mọi trạng thái của map chờ: bơi / lặn, ngồi, nằm, chạy, trèo, lộn nhào...
+  local.swimming = false;
+  local.swimDepth = 0;
+  local.swimY = null;
+  local.crouchToggle = false;
+  local.sprinting = false;
+  local.slowWalking = false;
+  localVault = null;
+  landRoll = null;
+  chutePull = null;
+  $("#chuteOverlay")?.classList.add("hidden");
+  if (scoped) setScope(false);
+  for (const k of Object.keys(keys)) keys[k] = false;
+  $("#swimHint")?.classList.add("hidden");
+  $("#underwaterTint")?.classList.remove("active");
+  stopLoop("wind", 0.3);
   local.peek = 0;
   peekBlend = 0;
   keys.KeyQ = false;
@@ -10110,6 +10512,22 @@ function updatePullHand(dt) {
   p.setXYZ(1, pullTmp.x, pullTmp.y + 0.03, pullTmp.z);
   p.needsUpdate = true;
   cord.visible = t > 0.18 && t < 0.7;
+}
+// Chỗ trống gần nhất quanh (x, z) trong 1.2 m (vòng 0.1 m × 12 hướng). Chỉ gọi khi
+// ĐANG kẹt; tìm thất bại thì nghỉ 0.25 s để không tốn CPU mỗi khung hình.
+let freeSpotFailAt = 0;
+function nearestFreeSpot(x, z) {
+  const now = performance.now();
+  if (now - freeSpotFailAt < 250) return null;
+  for (let r = 0.1; r <= 1.21; r += 0.1)
+    for (let k = 0; k < 12; k++) {
+      const a = (k / 12) * Math.PI * 2 + r; // xoay nhẹ mỗi vòng: phủ đều hơn
+      const nx = x + Math.cos(a) * r,
+        nz = z + Math.sin(a) * r;
+      if (!isBlockedAt(nx, nz)) return { x: nx, z: nz };
+    }
+  freeSpotFailAt = now;
+  return null;
 }
 // Đẩy người chơi ra khỏi cây / đá / tường nếu tiếp đất trúng chúng.
 function findFreeSpotLocal(x, z, landingY = local.groundY) {
@@ -10284,7 +10702,7 @@ let landRoll = null,
 // không làm hỏng góc nhìn chuột của người chơi.
 // Tay đang bận (kéo dây dù / bắt chéo ngực / đang lộn): KHÔNG hiện tay cầm súng / nắm đấm.
 function handsBusy() {
-  return Boolean(landRoll || chutePull || braceHands?.visible || localVault);
+  return Boolean(landRoll || chutePull || braceHands?.visible || localVault || local.knocked || local.reviving);
 }
 function applyRollCamera(dt) {
   // Dọn hiệu ứng trên không khi đã rời trạng thái bay (chết giữa trời, rơi xuống nước...).
@@ -10332,7 +10750,9 @@ function landNow() {
   local.crouchToggle = false;
   local.sprinting = false;
   stopLoop("wind", 0.6);
-  setMode("ground");
+  // Map chờ (trước khi lên máy bay): tiếp đất về chế độ chờ, tay không.
+  const stagingLand = gameState?.phase === "staging" || gameState?.phase === "countdown";
+  setMode(stagingLand ? "lobby" : "ground");
   grounded = true;
   verticalSpeed = 0;
   jumpOffset = 0;
@@ -10354,9 +10774,11 @@ function landNow() {
     if (gun) gun.visible = false;
     playLandRoll();
   }
-  showLootToast("ĐÃ TIẾP ĐẤT · CẦM SÚNG SẴN SÀNG");
+  if (!stagingLand) showLootToast("ĐÃ TIẾP ĐẤT · CẦM SÚNG SẴN SÀNG"); // map chờ: không báo
 }
 // Đang ngồi trên máy bay: camera đứng đúng chỗ của mình trong khoang, tự do nhìn quanh.
+let planeLookKey = "",
+  planeLookAt = 0;
 function updatePlane() {
   if (!plane) return;
   const pos = seatWorld(local.seat, planeTime());
@@ -10367,6 +10789,14 @@ function updatePlane() {
   const shake = Math.sin(now / 38) * 0.006 + Math.sin(now / 210) * 0.012;
   camera.position.set(local.x, local.y + 1.62 + shake, local.z);
   camera.rotation.z = 0;
+  // Hướng nhìn → server (≤ 10 lần/giây, chỉ khi đổi) để người khác thấy mặt + thân xoay theo.
+  local.yaw = camera.rotation.y;
+  const lk = `${camera.rotation.y.toFixed(2)}|${camera.rotation.x.toFixed(2)}`;
+  if (lk !== planeLookKey && now - planeLookAt > 100) {
+    planeLookKey = lk;
+    planeLookAt = now;
+    send({ type: "look", yaw: camera.rotation.y, pitch: camera.rotation.x });
+  }
   setLoopGain(audioLoops.plane, 0.75 * sfxLevel(), 0.2);
 }
 const gustState = { next: 2, t: -1, len: 0.8, k: 1, out: { x: 0, y: 0, roll: 0 } };
@@ -10436,8 +10866,11 @@ function updateAir(dt) {
   let approachGround = landingHeightAt(local.x, local.z, previousY);
   for (const t of [0.6, 1.2, 1.8])
     approachGround = Math.max(approachGround, landingHeightAt(clamp(local.x + airState.vx * t, -MAP_HALF, MAP_HALF), clamp(local.z + airState.vz * t, -MAP_HALF, MAP_HALF), previousY));
+  // Map chờ: cú thả chỉ ~10 m → rơi thẳng xuống đất, không bung dù.
+  const stagingDrop = gameState?.phase === "staging" || gameState?.phase === "countdown";
   if (
     !chute &&
+    !stagingDrop &&
     local.y - approachGround <= AIR.autoDeployAlt + airState.fall * CHUTE_PULL_AT &&
     airState.time > 0.4
   )
@@ -10919,6 +11352,12 @@ function animateAvatars(dt) {
     );
     poseLandRoll(ud, now);
     poseVault(ud, now);
+    if (ud.state === "plane" && ud.lookPitch !== undefined) {
+      // Trên máy bay: đầu ngẩng / cúi theo hướng nhìn.
+      ud.headPitch = (ud.headPitch ?? 0) + (clamp(-ud.lookPitch * 0.75, -0.7, 0.7) - (ud.headPitch ?? 0)) * Math.min(1, dt * 12);
+      ud.rig.head.rotation.x = ud.headPitch;
+    }
+    if (ud.knocked && !ud.swimming) poseCrawl(ud, now);
     if (now >= ud.flashUntil) {
       ud.muzzleFlash.visible = false;
       ud.sniperFlash.visible = false;
@@ -11004,7 +11443,12 @@ function updateRemoteMotion(dt) {
     if (ud.state === "plane" && plane) {
       const seat = seatWorld(ud.seat || 0, t);
       mesh.position.set(seat.x, plane.alt, seat.z);
-      mesh.rotation.set(0, planeYaw(), 0);
+      // Thân xoay mượt theo hướng nhìn của người đó (góc ngắn nhất).
+      const target = ud.lookYaw ?? planeYaw();
+      let d = target - (ud.shownYaw ?? target);
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      ud.shownYaw = (ud.shownYaw ?? target) + d * Math.min(1, dt * 12);
+      mesh.rotation.set(0, ud.shownYaw, 0);
     } else if (ud.motionMode === "vehicle") {
       const car = vehicleMeshes.get(ud.vehicleId);
       if (car) {
@@ -11020,6 +11464,20 @@ function updateRemoteMotion(dt) {
       const s = sampleSnapshots(ud.snaps, renderT, remoteSample);
       mesh.position.set(s.x, s.y, s.z);
       mesh.rotation.y = s.yaw;
+      // Peek mượt: lò xo tới hạn (không vọt quá, không khựng) theo góc đích.
+      const target = ud.peekTarget || 0;
+      let roll = ud.peekRoll || 0,
+        vel = ud.peekVel || 0;
+      if (roll !== target || vel) {
+        const k = 90, c = 19; // ~0.15 s tới nơi, c ≈ 2√k (tới hạn)
+        const h = Math.min(dt, 0.05);
+        vel += ((target - roll) * k - vel * c) * h;
+        roll += vel * h;
+        if (Math.abs(target - roll) < 1e-4 && Math.abs(vel) < 1e-3) (roll = target), (vel = 0);
+        ud.peekRoll = roll;
+        ud.peekVel = vel;
+        mesh.rotation.z = roll;
+      }
     }
     if (ud.chute?.visible)
       ud.chute.rotation.z = Math.sin(performance.now() / 700 + mesh.id) * 0.06;
@@ -11823,6 +12281,26 @@ function drawFlightMap() {
   //     (p.state === "freefall" || p.state === "parachute")
   //   )
   //     dot(p.x, p.z, 3, "#ff7a5c");
+  // Đồng đội (màu riêng) + ping của đội trên minimap.
+  if (gameState?.mode === "duo")
+    for (const p of gameState.players || [])
+      if (p.id !== playerId && p.team === local.team && p.alive && p.state !== "plane" && p.state !== "lobby") {
+        dot(p.x, p.z, 4.5, "#000");
+        dot(p.x, p.z, 3.4, p.color);
+      }
+  for (const mk of teamMarks.values()) {
+    const px = clamp(X(mk.x), 6, S - 6),
+      py = clamp(Y(mk.z), 6, S - 6);
+    ctx.fillStyle = mk.color;
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.arc(px, py - 9, 5, Math.PI * 0.8, Math.PI * 2.2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
   const me =
     local.state === "plane" && plane
       ? planePosAt(planeTime())
@@ -12986,6 +13464,8 @@ function frame() {
   updateAutoFire();
   updateShotEffects();
   updateBullets(dt);
+  updateTeamMarks();
+  updateKnockView(dt);
   updateGrenadeWorld(dt);
   // Trên máy bay / đang nhảy dù thì mô phỏng riêng; chỉ ở phòng chờ hoặc mặt đất mới đi bộ.
   if (local.state === "plane") updatePlane();
@@ -13042,7 +13522,7 @@ function frame() {
     const isSprinting = wantSprint;
     const underFloor = !isProne && underStiltFloorAt(local.x, local.z);
     if (underFloor) local.sprinting = false;
-    const isCrouching = !currentlyInWater && !isProne && (Boolean(local.crouchToggle) || underFloor);
+    const isCrouching = !currentlyInWater && !isProne && (Boolean(local.crouchToggle) || underFloor || Boolean(local.knocked));
 
     local.crouching = isCrouching;
 
@@ -13063,6 +13543,16 @@ function frame() {
     }
 
     if (landRoll) moveSpeed = 3.2 * (1 - landRoll.t / landRoll.dur) + 0.6;
+    if (local.knocked && !currentlyInWater) moveSpeed = 1.0; // bị hạ gục: bò chậm
+    if (local.knocked) local.sprinting = false;
+    // Đang cứu / được cứu: đứng yên. Người cứu bấm di chuyển → huỷ cứu.
+    if (local.reviving || (local.knocked && local.revivedBy)) {
+      if (local.reviving && (keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD) && !local.reviveCancelSent) {
+        local.reviveCancelSent = true;
+        send({ type: "cancelRevive" });
+      }
+      moveSpeed = 0;
+    } else local.reviveCancelSent = false;
     const speed = moveSpeed * dt;
     const previousX = local.x;
     const previousZ = local.z;
@@ -13105,9 +13595,28 @@ function frame() {
     // Rơi khỏi mép cầu thang xuống sát chân tường → đã nằm trong vùng đệm va
     // chạm, mọi bước đều bị chặn (kẹt, giật). Khi đó chỉ chặn nếu tâm lọt vào
     // vật rắn để bước ra được (cùng luật với server).
-    const stuck = isBlockedAt(local.x, local.z);
+    let stuck = isBlockedAt(local.x, local.z);
+    // TỰ GỠ KẸT: đang lọt vào vùng va chạm (rơi / nhảy / chạy ép vào rào, lan can,
+    // bậc thang...) → trượt nhẹ ra chỗ trống gần nhất (≤ 1.2 m) mà không cần tìm hướng.
+    // Server nhận vị trí này vì cùng luật "kẹt thì chỉ chặn khi tâm lọt vào vật rắn".
+    if (stuck && !currentlyInWater) {
+      const free = nearestFreeSpot(local.x, local.z);
+      if (free) {
+        const ex = free.x - local.x,
+          ez = free.z - local.z,
+          el = Math.hypot(ex, ez);
+        const step = Math.min(el, 2.2 * dt);
+        if (el > 1e-4) {
+          local.x += (ex / el) * step;
+          local.z += (ez / el) * step;
+        }
+        stuck = isBlockedAt(local.x, local.z);
+      }
+    }
+    // Kẹt SÂU (tâm trong vật rắn mỏng): cho bước ra mọi hướng (khớp server).
+    const deepStuck = stuck && isBlockedAt(local.x, local.z, 0.05);
     const canMoveTo = (x, z) =>
-      !isBlockedAt(x, z, stuck ? 0.05 : null) &&
+      (deepStuck || !isBlockedAt(x, z, stuck ? 0.05 : null)) &&
       (!stayInWaterWhileSubmerged || waterAt(x, z) || isOnBridgeAt(x, z, 0.8));
     if (canMoveTo(local.x + moveX, local.z + moveZ)) {
       local.x += moveX;
@@ -13242,7 +13751,7 @@ function frame() {
       const proneAge = performance.now() - proneChangeAt;
       const kneeling = proneAge < PRONE_KNEEL_MS;
       const targetHeight =
-        local.groundY + (kneeling ? CROUCH_HEIGHT : isProne ? PRONE_HEIGHT : isCrouching ? CROUCH_HEIGHT : STAND_HEIGHT);
+        local.groundY + (local.knocked ? KNOCK_EYE_HEIGHT : kneeling ? CROUCH_HEIGHT : isProne ? PRONE_HEIGHT : isCrouching ? CROUCH_HEIGHT : STAND_HEIGHT);
       if (!grounded) {
         // NHẢY / RƠI theo độ cao TUYỆT ĐỐI: nhảy từ đỉnh núi xuống thì bay theo
         // quỹ đạo rồi rơi xuống chỗ thấp, không bị "kéo dính" theo mặt đất.
