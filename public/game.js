@@ -191,6 +191,7 @@ let keys = {},
   lastEliminationId = 0,
   localEliminationMessage = "",
   killFeedTimers = [],
+  myKillTotal = 0, // tổng mạng (không tính bắn đồng đội) trong trận này, cho bộ đếm "N MẠNG"
   vehicleMeshes = new Map(),
   vehicleAudioNodes = new Map(),
   vehicleFireAudioNodes = new Map(),
@@ -6856,31 +6857,155 @@ function updateTeamMarks() {
 }
 // ---- Killfeed tô màu ----
 // " bằng AKM (52m)" — tên súng / khoảng cách nếu có.
+// Tag súng: 1 kiểu duy nhất cho mọi súng — viên thuốc tối, viền xám, chữ trắng đậm.
+const gunTag = (name) => {
+  const tag = document.createElement("span");
+  tag.className = "gun-tag";
+  tag.textContent = name;
+  return tag;
+};
+// " bằng [AUG] (52m)" dạng node: thông báo giữa màn hình + killfeed tổng đều dùng.
+const feedTailNodes = (ev) => [
+  ...(ev.weapon ? [" bằng ", gunTag(ev.weapon)] : []),
+  ...(ev.distance > 0 ? [` (${ev.distance}m)`] : []),
+];
 const feedTail = (ev) => `${ev.weapon ? ` bằng ${ev.weapon}` : ""}${ev.distance > 0 ? ` (${ev.distance}m)` : ""}`;
-// Thông báo giữa màn hình (góc nhìn người chơi): giết / hạ gục / bị giết / bị hạ gục.
+// Thông báo giữa màn hình (góc nhìn người chơi): GIẾT / HẠ GỤC / ĐÃ BỊ GIẾT / ĐÃ BỊ HẠ GỤC.
+// Style nằm ngay đây (tự chèn 1 lần) để không phụ thuộc vào style.css.
+(function injectKillFeedStyle() {
+  if (document.getElementById("kill-feed-extra-style")) return;
+  const st = document.createElement("style");
+  st.id = "kill-feed-extra-style";
+  st.textContent = `
+.kf-verb { font-weight: 900; letter-spacing: 0.5px; }
+.gun-tag {
+  display: inline-block;
+  box-sizing: border-box;
+  padding: 0.12em 0.7em 0.1em;   /* đơn vị em: đúng tỉ lệ ở cả killfeed (11px) lẫn thông báo (20px) */
+  margin: 0 0.1em;
+  border-radius: 999px;
+  background: #14120fd9;
+  border: 1.5px solid #6e6e69;
+  color: #f4f4ee;
+  font-weight: 900;
+  font-size: 0.92em;
+  letter-spacing: 0.08em;
+  line-height: 1.1;
+  vertical-align: baseline;      /* chữ trong tag nằm đúng đường cơ sở với chữ xung quanh */
+  position: relative;
+  top: -0.04em;                  /* bù nhẹ để viên thuốc cân giữa theo chiều cao chữ HOA */
+  text-shadow: none;
+  white-space: nowrap;
+}
+.kill-notice-line { white-space: nowrap; }
+.kill-streak {
+  position: absolute;
+  top: calc(66.67% + 46px);   /* nằm hẳn bên dưới khối "Bạn đã GIẾT…" */
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 20px;
+  background: #15190fe8;
+  border: 1px solid #ff4655;
+  color: #ff4655;             /* toàn bộ chữ đỏ */
+  font: 900 20px "Barlow Condensed", Arial, sans-serif;
+  text-shadow: 0 2px 8px #000;
+  line-height: 1;
+  pointer-events: none;
+  z-index: 5;
+}
+.kill-streak.hidden { display: none; }
+.kill-streak-roll {
+  display: inline-block;
+  overflow: hidden;           /* chỉ thấy 1 số tại 1 thời điểm */
+  height: 1.15em;
+  font-size: 1.5em;
+  line-height: 1.15em;
+  text-align: center;
+  min-width: 1ch;
+}
+.kill-streak-col {
+  display: flex;
+  flex-direction: column;     /* [số mới] trên, [số cũ] dưới */
+  will-change: transform;
+  animation: kill-streak-roll 0.42s cubic-bezier(0.25, 1.15, 0.4, 1) 0.55s both;
+}
+.kill-streak-col > span { display: block; height: 1.15em; }
+.kill-streak-label { font-size: 1.05em; letter-spacing: 3px; }
+@keyframes kill-streak-roll {
+  from { transform: translateY(-50%); }  /* đang hiện số cũ */
+  to   { transform: translateY(0); }     /* số cũ trượt xuống, số mới từ trên xuống thế chỗ */
+}`;
+  document.head.append(st);
+})();
+// Phần thông báo: chuỗi thường hoặc node (dùng hl() để tô nổi chữ HOA).
+const hl = (text) => {
+  const span = document.createElement("span");
+  span.className = "kill-notice-action";
+  span.textContent = text;
+  return span;
+};
+const toNodes = (x) => (Array.isArray(x) ? x : [x]).map((n) => (typeof n === "string" ? document.createTextNode(n) : n));
 let killNoticeTimer = 0;
-function showKillNotice(before, verb, after) {
+// streak (tuỳ chọn): { from, to } → dòng "N MẠNG", số cuộn từ `from` lên `to`, chữ MẠNG đứng yên.
+function showKillNotice(before, verb, after, streak) {
   const notice = $("#killNotice");
   if (!notice) return;
-  const action = document.createElement("span");
-  action.className = "kill-notice-action";
-  action.textContent = verb;
-  notice.replaceChildren(document.createTextNode(before), action, document.createTextNode(after));
+  const line = document.createElement("div");
+  line.className = "kill-notice-line";
+  line.append(...toNodes(before), hl(verb), ...toNodes(after));
+  notice.replaceChildren(line);
   notice.classList.remove("hidden");
   clearTimeout(killNoticeTimer);
   killNoticeTimer = setTimeout(() => notice.classList.add("hidden"), 6000);
+  showKillStreak(streak, notice);
+}
+// Khối "N MẠNG" TÁCH RIÊNG, nằm dưới thông báo; số cuộn từ `from` lên `to`, chữ MẠNG đứng yên.
+let killStreakEl = null,
+  killStreakTimer = 0;
+function showKillStreak(streak, notice) {
+  if (!killStreakEl) {
+    killStreakEl = document.createElement("div");
+    killStreakEl.className = "kill-streak hidden";
+    killStreakEl.id = "killStreak";
+    notice.after(killStreakEl);
+  }
+  clearTimeout(killStreakTimer);
+  if (!streak) {
+    killStreakEl.classList.add("hidden");
+    return;
+  }
+  const roll = document.createElement("span");
+  roll.className = "kill-streak-roll";
+  const col = document.createElement("span");
+  col.className = "kill-streak-col";
+  const next = document.createElement("span");
+  next.textContent = String(streak.to);
+  const prev = document.createElement("span");
+  prev.textContent = String(streak.from);
+  col.append(next, prev);
+  roll.append(col);
+  const label = document.createElement("span");
+  label.className = "kill-streak-label";
+  label.textContent = "MẠNG";
+  killStreakEl.replaceChildren(roll, label);
+  killStreakEl.classList.remove("hidden");
+  killStreakTimer = setTimeout(() => killStreakEl.classList.add("hidden"), 6000);
 }
 // Một lần GIẾT (sự kiện feed "kill", gửi ngay; mỗi id xử lý đúng 1 lần).
 function onKillEvent(ev) {
   if (!ev.id || ev.id <= lastEliminationId) return;
   lastEliminationId = ev.id;
-  addFeedRow("đã giết", ev, feedTail(ev));
+  addFeedRow("GIẾT", ev);
   if (ev.victimId === playerId) {
     localEliminationMessage = ev.killerId
-      ? `Bạn đã bị giết bởi ${ev.killerName}${feedTail(ev)}.`
-      : `Bạn đã chết do ${ev.killerName}.`;
+      ? `Bạn ĐÃ BỊ GIẾT bởi ${ev.killerName}${feedTail(ev)}.`
+      : `Bạn ĐÃ CHẾT do ${ev.killerName}.`;
     $("#resultDetail").textContent = localEliminationMessage;
-    showKillNotice("Bạn ", "đã bị giết", ev.killerId ? ` bởi ${ev.killerName}${feedTail(ev)}` : ` do ${ev.killerName}`);
+    showKillNotice("Bạn ", "ĐÃ BỊ GIẾT", ev.killerId ? [` bởi ${ev.killerName}`, ...feedTailNodes(ev)] : ` do ${ev.killerName}`);
   }
   if (ev.killerId === playerId && ev.victimId !== playerId) {
     matchKills.push({
@@ -6890,11 +7015,18 @@ function onKillEvent(ev) {
       distance: ev.distance,
       at: Date.now() - startedAt,
     });
-    if (ev.teamKill) showKillNotice("", "BẮN ĐỒNG ĐỘI", ` · Bạn đã giết ${ev.victimName}`);
-    else showKillNotice("Bạn ", "đã giết", ` ${ev.victimName}${feedTail(ev)}`);
+    if (ev.teamKill) {
+      // Giết đồng đội không tính mạng → không có bộ đếm.
+      showKillNotice("", "BẮN ĐỒNG ĐỘI", [" · Bạn đã ", hl("GIẾT"), ` ${ev.victimName}`]);
+    } else {
+      const from = myKillTotal;
+      myKillTotal += 1;
+      showKillNotice("Bạn đã ", "GIẾT", [` ${ev.victimName}`, ...feedTailNodes(ev)], { from, to: myKillTotal });
+    }
   }
 }
-function addFeedRow(verb, ev, tail = "") {
+// Dòng killfeed tổng: "A đã GIẾT B bằng AUG" — động từ viết HOA, đậm.
+function addFeedRow(verb, ev) {
   const feed = $("#killFeed");
   if (!feed) return;
   const players = gameState?.players || [];
@@ -6907,7 +7039,10 @@ function addFeedRow(verb, ev, tail = "") {
   const v = document.createElement("span");
   v.textContent = ev.victimName || "";
   if (isMine(ev.victimId)) v.className = "kf-bad"; // mình / đồng đội bị hạ: đỏ
-  row.append(k, document.createTextNode(` ${verb} `), v, document.createTextNode(tail));
+  const verbEl = document.createElement("span");
+  verbEl.className = "kf-verb";
+  verbEl.textContent = verb;
+  row.append(k, document.createTextNode(" đã "), verbEl, document.createTextNode(" "), v, ...toNodes(feedTailNodes(ev)));
   if (ev.teamKill) {
     const tk = document.createElement("span");
     tk.className = "kf-bad";
@@ -6923,11 +7058,11 @@ function onFeedEvent(ev) {
   if (ev.kind === "kill") onKillEvent(ev);
   else if (ev.kind === "knock") {
     // Cứu KHÔNG lên killfeed tổng (server chỉ báo riêng cho 2 người).
-    addFeedRow("đã hạ gục", ev, feedTail(ev));
-    if (ev.killerId === playerId && ev.teamKill) showKillNotice("", "BẮN ĐỒNG ĐỘI", ` · Bạn đã hạ gục ${ev.victimName}`);
-    else if (ev.killerId === playerId) showKillNotice("Bạn ", "đã hạ gục", ` ${ev.victimName}${feedTail(ev)}`);
+    addFeedRow("HẠ GỤC", ev);
+    if (ev.killerId === playerId && ev.teamKill) showKillNotice("", "BẮN ĐỒNG ĐỘI", [" · Bạn đã ", hl("HẠ GỤC"), ` ${ev.victimName}`]);
+    else if (ev.killerId === playerId) showKillNotice("Bạn đã ", "HẠ GỤC", [` ${ev.victimName}`, ...feedTailNodes(ev)]);
     else if (ev.victimId === playerId)
-      showKillNotice("Bạn ", "đã bị hạ gục", ev.killerId ? ` bởi ${ev.killerName}${feedTail(ev)}` : ` do ${ev.killerName}`);
+      showKillNotice("Bạn ", "ĐÃ BỊ HẠ GỤC", ev.killerId ? [` bởi ${ev.killerName}`, ...feedTailNodes(ev)] : ` do ${ev.killerName}`);
   }
 }
 // Bò bằng TAY + GỐI (bị hạ gục): thân nằm ngang, đầu cúi, đùi thẳng đứng chống gối,
@@ -8104,6 +8239,7 @@ function beginGame() {
   sprintCancelled = false;
   sprintBlend = 0;
   matchKills = [];
+  myKillTotal = 0;
   readySent = false;
   jumpRequestedAt = 0;
   envBlend = 0;
