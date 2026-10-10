@@ -727,12 +727,92 @@ h2 {
 .result-panel {
   text-align: center;
 }
-.result-stats {
+/* Bảng kết quả: HẠNG (TOP) nổi bật nhất, màu theo hạng; dưới là hạ gục + thời gian. */
+.place-hero {
+  --rk: #c8ff1a;
+  --rk2: #7fae00;
+  position: relative;
+  margin: 18px 0 14px;
+  padding: 18px 16px 16px;
+  border: 1px solid color-mix(in srgb, var(--rk) 55%, transparent);
+  background:
+    radial-gradient(120% 100% at 50% 0%, color-mix(in srgb, var(--rk) 22%, transparent), transparent 70%),
+    #12150f;
+  box-shadow: 0 0 34px color-mix(in srgb, var(--rk) 18%, transparent), inset 0 1px 0 color-mix(in srgb, var(--rk) 40%, transparent);
+  animation: place-in 0.5s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+.place-hero[data-rank="1"] {
+  --rk: #ffd23f;
+  --rk2: #ff9f1a;
+}
+.place-hero[data-rank="2"] {
+  --rk: #dfe7ef;
+  --rk2: #8fa3b5;
+}
+.place-hero[data-rank="3"] {
+  --rk: #ff9a5a;
+  --rk2: #b8582a;
+}
+.place-hero small {
+  display: block;
+  font: 700 10px "JetBrains Mono", monospace;
+  letter-spacing: 4px;
+  color: color-mix(in srgb, var(--rk) 70%, #fff);
+}
+.place-line {
   display: flex;
+  align-items: baseline;
   justify-content: center;
-  gap: 38px;
-  padding: 20px;
-  border-block: 1px solid #363a30;
+  gap: 10px;
+  margin-top: 2px;
+}
+.place-top {
+  font: 900 28px "Barlow Condensed", Arial, sans-serif;
+  letter-spacing: 3px;
+  color: #f3f3ed;
+}
+.place-hero b {
+  font: 900 76px/1 "Barlow Condensed", Arial, sans-serif;
+  background: linear-gradient(180deg, #fff 0%, var(--rk) 45%, var(--rk2) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 3px 12px color-mix(in srgb, var(--rk) 45%, transparent));
+}
+.place-hero i {
+  display: block;
+  font: 700 11px "JetBrains Mono", monospace;
+  font-style: normal;
+  letter-spacing: 2px;
+  color: #9a9d91;
+}
+@keyframes place-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.result-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 0;
+}
+.result-stats > div {
+  padding: 12px 8px;
+  background: #171b13;
+  border: 1px solid #363a30;
+  border-top: 2px solid #c8ff1a;
+}
+.result-stats > div:last-child {
+  border-top-color: #3fa9ff;
+}
+.result-stats > div:last-child b {
+  color: #7cc4ff;
 }
 .result-stats b,
 .result-stats small {
@@ -743,8 +823,10 @@ h2 {
   color: var(--acid);
 }
 .result-stats small {
-  color: #9a9d91;
-  font: 9px "JetBrains Mono";
+  color: #b3b6aa;
+  font: 700 9px "JetBrains Mono";
+  letter-spacing: 2px;
+  margin-top: 2px;
 }
 .result-panel p {
   color: #aaa;
